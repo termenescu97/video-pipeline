@@ -19,10 +19,10 @@
 
 **Purpose**: Project initialization, dependencies, tooling
 
-- [ ] T001 Initialize Flutter project with `flutter create --platforms=windows video_pipeline` and configure pubspec.yaml with dependencies (win32, drift, sqflite_common_ffi, dio, build_runner, drift_dev)
-- [ ] T002 Create project folder structure per plan: lib/database/, lib/services/, lib/ui/screens/, lib/ui/widgets/, lib/ui/theme/, lib/utils/
-- [ ] T003 [P] Configure GitHub Actions workflow for Windows build in .github/workflows/build.yml
-- [ ] T004 [P] Create app constants and configuration in lib/utils/constants.dart (file extensions, app version, default paths)
+- [X] T001 Initialize Flutter project with `flutter create --platforms=windows video_pipeline` and configure pubspec.yaml with dependencies (win32, drift, sqflite_common_ffi, dio, build_runner, drift_dev)
+- [X] T002 Create project folder structure per plan: lib/database/, lib/services/, lib/ui/screens/, lib/ui/widgets/, lib/ui/theme/, lib/utils/
+- [X] T003 [P] Configure GitHub Actions workflow for Windows build in .github/workflows/build.yml
+- [X] T004 [P] Create app constants and configuration in lib/utils/constants.dart (file extensions, app version, default paths)
 
 ---
 
@@ -32,18 +32,18 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 Define Drift database tables (Job, JobFile, FavoritePath, AppSettings) in lib/database/tables.dart
-- [ ] T006 Create Drift database class with migrations in lib/database/database.dart
-- [ ] T007 Run `dart run build_runner build` to generate Drift code
-- [ ] T008 [P] Create JobDao with CRUD operations and reactive `.watch()` queries in lib/database/daos/job_dao.dart
-- [ ] T009 [P] Create JobFileDao with per-job file queries and status updates in lib/database/daos/job_file_dao.dart
-- [ ] T010 [P] Create FavoritePathDao with CRUD and last-used tracking in lib/database/daos/favorite_path_dao.dart
-- [ ] T011 [P] Create SettingsDao for singleton app settings in lib/database/daos/settings_dao.dart
-- [ ] T012 Implement JobQueueService (queue processing logic, sequential execution, auto-chain trigger) in lib/services/job_queue_service.dart
-- [ ] T013 [P] Implement SlackService (HTTP POST to webhook, message formatting, best-effort delivery) in lib/services/slack_service.dart
-- [ ] T014 [P] Create app theme and base styling in lib/ui/theme/app_theme.dart
-- [ ] T015 [P] Create reusable confirmation dialog widget (human-in-the-loop) in lib/ui/widgets/confirmation_dialog.dart
-- [ ] T016 Set up MaterialApp with routing and database initialization in lib/app.dart and lib/main.dart
+- [X] T005 Define Drift database tables (Job, JobFile, FavoritePath, AppSettings) in lib/database/tables.dart
+- [X] T006 Create Drift database class with migrations in lib/database/database.dart
+- [X] T007 Run `dart run build_runner build` to generate Drift code
+- [X] T008 [P] Create JobDao with CRUD operations and reactive `.watch()` queries in lib/database/daos/job_dao.dart
+- [X] T009 [P] Create JobFileDao with per-job file queries and status updates in lib/database/daos/job_file_dao.dart
+- [X] T010 [P] Create FavoritePathDao with CRUD and last-used tracking in lib/database/daos/favorite_path_dao.dart
+- [X] T011 [P] Create SettingsDao for singleton app settings in lib/database/daos/settings_dao.dart
+- [X] T012 Implement JobQueueService (queue processing logic, sequential execution, auto-chain trigger) in lib/services/job_queue_service.dart
+- [X] T013 [P] Implement SlackService (HTTP POST to webhook, message formatting, best-effort delivery) in lib/services/slack_service.dart
+- [X] T014 [P] Create app theme and base styling in lib/ui/theme/app_theme.dart
+- [X] T015 [P] Create reusable confirmation dialog widget (human-in-the-loop) in lib/ui/widgets/confirmation_dialog.dart
+- [X] T016 Set up MaterialApp with routing and database initialization in lib/app.dart and lib/main.dart
 
 **Checkpoint**: Foundation ready — database, queue service, and base UI infrastructure operational. User story implementation can begin.
 

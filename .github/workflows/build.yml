@@ -1,0 +1,32 @@
+name: Build Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: flutter analyze
+      - run: flutter build windows --release
+
+      - name: Create release archive
+        run: |
+          cd build/windows/x64/runner/Release
+          7z a -tzip ../../../../../video_pipeline_windows.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: video_pipeline_windows.zip
+          generate_release_notes: true
