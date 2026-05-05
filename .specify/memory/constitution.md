@@ -1,50 +1,94 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!-- Sync Impact Report
+  Version change: 0.0.0 → 1.0.0 (initial ratification)
+  Added principles:
+    - I. Human-in-the-Loop
+    - II. Single Codebase
+    - III. Resilient Pipeline
+    - IV. Minimal Complexity
+    - V. Observable Progress
+    - VI. Update Transparency
+  Added sections:
+    - Technical Constraints
+    - Development Workflow
+    - Governance
+  Templates requiring updates: ✅ plan-template.md (no changes needed, Constitution Check gate compatible)
+  Templates requiring updates: ✅ spec-template.md (no changes needed)
+  Templates requiring updates: ✅ tasks-template.md (no changes needed)
+  Follow-up TODOs: None
+-->
+
+# Video Workflow Automation Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Human-in-the-Loop
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+Any action that is destructive, irreversible, or affects source data MUST require explicit user confirmation via the GUI. The system MUST NOT silently delete, overwrite, or erase files. This applies to:
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+- Erasing SD cards after transfer
+- Deleting uncompressed originals after compression
+- Overwriting existing files on the destination
+- Any bulk operation that cannot be undone
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+Rationale: The team works with large video files (50–100 GB each). An accidental automated deletion could mean losing an entire shoot with no recovery path.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### II. Single Codebase
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+All application logic — GUI, automation, file operations, notifications — MUST live in one Flutter/Dart codebase. There MUST be no separate runtimes, no IPC bridges, and no secondary programming languages. The app MUST ship as a single compiled Windows executable.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Rationale: Avoids the complexity of bridging two runtimes and simplifies deployment. One language, one build, one artifact.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### III. Resilient Pipeline
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+File transfer and compression operations MUST be resumable after interruption (power failure, crash, user cancellation). The app MUST track progress state so that re-running a pipeline picks up where it left off rather than restarting from scratch. No file MUST be considered "transferred" until verified (size validation or checksum).
+
+Rationale: Files are 50–100 GB each. A power outage at 95% of a transfer MUST NOT mean starting over. Resilience is the primary reason the team adopted specialized transfer tools in the first place.
+
+### IV. Minimal Complexity
+
+The app MUST delegate heavy operations to proven CLI tools (robocopy for file transfer, HandBrakeCLI for compression) rather than reimplementing their functionality. The app's role is orchestration — detecting drives, managing queues, reporting progress, and spawning subprocesses. It MUST NOT implement its own file copy engine or video encoder.
+
+Rationale: Robocopy and HandBrakeCLI are battle-tested tools that handle edge cases reliably. The app is the glue, not the engine. This keeps the codebase small and maintainable.
+
+### V. Observable Progress
+
+Every pipeline phase (transfer, compression) MUST report real-time progress to the GUI. Phase transitions and completions (success or failure) MUST be reported to Slack. Failure notifications MUST include actionable detail — which file failed, what error occurred, and at what stage.
+
+Rationale: The goal is to free up the team's time. They MUST be able to walk away and trust that Slack will inform them of what happened. Silent failures are unacceptable.
+
+### VI. Update Transparency
+
+The app MUST NOT silently update itself. When a new version is available, the app MUST notify the user and require explicit confirmation before downloading or applying the update. Updates MUST NOT interrupt an active pipeline.
+
+Rationale: A silent update during a multi-hour compression run could corrupt the process. The user decides when to update.
+
+## Technical Constraints
+
+- **Target platform**: Windows 11
+- **File transfer tool**: robocopy (built into Windows, `/Z` flag for resumable transfers)
+- **Compression tool**: HandBrakeCLI 1.11.1
+- **Staging storage**: External 14TB HDD connected via USB 3
+- **Input formats**: .MOV, .MP4 (50–100 GB per file)
+- **HandBrake presets**: Read from `%APPDATA%\HandBrake\presets.json`, selectable via GUI dropdown
+- **Distribution**: GitHub Actions CI → GitHub Releases → in-app auto-updater (prompted, not silent)
+- **Notifications**: Slack via incoming webhook
+
+## Development Workflow
+
+- Development happens on macOS; the target platform is Windows 11
+- Windows builds are compiled via GitHub Actions (no dev tools installed on the target machine)
+- Spec-driven development via spec-kit: constitution → specify → plan → tasks → implement
+- All changes go through git; spec-kit hooks manage commits at each phase
+- First install on target machine is a manual `.exe` copy; all subsequent updates via in-app updater
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+- This constitution supersedes all other project documents and practices
+- Amendments MUST be documented in this file with a version bump
+- Principle changes MUST be agreed upon before implementation proceeds
+- Version follows semantic versioning:
+  - MAJOR: principle removed or redefined in a backward-incompatible way
+  - MINOR: new principle or section added, or existing one materially expanded
+  - PATCH: clarifications, wording fixes, non-semantic refinements
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-05-05 | **Last Amended**: 2026-05-05
