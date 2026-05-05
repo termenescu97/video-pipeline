@@ -1,0 +1,96 @@
+import 'package:flutter/material.dart';
+
+import '../../database/daos/settings_dao.dart';
+import '../../main.dart';
+import '../../services/slack_service.dart';
+
+/// App settings screen — Slack webhook URL, update preferences.
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  late final SettingsDao _settingsDao;
+  late final SlackService _slackService;
+  final _webhookController = TextEditingController();
+  bool _testingWebhook = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _settingsDao = SettingsDao(database);
+    _slackService = SlackService(settingsDao: _settingsDao);
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await _settingsDao.getSettings();
+    _webhookController.text = settings.slackWebhookUrl;
+  }
+
+  @override
+  void dispose() {
+    _webhookController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Slack Notifications',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _webhookController,
+              decoration: const InputDecoration(
+                labelText: 'Webhook URL',
+                hintText: 'https://hooks.slack.com/services/...',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) {
+                _settingsDao.setSlackWebhookUrl(value);
+              },
+            ),
+            const SizedBox(height: 8),
+            FilledButton.tonal(
+              onPressed: _testingWebhook ? null : _testWebhook,
+              child: _testingWebhook
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Test Notification'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _testWebhook() async {
+    setState(() => _testingWebhook = true);
+    final success = await _slackService.sendTestNotification();
+    setState(() => _testingWebhook = false);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success
+              ? 'Test notification sent!'
+              : 'Failed — check webhook URL'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
+}

@@ -57,17 +57,17 @@
 
 ### Implementation for User Story 1
 
-- [ ] T017 [US1] Implement DriveService (detect removable drives via win32 GetLogicalDrives/GetDriveType, list with name/path/size) in lib/services/drive_service.dart
-- [ ] T018 [US1] Implement robocopy output parser (exit code handling, file completion detection) in lib/utils/robocopy_parser.dart
-- [ ] T019 [US1] Implement TransferService (spawn robocopy /Z, stream stdout, update JobFile status per-file, poll destination size for intra-file progress) in lib/services/transfer_service.dart
-- [ ] T020 [US1] Wire TransferService into JobQueueService (start transfer jobs, update Job status, trigger Slack on complete/fail) in lib/services/job_queue_service.dart
-- [ ] T021 [P] [US1] Create DriveList widget (displays detected removable drives with name, path, capacity) in lib/ui/widgets/drive_list.dart
-- [ ] T022 [P] [US1] Create JobCard widget (shows job status, progress bar, file count, source/destination) in lib/ui/widgets/job_card.dart
-- [ ] T023 [P] [US1] Create ProgressBar widget (real-time transfer progress, file count, current file name) in lib/ui/widgets/progress_bar.dart
-- [ ] T024 [US1] Create HomeScreen (job queue list view, start/pause controls, reactive via Drift .watch()) in lib/ui/screens/home_screen.dart
-- [ ] T025 [US1] Create CreateJobScreen (source drive picker, destination folder picker with favorites, auto-chain toggle, preset selector) in lib/ui/screens/create_job_screen.dart
-- [ ] T026 [US1] Create JobDetailScreen (per-job progress, file list with individual status, error display) in lib/ui/screens/job_detail_screen.dart
-- [ ] T027 [US1] Implement favorite path save/load in CreateJobScreen (save button next to folder picker, dropdown of saved favorites) in lib/ui/screens/create_job_screen.dart
+- [X] T017 [US1] Implement DriveService (detect removable drives via win32 GetLogicalDrives/GetDriveType, list with name/path/size) in lib/services/drive_service.dart
+- [X] T018 [US1] Implement robocopy output parser (exit code handling, file completion detection) in lib/utils/robocopy_parser.dart
+- [X] T019 [US1] Implement TransferService (spawn robocopy /Z, stream stdout, update JobFile status per-file, poll destination size for intra-file progress) in lib/services/transfer_service.dart
+- [X] T020 [US1] Wire TransferService into JobQueueService (start transfer jobs, update Job status, trigger Slack on complete/fail) in lib/services/job_queue_service.dart
+- [X] T021 [P] [US1] Create DriveList widget (displays detected removable drives with name, path, capacity) in lib/ui/widgets/drive_list.dart
+- [X] T022 [P] [US1] Create JobCard widget (shows job status, progress bar, file count, source/destination) in lib/ui/widgets/job_card.dart
+- [X] T023 [P] [US1] Create ProgressBar widget (real-time transfer progress, file count, current file name) in lib/ui/widgets/progress_bar.dart
+- [X] T024 [US1] Create HomeScreen (job queue list view, start/pause controls, reactive via Drift .watch()) in lib/ui/screens/home_screen.dart
+- [X] T025 [US1] Create CreateJobScreen (source drive picker, destination folder picker with favorites, auto-chain toggle, preset selector) in lib/ui/screens/create_job_screen.dart
+- [X] T026 [US1] Create JobDetailScreen (per-job progress, file list with individual status, error display) in lib/ui/screens/job_detail_screen.dart
+- [X] T027 [US1] Implement favorite path save/load in CreateJobScreen (save button next to folder picker, dropdown of saved favorites) in lib/ui/screens/create_job_screen.dart
 
 **Checkpoint**: User Story 1 fully functional. User can detect drives, create transfer jobs, process queue, see progress, and get Slack notifications. This is the MVP.
 
