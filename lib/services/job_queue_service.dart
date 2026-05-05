@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:drift/drift.dart';
 
@@ -64,6 +65,17 @@ class JobQueueService {
     await _jobDao.markJobStarted(job.id);
 
     try {
+      // Validate source exists before processing.
+      final sourceDir = Directory(job.sourcePath);
+      if (!await sourceDir.exists()) {
+        await _jobDao.markJobFailed(job.id, 'Source path not found: ${job.sourcePath}');
+        await _slackService.notifyJobFailed(
+          jobId: job.id,
+          phase: 'Pre-check',
+          error: 'Source path not found: ${job.sourcePath}',
+        );
+        return;
+      }
       switch (job.type) {
         case JobType.transfer:
           await _processTransfer(job);

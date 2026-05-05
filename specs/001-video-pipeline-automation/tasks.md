@@ -81,11 +81,11 @@
 
 ### Implementation for User Story 2
 
-- [ ] T028 [US2] Implement HandBrake progress parser (regex for percentage, FPS, ETA from stdout) in lib/utils/handbrake_parser.dart
-- [ ] T029 [US2] Implement CompressionService (read presets from %APPDATA%\HandBrake\presets.json, spawn HandBrakeCLI with --preset, stream progress, update JobFile status) in lib/services/compression_service.dart
-- [ ] T030 [US2] Wire CompressionService into JobQueueService (process compression jobs, handle auto-chain creation from completed transfer jobs, trigger Slack) in lib/services/job_queue_service.dart
-- [ ] T031 [US2] Update CreateJobScreen to support compression-only job creation (input folder, preset dropdown, output location picker with favorites) in lib/ui/screens/create_job_screen.dart
-- [ ] T032 [US2] Update JobDetailScreen to show compression-specific progress (percentage, current file, FPS, ETA) in lib/ui/screens/job_detail_screen.dart
+- [X] T028 [US2] Implement HandBrake progress parser (regex for percentage, FPS, ETA from stdout) in lib/utils/handbrake_parser.dart
+- [X] T029 [US2] Implement CompressionService (read presets from %APPDATA%\HandBrake\presets.json, spawn HandBrakeCLI with --preset, stream progress, update JobFile status) in lib/services/compression_service.dart
+- [X] T030 [US2] Wire CompressionService into JobQueueService (process compression jobs, handle auto-chain creation from completed transfer jobs, trigger Slack) in lib/services/job_queue_service.dart
+- [X] T031 [US2] Update CreateJobScreen to support compression-only job creation (input folder, preset dropdown, output location picker with favorites) in lib/ui/screens/create_job_screen.dart
+- [X] T032 [US2] Update JobDetailScreen to show compression-specific progress (percentage, current file, FPS, ETA) in lib/ui/screens/job_detail_screen.dart
 
 **Checkpoint**: User Stories 1 AND 2 both work independently. Transfer and compression can run as separate jobs or chained.
 
@@ -99,9 +99,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Implement SD card erase logic (format drive via win32 or diskpart subprocess) in lib/services/drive_service.dart
-- [ ] T034 [US3] Add "Erase SD Cards" button to JobDetailScreen (visible only after verified transfer, triggers confirmation dialog) in lib/ui/screens/job_detail_screen.dart
-- [ ] T035 [US3] Wire erase flow: button → confirmation_dialog → DriveService.erase() → success message in lib/ui/screens/job_detail_screen.dart
+- [X] T033 [US3] Implement SD card erase logic (format drive via win32 or diskpart subprocess) in lib/services/drive_service.dart
+- [X] T034 [US3] Add "Erase SD Cards" button to JobDetailScreen (visible only after verified transfer, triggers confirmation dialog) in lib/ui/screens/job_detail_screen.dart
+- [X] T035 [US3] Wire erase flow: button → confirmation_dialog → DriveService.erase() → success message in lib/ui/screens/job_detail_screen.dart
 
 **Checkpoint**: All user stories independently functional. Full pipeline operational.
 
@@ -115,9 +115,9 @@
 
 ### Implementation for User Story 4
 
-- [ ] T036 [US4] Implement all Slack message formats per contracts/slack-notification.md (transfer start/complete/fail, compression start/complete/fail) in lib/services/slack_service.dart
-- [ ] T037 [US4] Create SettingsScreen (Slack webhook URL input, test notification button, update preferences) in lib/ui/screens/settings_screen.dart
-- [ ] T038 [US4] Wire Slack calls into JobQueueService at all phase transitions (job start, file complete, job complete, job fail) in lib/services/job_queue_service.dart
+- [X] T036 [US4] Implement all Slack message formats per contracts/slack-notification.md (transfer start/complete/fail, compression start/complete/fail) in lib/services/slack_service.dart
+- [X] T037 [US4] Create SettingsScreen (Slack webhook URL input, test notification button, update preferences) in lib/ui/screens/settings_screen.dart
+- [X] T038 [US4] Wire Slack calls into JobQueueService at all phase transitions (job start, file complete, job complete, job fail) in lib/services/job_queue_service.dart
 
 **Checkpoint**: All notifications flow to Slack. Team can monitor pipeline remotely.
 
@@ -127,11 +127,11 @@
 
 **Purpose**: App updates, refinements, deployment readiness
 
-- [ ] T039 Implement UpdateService (check GitHub Releases API via dio, compare versions, show prompted update dialog) in lib/services/update_service.dart
-- [ ] T040 Wire UpdateService into app startup (check on launch, show dialog if new version available, never auto-update) in lib/main.dart
+- [X] T039 Implement UpdateService (check GitHub Releases API via dio, compare versions, show prompted update dialog) in lib/services/update_service.dart
+- [X] T040 Wire UpdateService into app startup (check on launch, show dialog if new version available, never auto-update) in lib/main.dart
 - [ ] T041 Add USB hot-plug monitoring via device_manager package (detect card insertion/removal while app is running, refresh drive list) in lib/services/drive_service.dart
-- [ ] T042 Add error handling for edge cases: SD card removed mid-transfer, HDD full, HDD disconnected, HandBrake not installed, no presets found, Slack unreachable in lib/services/job_queue_service.dart
-- [ ] T043 Finalize GitHub Actions workflow: build Windows .exe, create release, attach asset on tag push in .github/workflows/build.yml
+- [X] T042 Add error handling for edge cases: SD card removed mid-transfer, HDD full, HDD disconnected, HandBrake not installed, no presets found, Slack unreachable in lib/services/job_queue_service.dart
+- [X] T043 Finalize GitHub Actions workflow: build Windows .exe, create release, attach asset on tag push in .github/workflows/build.yml
 
 ---
 

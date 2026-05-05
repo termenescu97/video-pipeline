@@ -6,6 +6,7 @@ import '../../database/daos/favorite_path_dao.dart';
 import '../../database/daos/job_dao.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
+import '../../services/compression_service.dart';
 import '../../services/drive_service.dart';
 import '../widgets/drive_list.dart';
 
@@ -19,13 +20,16 @@ class CreateJobScreen extends StatefulWidget {
 
 class _CreateJobScreenState extends State<CreateJobScreen> {
   final _driveService = DriveService();
+  final _compressionService = CompressionService();
   late final JobDao _jobDao;
   late final FavoritePathDao _favoritePathDao;
 
   List<DetectedDrive> _drives = [];
+  List<String> _presets = [];
   DetectedDrive? _selectedDrive;
   String? _destinationPath;
   String? _compressionOutputPath;
+  String? _selectedPreset;
   JobType _jobType = JobType.transfer;
   bool _loading = true;
 
@@ -35,6 +39,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     _jobDao = JobDao(database);
     _favoritePathDao = FavoritePathDao(database);
     _refreshDrives();
+    _loadPresets();
   }
 
   Future<void> _refreshDrives() async {
@@ -44,6 +49,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       _drives = drives;
       _loading = false;
     });
+  }
+
+  Future<void> _loadPresets() async {
+    final presets = await _compressionService.getAvailablePresets();
+    setState(() => _presets = presets);
   }
 
   @override
@@ -136,6 +146,35 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   setState(() => _compressionOutputPath = path);
                 },
               ),
+              const SizedBox(height: 24),
+            ],
+
+            // Preset selector (for compression jobs).
+            if (_jobType != JobType.transfer) ...[
+              Text('Compression Preset',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _selectedPreset,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'Select a HandBrake preset',
+                ),
+                items: _presets
+                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                    .toList(),
+                onChanged: (value) {
+                  setState(() => _selectedPreset = value);
+                },
+              ),
+              if (_presets.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    'No presets found. Check HandBrake installation.',
+                    style: TextStyle(color: Colors.orange, fontSize: 12),
+                  ),
+                ),
               const SizedBox(height: 24),
             ],
 
@@ -312,6 +351,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         sourcePath: sourcePath,
         destinationPath: _destinationPath!,
         compressionOutputPath: Value(_compressionOutputPath),
+        presetName: Value(_selectedPreset),
         autoChain: Value(_jobType == JobType.transferAndCompress),
         createdAt: DateTime.now(),
       ),

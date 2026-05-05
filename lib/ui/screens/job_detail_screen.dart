@@ -5,6 +5,8 @@ import '../../database/daos/job_dao.dart';
 import '../../database/daos/job_file_dao.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
+import '../../services/drive_service.dart';
+import '../widgets/confirmation_dialog.dart';
 import '../widgets/progress_bar.dart';
 
 /// Per-job detail view showing file list and progress.
@@ -20,6 +22,7 @@ class JobDetailScreen extends StatefulWidget {
 class _JobDetailScreenState extends State<JobDetailScreen> {
   late final JobDao _jobDao;
   late final JobFileDao _jobFileDao;
+  final _driveService = DriveService();
 
   @override
   void initState() {
@@ -86,7 +89,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                 const SizedBox(height: 16),
 
                 // Progress.
-                if (job.status == JobStatus.inProgress)
+                if (job.status == JobStatus.inProgress) ...[
                   PipelineProgressBar(
                     progress: job.totalFiles > 0
                         ? job.completedFiles / job.totalFiles
@@ -95,8 +98,37 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                     completedFiles: job.completedFiles,
                     totalFiles: job.totalFiles,
                   ),
+                  if (job.type == JobType.compression ||
+                      job.type == JobType.transferAndCompress)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Preset: ${job.presetName ?? "default"}',
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ),
+                ],
 
                 const SizedBox(height: 24),
+
+                // Erase SD Card button (only after successful transfer).
+                if (job.status == JobStatus.completed &&
+                    job.type != JobType.compression) ...[
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _eraseSourceDrive(job.sourcePath),
+                      icon: const Icon(Icons.delete_forever, color: Colors.red),
+                      label: const Text('Erase SD Card'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
 
                 // File list.
                 Text('Files',
@@ -164,6 +196,35 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       FileStatus.skipped =>
         const Icon(Icons.skip_next, color: Colors.orange),
     };
+  }
+
+  Future<void> _eraseSourceDrive(String drivePath) async {
+    final confirmed = await ConfirmationDialog.show(
+      context: context,
+      title: 'Erase SD Card',
+      message:
+          'This will permanently delete ALL files on $drivePath.\n\n'
+          'This action cannot be undone. Make sure you have verified '
+          'the transfer was successful before proceeding.',
+      confirmLabel: 'Erase',
+      cancelLabel: 'Cancel',
+      confirmColor: Colors.red,
+    );
+
+    if (!confirmed) return;
+
+    final success = await _driveService.eraseDrive(drivePath);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success
+              ? 'SD card erased successfully'
+              : 'Failed to erase SD card'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
   }
 
   String _jobTypeLabel(JobType type) => switch (type) {
