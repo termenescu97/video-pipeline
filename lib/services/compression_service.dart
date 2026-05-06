@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../utils/handbrake_parser.dart';
+import '../utils/process_runner.dart';
 
 /// Callback for reporting compression progress.
 typedef CompressionProgressCallback = void Function(HandbrakeProgress progress);
@@ -9,12 +10,11 @@ typedef CompressionProgressCallback = void Function(HandbrakeProgress progress);
 /// Orchestrates video compression via HandBrakeCLI subprocess.
 class CompressionService {
   CompressionProgressCallback? onProgress;
-  Process? _currentProcess;
+  final _processRunner = ProcessRunner();
 
   /// Kill the currently running subprocess.
   void cancel() {
-    _currentProcess?.kill();
-    _currentProcess = null;
+    _processRunner.kill();
   }
 
   /// Compress a single file using HandBrakeCLI with the given preset.
@@ -26,38 +26,18 @@ class CompressionService {
   }) async {
     if (!Platform.isWindows) return false;
 
-    final process = await Process.start(
-      'HandBrakeCLI.exe',
-      ['-i', inputFile, '-o', outputFile, '--preset', presetName],
+    void parseLine(String line) {
+      final progress = HandbrakeParser.parseLine(line);
+      if (progress != null) onProgress?.call(progress);
+    }
+
+    final exitCode = await _processRunner.run(
+      executable: 'HandBrakeCLI.exe',
+      arguments: ['-i', inputFile, '-o', outputFile, '--preset', presetName],
+      onStdoutLine: parseLine,
+      onStderrLine: parseLine,
     );
-    _currentProcess = process;
 
-    // Stream stderr for progress (HandBrakeCLI outputs progress to stderr).
-    process.stderr
-        .transform(const SystemEncoding().decoder)
-        .listen((data) {
-      for (final line in data.split('\n')) {
-        final progress = HandbrakeParser.parseLine(line);
-        if (progress != null) {
-          onProgress?.call(progress);
-        }
-      }
-    });
-
-    // Also check stdout for progress (some versions output there).
-    process.stdout
-        .transform(const SystemEncoding().decoder)
-        .listen((data) {
-      for (final line in data.split('\n')) {
-        final progress = HandbrakeParser.parseLine(line);
-        if (progress != null) {
-          onProgress?.call(progress);
-        }
-      }
-    });
-
-    final exitCode = await process.exitCode;
-    _currentProcess = null;
     return exitCode == 0;
   }
 
@@ -75,11 +55,9 @@ class CompressionService {
       final content = await presetsFile.readAsString();
       final dynamic data = jsonDecode(content);
 
-      // HandBrake presets.json structure: array of preset objects with "PresetName".
       if (data is List) {
         return _extractPresetNames(data);
       }
-      // Some versions wrap in a top-level object with "PresetList".
       if (data is Map && data.containsKey('PresetList')) {
         return _extractPresetNames(data['PresetList'] as List);
       }
@@ -93,11 +71,9 @@ class CompressionService {
     final names = <String>[];
     for (final preset in presets) {
       if (preset is Map) {
-        // Direct preset.
         if (preset.containsKey('PresetName')) {
           names.add(preset['PresetName'] as String);
         }
-        // Category with children.
         if (preset.containsKey('ChildrenArray')) {
           final children = preset['ChildrenArray'] as List;
           for (final child in children) {

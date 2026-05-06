@@ -1,9 +1,9 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
+import '../utils/process_runner.dart';
 import '../utils/robocopy_parser.dart';
 
 /// Callback for reporting transfer progress.
@@ -13,7 +13,7 @@ typedef TransferProgressCallback = void Function(FileProgressEvent event);
 /// Uses /Z flag for resumable transfers.
 class TransferService {
   TransferProgressCallback? onProgress;
-  Process? _currentProcess;
+  final _processRunner = ProcessRunner();
   DateTime? _fileStartTime;
   int _fileTotalBytes = 0;
 
@@ -38,23 +38,15 @@ class TransferService {
     _fileStartTime = DateTime.now();
     _fileTotalBytes = await File(sourceFile).length();
 
-    final process = await Process.start(
-      'robocopy',
-      [sourceDir, destDir, fileName, ...robocopyFlags],
-    );
-    _currentProcess = process;
-
-    process.stdout.transform(const SystemEncoding().decoder).listen((data) {
-      for (final line in data.split('\n')) {
+    final exitCode = await _processRunner.run(
+      executable: 'robocopy',
+      arguments: [sourceDir, destDir, fileName, ...robocopyFlags],
+      onStdoutLine: (line) {
         final event = RobocopyParser.parseLine(line);
-        if (event != null) {
-          onProgress?.call(event);
-        }
-      }
-    });
+        if (event != null) onProgress?.call(event);
+      },
+    );
 
-    final exitCode = await process.exitCode;
-    _currentProcess = null;
     _fileStartTime = null;
     final result = RobocopyParser.parseExitCode(exitCode);
     return result.success;
@@ -62,8 +54,7 @@ class TransferService {
 
   /// Kill the currently running subprocess.
   void cancel() {
-    _currentProcess?.kill();
-    _currentProcess = null;
+    _processRunner.kill();
     _fileStartTime = null;
   }
 

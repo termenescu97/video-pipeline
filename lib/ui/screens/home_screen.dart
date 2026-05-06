@@ -109,30 +109,54 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
             ),
-            // Active jobs.
+            // Active jobs (reorderable).
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                children: [
-                  ...activeJobs.map((job) => JobCard(
-                        job: job,
-                        onTap: () => _onJobTap(job),
-                        onDelete: () => _deleteJob(job),
-                      )),
-                  // History section.
-                  if (historyJobs.isNotEmpty) ...[
-                    const Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Text('History',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, color: Colors.grey)),
-                    ),
-                    ...historyJobs.map((job) => JobCard(
+              child: CustomScrollView(
+                slivers: [
+                  SliverReorderableList(
+                    itemCount: activeJobs.length,
+                    onReorder: (oldIndex, newIndex) {
+                      if (newIndex > oldIndex) newIndex--;
+                      jobDao.reorderJobs(oldIndex, newIndex);
+                    },
+                    itemBuilder: (context, index) {
+                      final job = activeJobs[index];
+                      return ReorderableDragStartListener(
+                        key: ValueKey(job.id),
+                        index: index,
+                        child: JobCard(
                           job: job,
                           onTap: () => _onJobTap(job),
                           onDelete: () => _deleteJob(job),
-                        )),
+                        ),
+                      );
+                    },
+                  ),
+                  // History section.
+                  if (historyJobs.isNotEmpty) ...[
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: Text('History',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey)),
+                      ),
+                    ),
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final job = historyJobs[index];
+                          return JobCard(
+                            job: job,
+                            onTap: () => _onJobTap(job),
+                            onDelete: () => _deleteJob(job),
+                          );
+                        },
+                        childCount: historyJobs.length,
+                      ),
+                    ),
                   ],
                 ],
               ),

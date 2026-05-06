@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:tray_manager/tray_manager.dart';
 
 import '../../main.dart';
 import 'create_job_screen.dart';
@@ -16,9 +19,49 @@ class ShellScreen extends StatefulWidget {
   State<ShellScreen> createState() => _ShellScreenState();
 }
 
-class _ShellScreenState extends State<ShellScreen> {
+class _ShellScreenState extends State<ShellScreen> with TrayListener {
   int? _selectedJobId;
   bool _showCreateJob = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initSystemTray();
+    trayManager.addListener(this);
+  }
+
+  @override
+  void dispose() {
+    trayManager.removeListener(this);
+    super.dispose();
+  }
+
+  Future<void> _initSystemTray() async {
+    if (!Platform.isWindows) return;
+    try {
+      await trayManager.setIcon('windows/runner/resources/app_icon.ico');
+      await trayManager.setToolTip('Video Pipeline — Idle');
+      await trayManager.setContextMenu(
+        Menu(items: [
+          MenuItem(key: 'show', label: 'Show'),
+          MenuItem.separator(),
+          MenuItem(key: 'quit', label: 'Quit'),
+        ]),
+      );
+    } catch (_) {
+      // System tray not available — degrade gracefully.
+    }
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    if (menuItem.key == 'show') {
+      // Bring window to front — handled by window_manager if needed.
+    }
+    if (menuItem.key == 'quit') {
+      exit(0);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

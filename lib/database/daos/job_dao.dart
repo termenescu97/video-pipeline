@@ -9,10 +9,41 @@ part 'job_dao.g.dart';
 class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   JobDao(super.db);
 
-  /// Watch all jobs ordered by creation time (queue order).
+  /// Watch all jobs ordered by sort order (queue order).
   Stream<List<Job>> watchAllJobs() {
-    return (select(jobs)..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+    return (select(jobs)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.sortOrder),
+            (t) => OrderingTerm.asc(t.createdAt),
+          ]))
         .watch();
+  }
+
+  /// Reorder jobs by updating their sortOrder values.
+  Future<void> reorderJobs(int oldIndex, int newIndex) async {
+    final allJobs = await (select(jobs)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.sortOrder),
+            (t) => OrderingTerm.asc(t.createdAt),
+          ]))
+        .get();
+
+    if (oldIndex < 0 ||
+        oldIndex >= allJobs.length ||
+        newIndex < 0 ||
+        newIndex >= allJobs.length) {
+      return;
+    }
+
+    final movedJob = allJobs.removeAt(oldIndex);
+    allJobs.insert(newIndex, movedJob);
+
+    await transaction(() async {
+      for (var i = 0; i < allJobs.length; i++) {
+        await (update(jobs)..where((t) => t.id.equals(allJobs[i].id)))
+            .write(JobsCompanion(sortOrder: Value(i)));
+      }
+    });
   }
 
   /// Watch jobs filtered by status.

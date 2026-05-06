@@ -26,6 +26,7 @@ class Jobs extends Table {
   DateTimeColumn get startedAt => dateTime().nullable()();
   DateTimeColumn get completedAt => dateTime().nullable()();
   TextColumn get errorMessage => text().nullable()();
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
   IntColumn get totalFiles => integer().withDefault(const Constant(0))();
   IntColumn get completedFiles => integer().withDefault(const Constant(0))();
   IntColumn get totalBytes => integer().withDefault(const Constant(0))();
