@@ -39,7 +39,7 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
   Future<void> _initSystemTray() async {
     if (!Platform.isWindows) return;
     try {
-      await trayManager.setIcon('windows/runner/resources/app_icon.ico');
+      await trayManager.setIcon('windows/runner/resources/icon-face.png');
       await trayManager.setToolTip('Video Pipeline — Idle');
       await trayManager.setContextMenu(
         Menu(items: [
