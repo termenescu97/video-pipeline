@@ -186,19 +186,16 @@ class JobQueueService {
 
       if (success) {
         if (job.verificationMode == VerificationMode.sha256) {
-          // SHA-256 hash verification.
+          // SHA-256 hash verification — parallel since source and dest are on different drives.
           progressNotifier.value = ProgressData(
-            currentFileName: 'Verifying: hashing source...',
+            currentFileName: 'Verifying: computing hashes...',
           );
-          final sourceHash = await _transferService.computeFileHash(
-            file.sourceFilePath,
-          );
-          progressNotifier.value = ProgressData(
-            currentFileName: 'Verifying: hashing destination...',
-          );
-          final destHash = await _transferService.computeFileHash(
-            file.destinationFilePath,
-          );
+          final results = await Future.wait([
+            _transferService.computeFileHash(file.sourceFilePath),
+            _transferService.computeFileHash(file.destinationFilePath),
+          ]);
+          final sourceHash = results[0];
+          final destHash = results[1];
           progressNotifier.value = null;
 
           await _jobFileDao.updateFileHashes(
@@ -207,7 +204,15 @@ class JobQueueService {
             destinationHash: destHash,
           );
 
-          if (sourceHash != null && destHash != null && sourceHash == destHash) {
+          if (sourceHash == null || destHash == null) {
+            // Hash computation failed — not a mismatch, hashing itself broke.
+            await _jobFileDao.markFileFailed(
+              file.id,
+              'SHA-256 verification failed: could not compute hash',
+            );
+            failedCount++;
+            _logService?.error('Job #${job.id} file ${file.fileName} — SHA-256 hash computation failed: source=$sourceHash dest=$destHash');
+          } else if (sourceHash == destHash) {
             await _jobFileDao.markFileCompleted(file.id, verified: true);
             completedCount++;
             _logService?.info('Job #${job.id} file ${file.fileName} — SHA-256 verified: source=$sourceHash dest=$destHash MATCH');

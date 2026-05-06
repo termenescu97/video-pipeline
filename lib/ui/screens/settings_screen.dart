@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
+import '../widgets/confirmation_dialog.dart';
 
 /// App settings screen — Slack webhook URL, update preferences.
 class SettingsScreen extends StatefulWidget {
@@ -145,6 +146,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
       return;
+    }
+
+    // Confirm before proceeding (Constitution I — destructive action).
+    if (mounted) {
+      final confirmed = await ConfirmationDialog.show(
+        context: context,
+        title: 'Prep Test Cards',
+        message: 'This will create DCIM/100TEST/ on ${drives.length} card(s) '
+            'with test video files.\n\n'
+            'Existing DCIM/100TEST/ folders will be replaced.\n'
+            'Other files on the cards will NOT be affected.',
+        confirmLabel: 'Prep Cards',
+      );
+      if (!confirmed) return;
     }
 
     // Pick source folder.

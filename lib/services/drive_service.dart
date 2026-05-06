@@ -160,8 +160,12 @@ class DriveService {
       prepTestCards(String sourceFolder, List<DetectedDrive> drives) async {
     // Find video files in source folder.
     final sourceDir = Directory(sourceFolder);
+    if (!await sourceDir.exists()) {
+      return (cardsPrepped: 0, filesCopied: 0, errors: ['Source folder not found: $sourceFolder']);
+    }
+
     final testFiles = <File>[];
-    await for (final entity in sourceDir.list()) {
+    await for (final entity in sourceDir.list(recursive: true)) {
       if (entity is File) {
         final ext = p.extension(entity.path).toLowerCase();
         if (videoExtensions.contains(ext)) {

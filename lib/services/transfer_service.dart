@@ -67,7 +67,8 @@ class TransferService {
       final result = await Process.run('powershell', [
         '-NoProfile',
         '-Command',
-        '(Get-FileHash -Path "$filePath" -Algorithm SHA256).Hash',
+        r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
+        filePath,
       ]);
 
       if (result.exitCode != 0) return null;
