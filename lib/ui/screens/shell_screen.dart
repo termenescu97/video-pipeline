@@ -42,7 +42,7 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
       // Resolve icon path relative to the executable.
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       await trayManager.setIcon('$exeDir/data/flutter_assets/assets/video-pipeline-icon.ico');
-      await trayManager.setToolTip('Video Pipeline — Idle');
+      await trayManager.setToolTip('Copiatorul3000 — Idle');
       await trayManager.setContextMenu(
         Menu(items: [
           MenuItem(key: 'show', label: 'Show'),
@@ -101,7 +101,7 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
           autofocus: true,
           child: Scaffold(
             appBar: AppBar(
-              title: const Text('Video Pipeline'),
+              title: const Text('Copiatorul3000'),
               actions: [
                 IconButton(
                   icon: const Icon(Icons.settings),

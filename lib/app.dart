@@ -79,7 +79,7 @@ class _VideoPipelineAppState extends State<VideoPipelineApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Video Pipeline',
+      title: 'Copiatorul3000',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.system,

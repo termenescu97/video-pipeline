@@ -36,7 +36,7 @@ void main() async {
   // Set minimum window size.
   await windowManager.ensureInitialized();
   await windowManager.setMinimumSize(const Size(800, 600));
-  await windowManager.setTitle('Video Pipeline');
+  await windowManager.setTitle('Copiatorul3000');
 
   // Initialize FFI for SQLite on desktop.
   sqfliteFfiInit();
