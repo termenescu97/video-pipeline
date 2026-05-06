@@ -1,3 +1,173 @@
+# Copiatorul3000
+
+## What This Is
+
+A Flutter desktop app (Windows 11) that automates the video production team's post-shoot workflow: detecting SD cards, transferring video files via robocopy, compressing via HandBrakeCLI, and notifying via Slack. Built as a single Dart/Flutter codebase that compiles to a Windows `.exe`.
+
+**Project location**: `~/Music/copiatorul3000/`
+**GitHub repo**: https://github.com/termenescu97/video-pipeline (public)
+**Target users**: Non-technical video editors on a single Windows 11 machine
+
+## Development Methodology
+
+We use **Spec-Kit (spec-driven development)** from GitHub. The flow for every feature is:
+
+```
+/speckit-constitution → /speckit-specify → /speckit-clarify → /speckit-plan → /speckit-tasks → /speckit-implement
+```
+
+Each step creates artifacts in `specs/NNN-feature-name/`:
+- `spec.md` — what and why (user stories, requirements, success criteria)
+- `plan.md` — how (architecture, tech decisions, file changes)
+- `research.md` — technical decisions with rationale
+- `tasks.md` — ordered checklist of implementation tasks
+- `data-model.md`, `contracts/`, `quickstart.md` — supporting artifacts
+
+The project constitution is at `.specify/memory/constitution.md` with 6 principles:
+1. **Human-in-the-Loop** — destructive actions require explicit confirmation
+2. **Single Codebase** — all logic in Flutter/Dart, single `.exe`
+3. **Resilient Pipeline** — resumable transfers, verified copies
+4. **Minimal Complexity** — orchestrate CLI tools, don't reimplement
+5. **Observable Progress** — real-time GUI + Slack notifications
+6. **Update Transparency** — prompted updates, never silent
+
+## Tech Stack
+
+- **Language**: Dart 3.x / Flutter 3.x (desktop, Windows target)
+- **Database**: SQLite via Drift ORM (`sqflite_common_ffi`)
+- **File transfer**: robocopy (Windows built-in, `/Z` for resumable)
+- **Compression**: HandBrakeCLI (presets read from `%APPDATA%\HandBrake\presets.json`)
+- **Notifications**: Slack incoming webhook via `dio`
+- **Window management**: `window_manager` (min size 800x600)
+- **System tray**: `tray_manager`
+- **Folder picker**: `file_picker`
+- **CI/CD**: GitHub Actions — builds Windows `.exe` on tag push, creates GitHub Release
+
+## Architecture
+
+```
+lib/
+├── main.dart                    # Entry point, singleton services
+├── app.dart                     # MaterialApp, update check on launch
+├── database/
+│   ├── database.dart            # Drift database class (schema v2)
+│   ├── tables.dart              # Job, JobFile, FavoritePath, AppSettings
+│   ├── extensions.dart          # Extension methods on JobType, JobStatus, FileStatus
+│   └── daos/                    # Data access objects (JobDao, JobFileDao, etc.)
+├── services/
+│   ├── job_queue_service.dart   # Queue processing, auto-chain, batch creation
+│   ├── transfer_service.dart    # Robocopy subprocess via ProcessRunner
+│   ├── compression_service.dart # HandBrakeCLI subprocess via ProcessRunner
+│   ├── slack_service.dart       # Webhook notifications
+│   ├── drive_service.dart       # SD card detection, disk space, erase
+│   └── update_service.dart      # GitHub Releases API check
+├── ui/
+│   ├── screens/
+│   │   ├── shell_screen.dart    # Master-detail layout, keyboard shortcuts, system tray
+│   │   ├── home_screen.dart     # Left panel: job queue, batch copy, start/stop, history
+│   │   ├── create_job_screen.dart # Right panel: job creation form
+│   │   ├── job_detail_screen.dart # Right panel: job progress, retry, erase
+│   │   └── settings_screen.dart   # Slack webhook, update toggle
+│   ├── widgets/                 # JobCard, DriveList, ProgressBar, ConfirmationDialog
+│   └── theme/app_theme.dart     # StatusColors theme extension
+└── utils/
+    ├── constants.dart           # Video extensions, robocopy flags, regex patterns
+    ├── format_utils.dart        # formatBytes, formatDuration, formatSpeed
+    ├── error_mapper.dart        # Raw errors → human-friendly messages
+    ├── process_runner.dart      # Shared subprocess stdout/stderr streaming
+    ├── robocopy_parser.dart     # Parse robocopy output and exit codes
+    └── handbrake_parser.dart    # Parse HandBrakeCLI progress output
+```
+
+## Current State (as of 2026-05-06)
+
+### Completed Features (5 spec-kit features)
+
+| Feature | Branch | Tasks | Status |
+|---------|--------|-------|--------|
+| 001 - Video Pipeline Automation | `001-video-pipeline-automation` | 43/43 | ✅ Complete |
+| 002 - UI Improvements | `002-ui-improvements` | 5/5 | ✅ Complete |
+| 003 - Critical Bug Fixes | `003-fix-critical-bugs` | 23/23 | ✅ Complete |
+| 004 - Core UX Improvements | `004-core-ux-improvements` | 42/42 | ✅ Complete |
+| 005 - Polish & Code Quality | `005-polish-code-quality` | 29/29 | ✅ Complete |
+
+**Latest release**: v2.0.0 (tagged, built via GitHub Actions)
+**Total tasks implemented**: 142
+
+### What Works
+
+- Job queue with per-job configuration (source, destination, preset, auto-chain)
+- Batch "Copy All Cards" — one click to queue all detected SD cards
+- Robocopy-based transfer with file verification (size comparison)
+- HandBrakeCLI compression with preset dropdown
+- Slack notifications at every phase transition
+- Master-detail desktop layout (queue left, detail right)
+- Keyboard shortcuts (Ctrl+N, Ctrl+Enter)
+- Right-click context menus on job cards
+- Drag-to-reorder queue
+- Job history section
+- Retry failed jobs
+- SD card erase with verification gates and drive identity check
+- Disk space indicator and insufficient space warning
+- Human-friendly error messages with technical details expandable
+- HandBrake installation detection with banner
+- System tray icon
+- Auto-update check from GitHub Releases (prompted, never silent)
+- Native folder picker (file_picker)
+- Favorites system for frequently used paths
+- Debounced settings save
+
+### Known Issues (from review-report-v2.md)
+
+**Critical (must fix before production use)**:
+1. Duplicate filenames from recursive listing overwrite at destination
+2. File marked completed then overwritten as failed (verify race)
+3. ProcessRunner streams not awaited before exitCode
+4. `exit(0)` in system tray kills without cleanup
+5. `DropdownButtonFormField.initialValue` compile error (should be `value`)
+6. `createBatchTransferJobs` parameter is `List<dynamic>` (should be `List<DetectedDrive>`)
+
+**High (should fix)**:
+- Progress bar ETA/speed/filename never wired from services to UI
+- No persistent log file
+- No single-instance lock
+- No Slack webhook unconfigured banner
+- No first-run onboarding
+- Compression preset not validated in `_canCreate()`
+- Reorder indices mismatch between filtered list and DAO
+- Chained compression job missing totalFiles/totalBytes
+- `githubRepo` constant is placeholder `'YOUR_ORG/video-pipeline'`
+
+Full report: `specs/005-polish-code-quality/review-report-v2.md`
+
+### v3.0 Roadmap (from PM review)
+
+**Tier 1**: NAS upload automation, auto-detect SD cards, dashboard stats, SHA-256 verification
+**Tier 2**: Job templates, scheduled jobs, multi-machine sync, selective file copy
+**Tier 3**: Cloud backup, metadata extraction, team activity feed
+
+## Build & Release
+
+```bash
+# Development (from ~/Music/copiatorul3000/)
+flutter pub get
+dart run build_runner build
+flutter analyze
+
+# Release (triggers GitHub Actions Windows build)
+git tag v2.1.0
+git push origin v2.1.0
+# → GitHub Actions builds .exe → creates Release with zip
+# → App checks GitHub Releases on launch and prompts to update
+```
+
+## Key Files for Context
+
+- `.specify/memory/constitution.md` — project principles (6 rules)
+- `specs/005-polish-code-quality/review-report-v2.md` — latest review (30 issues + roadmap)
+- `specs/001-video-pipeline-automation/spec.md` — original feature spec
+- `specs/001-video-pipeline-automation/plan.md` — original architecture plan
+
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
