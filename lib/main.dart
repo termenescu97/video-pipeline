@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'database/database.dart';
@@ -29,8 +30,13 @@ late final CompressionService compressionService;
 late final SlackService slackService;
 late final JobQueueService jobQueueService;
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Set minimum window size.
+  await windowManager.ensureInitialized();
+  await windowManager.setMinimumSize(const Size(800, 600));
+  await windowManager.setTitle('Video Pipeline');
 
   // Initialize FFI for SQLite on desktop.
   sqfliteFfiInit();

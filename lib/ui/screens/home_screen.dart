@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
@@ -5,126 +6,169 @@ import '../../database/tables.dart';
 import '../../main.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/job_card.dart';
-import 'create_job_screen.dart';
-import 'job_detail_screen.dart';
-import 'settings_screen.dart';
 
-/// Main screen showing the job queue with real-time updates.
+/// Queue list panel — can be used standalone or as left panel in ShellScreen.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  /// Callbacks for master-detail mode (when embedded in ShellScreen).
+  final ValueChanged<int>? onJobSelected;
+  final VoidCallback? onCreateJob;
+
+  const HomeScreen({super.key, this.onJobSelected, this.onCreateJob});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  bool get _isEmbedded => widget.onJobSelected != null;
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Video Pipeline'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    return StreamBuilder<List<Job>>(
+      stream: jobDao.watchAllJobs(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final jobs = snapshot.data ?? [];
+        // Split into active and completed/failed.
+        final activeJobs = jobs
+            .where((j) =>
+                j.status != JobStatus.completed && j.status != JobStatus.failed)
+            .toList();
+        final historyJobs = jobs
+            .where((j) =>
+                j.status == JobStatus.completed || j.status == JobStatus.failed)
+            .toList();
+
+        if (jobs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.queue, size: 48, color: Colors.grey),
+                const SizedBox(height: 16),
+                const Text('No jobs in queue'),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: _onCreateJob,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Create Job'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _batchCopyAllCards,
+                  icon: const Icon(Icons.sd_storage),
+                  label: const Text('Copy All Cards'),
+                ),
+              ],
             ),
-          ),
-        ],
-      ),
-      body: StreamBuilder<List<Job>>(
-        stream: jobDao.watchAllJobs(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+          );
+        }
 
-          final jobs = snapshot.data ?? [];
+        final isProcessing = jobQueueService.isProcessing;
 
-          if (jobs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+        return Column(
+          children: [
+            // Start/Stop + batch buttons.
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
                 children: [
-                  const Icon(Icons.queue, size: 64, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  const Text('No jobs in queue'),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Create a job to start transferring or compressing files',
-                    style: TextStyle(color: Colors.grey),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _toggleProcessing,
+                      icon: Icon(
+                          isProcessing ? Icons.stop : Icons.play_arrow,
+                          size: 18),
+                      label: Text(
+                          isProcessing ? 'Stop' : 'Start',
+                          style: const TextStyle(fontSize: 13)),
+                      style: isProcessing
+                          ? FilledButton.styleFrom(
+                              backgroundColor: Colors.red.shade700)
+                          : null,
+                    ),
                   ),
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _navigateToCreateJob,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _batchCopyAllCards,
+                      icon: const Icon(Icons.sd_storage, size: 18),
+                      label: const Text('Copy All',
+                          style: TextStyle(fontSize: 13)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
                     icon: const Icon(Icons.add),
-                    label: const Text('Create Job'),
+                    tooltip: 'New Job',
+                    onPressed: _onCreateJob,
                   ),
                 ],
               ),
-            );
-          }
-
-          final isProcessing = jobQueueService.isProcessing;
-
-          return Column(
-            children: [
-              // Start/Stop bar.
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _toggleProcessing,
-                    icon: Icon(isProcessing ? Icons.stop : Icons.play_arrow),
-                    label: Text(isProcessing ? 'Stop Queue' : 'Start Queue'),
-                    style: isProcessing
-                        ? FilledButton.styleFrom(
-                            backgroundColor: Colors.red.shade700,
-                          )
-                        : null,
-                  ),
-                ),
+            ),
+            // Active jobs.
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                children: [
+                  ...activeJobs.map((job) => JobCard(
+                        job: job,
+                        onTap: () => _onJobTap(job),
+                        onDelete: () => _deleteJob(job),
+                      )),
+                  // History section.
+                  if (historyJobs.isNotEmpty) ...[
+                    const Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Text('History',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, color: Colors.grey)),
+                    ),
+                    ...historyJobs.map((job) => JobCard(
+                          job: job,
+                          onTap: () => _onJobTap(job),
+                          onDelete: () => _deleteJob(job),
+                        )),
+                  ],
+                ],
               ),
-              // Job list.
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: jobs.length,
-                  itemBuilder: (context, index) {
-                    final job = jobs[index];
-                    return JobCard(
-                      job: job,
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => JobDetailScreen(jobId: job.id),
-                        ),
-                      ),
-                      onDelete: () => _deleteJob(job),
-                    );
-                  },
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _navigateToCreateJob,
-        icon: const Icon(Icons.add),
-        label: const Text('New Job'),
-      ),
+            ),
+          ],
+        );
+      },
     );
+  }
+
+  void _onJobTap(Job job) {
+    if (_isEmbedded) {
+      widget.onJobSelected!(job.id);
+    } else {
+      // Standalone mode — push to detail screen (fallback).
+    }
+  }
+
+  void _onCreateJob() {
+    if (_isEmbedded) {
+      widget.onCreateJob!();
+    }
   }
 
   void _toggleProcessing() {
     if (jobQueueService.isProcessing) {
       jobQueueService.stopProcessing();
       setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Queue stopped')),
+      );
     } else {
       setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Queue started')),
+      );
       jobQueueService.startProcessing().then((_) {
         if (mounted) setState(() {});
       });
@@ -148,16 +192,32 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _navigateToCreateJob() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const CreateJobScreen()),
-    ).then((result) {
-      if (result == true && mounted) {
+  Future<void> _batchCopyAllCards() async {
+    final drives = await driveService.getRemovableDrives();
+    if (drives.isEmpty) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Job added to queue')),
+          const SnackBar(content: Text('No removable drives detected')),
         );
       }
-    });
+      return;
+    }
+
+    final destination = await FilePicker.platform.getDirectoryPath();
+    if (destination == null) return;
+
+    final result = await jobQueueService.createBatchTransferJobs(
+      drives,
+      destination,
+    );
+
+    if (mounted) {
+      final msg = result.skipped > 0
+          ? 'Created ${result.created} jobs — ${result.skipped} cards had no video files'
+          : 'Created ${result.created} jobs';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    }
   }
 }

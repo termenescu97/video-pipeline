@@ -106,6 +106,48 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
   }
 
+  /// Watch completed and failed jobs (history).
+  Stream<List<Job>> watchCompletedJobs() {
+    return (select(jobs)
+          ..where(
+            (t) =>
+                t.status.equalsValue(JobStatus.completed) |
+                t.status.equalsValue(JobStatus.failed),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
+        .watch();
+  }
+
+  /// Reset a failed job for retry — set status to queued, clear error.
+  /// Also resets failed files to pending.
+  Future<void> resetJobForRetry(int jobId) async {
+    await transaction(() async {
+      await (update(jobs)..where((t) => t.id.equals(jobId))).write(
+        const JobsCompanion(
+          status: Value(JobStatus.queued),
+          errorMessage: Value(null),
+          completedAt: Value(null),
+        ),
+      );
+      // Reset failed files to pending.
+      await (update(db.jobFiles)
+            ..where(
+              (t) =>
+                  t.jobId.equals(jobId) &
+                  (t.status.equalsValue(FileStatus.failed) |
+                      t.status.equalsValue(FileStatus.pending)),
+            ))
+          .write(
+        const JobFilesCompanion(
+          status: Value(FileStatus.pending),
+          errorMessage: Value(null),
+          startedAt: Value(null),
+          completedAt: Value(null),
+        ),
+      );
+    });
+  }
+
   /// Delete a job and its associated files.
   Future<void> deleteJob(int jobId) async {
     await transaction(() async {

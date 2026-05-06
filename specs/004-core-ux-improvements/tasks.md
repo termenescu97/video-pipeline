@@ -19,14 +19,14 @@
 
 **Purpose**: New dependencies, shared utilities, and infrastructure
 
-- [ ] T001 Add `window_manager` dependency to pubspec.yaml and run `flutter pub get`
-- [ ] T002 [P] Create lib/utils/format_utils.dart with `formatBytes(int bytes)`, `formatDuration(Duration d)`, `formatSpeed(double bytesPerSecond)` helpers
-- [ ] T003 [P] Create lib/utils/error_mapper.dart with `mapError(String rawError)` that returns `({String message, String details})` — map common Windows errors (access denied, disk full, path not found, SD removed) to human-friendly messages
-- [ ] T004 [P] Add `getDiskFreeSpace(String path)` method to lib/services/drive_service.dart — use PowerShell `Get-PSDrive` to query free bytes for a given drive letter
-- [ ] T005 [P] Add `getDriveIdentity(String drivePath)` method to lib/services/drive_service.dart — returns `({String label, int totalBytes})` for drive verification before erase
-- [ ] T006 Add `watchCompletedJobs()` stream method to lib/database/daos/job_dao.dart — returns jobs with status completed or failed, ordered by completedAt descending
-- [ ] T007 Add `resetJobForRetry(int jobId)` method to lib/database/daos/job_dao.dart — sets job status to queued, clears errorMessage; also reset failed/pending files in that job to pending via JobFileDao
-- [ ] T008 Initialize window_manager in lib/main.dart — set minimum size 800x600, set title "Video Pipeline"
+- [X] T001 Add `window_manager` dependency to pubspec.yaml and run `flutter pub get`
+- [X] T002 [P] Create lib/utils/format_utils.dart with `formatBytes(int bytes)`, `formatDuration(Duration d)`, `formatSpeed(double bytesPerSecond)` helpers
+- [X] T003 [P] Create lib/utils/error_mapper.dart with `mapError(String rawError)` that returns `({String message, String details})` — map common Windows errors (access denied, disk full, path not found, SD removed) to human-friendly messages
+- [X] T004 [P] Add `getDiskFreeSpace(String path)` method to lib/services/drive_service.dart — use PowerShell `Get-PSDrive` to query free bytes for a given drive letter
+- [X] T005 [P] Add `getDriveIdentity(String drivePath)` method to lib/services/drive_service.dart — returns `({String label, int totalBytes})` for drive verification before erase
+- [X] T006 Add `watchCompletedJobs()` stream method to lib/database/daos/job_dao.dart — returns jobs with status completed or failed, ordered by completedAt descending
+- [X] T007 Add `resetJobForRetry(int jobId)` method to lib/database/daos/job_dao.dart — sets job status to queued, clears errorMessage; also reset failed/pending files in that job to pending via JobFileDao
+- [X] T008 Initialize window_manager in lib/main.dart — set minimum size 800x600, set title "Video Pipeline"
 
 ---
 
@@ -34,10 +34,10 @@
 
 **Purpose**: Store process references and add cancel methods — required before UI can wire stop properly
 
-- [ ] T009 Refactor lib/services/transfer_service.dart — store `Process?` reference as instance field, add `cancel()` method that calls `process?.kill()`, clear reference after process exits
-- [ ] T010 Refactor lib/services/compression_service.dart — store `Process?` reference as instance field, add `cancel()` method that calls `process?.kill()`, clear reference after process exits
-- [ ] T011 Update lib/services/job_queue_service.dart `stopProcessing()` — call `_transferService.cancel()` and `_compressionService.cancel()` in addition to setting `_isProcessing = false`
-- [ ] T012 Add `createBatchTransferJobs(List<DetectedDrive> drives, String destination)` method to lib/services/job_queue_service.dart — creates one transfer job per drive with file enumeration (reuse logic from create_job_screen)
+- [X] T009 Refactor lib/services/transfer_service.dart — store `Process?` reference as instance field, add `cancel()` method that calls `process?.kill()`, clear reference after process exits
+- [X] T010 Refactor lib/services/compression_service.dart — store `Process?` reference as instance field, add `cancel()` method that calls `process?.kill()`, clear reference after process exits
+- [X] T011 Update lib/services/job_queue_service.dart `stopProcessing()` — call `_transferService.cancel()` and `_compressionService.cancel()` in addition to setting `_isProcessing = false`
+- [X] T012 Add `createBatchTransferJobs(List<DetectedDrive> drives, String destination)` method to lib/services/job_queue_service.dart — creates one transfer job per drive with file enumeration (reuse logic from create_job_screen)
 
 **Checkpoint**: Services support cancellation and batch job creation.
 
@@ -49,8 +49,8 @@
 
 **Independent Test**: Insert multiple cards, tap "Copy All Cards," verify one job per card created.
 
-- [ ] T013 [US1] Add "Copy All Cards" button to lib/ui/screens/home_screen.dart — prominent button above the queue list, calls DriveService to detect drives, shows destination picker, then calls JobQueueService.createBatchTransferJobs()
-- [ ] T014 [US1] Handle edge cases in batch creation: skip cards with zero video files (show count of skipped), show snackbar with result ("Created 3 jobs from 4 cards — 1 card had no video files")
+- [X] T013 [US1] Add "Copy All Cards" button to lib/ui/screens/home_screen.dart — prominent button above the queue list, calls DriveService to detect drives, shows destination picker, then calls JobQueueService.createBatchTransferJobs()
+- [X] T014 [US1] Handle edge cases in batch creation: skip cards with zero video files (show count of skipped), show snackbar with result ("Created 3 jobs from 4 cards — 1 card had no video files")
 
 **Checkpoint**: Batch copy works end-to-end.
 
@@ -62,8 +62,8 @@
 
 **Independent Test**: Select a destination, verify free space displayed. Create a job exceeding space, verify warning.
 
-- [ ] T015 [US2] In lib/ui/screens/create_job_screen.dart, after destination folder is selected, query free space via DriveService.getDiskFreeSpace() and display it next to the path (e.g., "2.3 TB free")
-- [ ] T016 [US2] In lib/ui/screens/create_job_screen.dart `_createJob()`, after enumerating files, compare total size against free space. If exceeds, show warning dialog with sizes — user can proceed or cancel
+- [X] T015 [US2] In lib/ui/screens/create_job_screen.dart, after destination folder is selected, query free space via DriveService.getDiskFreeSpace() and display it next to the path (e.g., "2.3 TB free")
+- [X] T016 [US2] In lib/ui/screens/create_job_screen.dart `_createJob()`, after enumerating files, compare total size against free space. If exceeds, show warning dialog with sizes — user can proceed or cancel
 
 **Checkpoint**: Users see free space and get warned before overflow.
 
@@ -75,8 +75,8 @@
 
 **Independent Test**: Fail a job, tap Retry, verify it re-queues and only processes failed files.
 
-- [ ] T017 [US3] Add "Retry" button to lib/ui/screens/job_detail_screen.dart — visible only when job.status == failed. On tap, call JobDao.resetJobForRetry(), show snackbar "Job re-queued for retry"
-- [ ] T018 [US3] In lib/services/job_queue_service.dart, ensure retried jobs work correctly — the existing file loop already skips completed files, so resetting failed files to pending is sufficient
+- [X] T017 [US3] Add "Retry" button to lib/ui/screens/job_detail_screen.dart — visible only when job.status == failed. On tap, call JobDao.resetJobForRetry(), show snackbar "Job re-queued for retry"
+- [X] T018 [US3] In lib/services/job_queue_service.dart, ensure retried jobs work correctly — the existing file loop already skips completed files, so resetting failed files to pending is sufficient
 
 **Checkpoint**: Failed jobs can be retried without recreation.
 
@@ -88,10 +88,10 @@
 
 **Independent Test**: Start a transfer, verify ETA/speed/file name shown in progress bar.
 
-- [ ] T019 [US4] Update lib/ui/widgets/progress_bar.dart — add optional fields: `elapsedTime`, `eta`, `speed`, and update the widget layout to display them below the bar
-- [ ] T020 [US4] Update lib/services/transfer_service.dart — track start time, calculate elapsed/speed/ETA based on completedBytes vs totalBytes, expose these via a progress stream or callback
-- [ ] T021 [US4] Update lib/services/compression_service.dart — expose HandBrake's parsed FPS and ETA (already parsed in handbrake_parser.dart) via the progress callback
-- [ ] T022 [US4] Update lib/ui/screens/job_detail_screen.dart — pass current file name, ETA, elapsed, and speed to PipelineProgressBar widget
+- [X] T019 [US4] Update lib/ui/widgets/progress_bar.dart — add optional fields: `elapsedTime`, `eta`, `speed`, and update the widget layout to display them below the bar
+- [X] T020 [US4] Update lib/services/transfer_service.dart — track start time, calculate elapsed/speed/ETA based on completedBytes vs totalBytes, expose these via a progress stream or callback
+- [X] T021 [US4] Update lib/services/compression_service.dart — expose HandBrake's parsed FPS and ETA (already parsed in handbrake_parser.dart) via the progress callback
+- [X] T022 [US4] Update lib/ui/screens/job_detail_screen.dart — pass current file name, ETA, elapsed, and speed to PipelineProgressBar widget
 
 **Checkpoint**: Users see full progress details during operations.
 
@@ -103,8 +103,8 @@
 
 **Independent Test**: Start a transfer, tap Stop, verify process dies within 5 seconds.
 
-- [ ] T023 [US5] Update lib/ui/screens/home_screen.dart — when Stop is tapped, show snackbar "Stopping queue..." and call jobQueueService.stopProcessing() which now also kills subprocesses (wired in T011)
-- [ ] T024 [US5] In lib/services/job_queue_service.dart, after subprocess cancellation in _processTransfer/_processCompression, mark the interrupted file as pending (not failed) so it can be resumed
+- [X] T023 [US5] Update lib/ui/screens/home_screen.dart — when Stop is tapped, show snackbar "Stopping queue..." and call jobQueueService.stopProcessing() which now also kills subprocesses (wired in T011)
+- [X] T024 [US5] In lib/services/job_queue_service.dart, after subprocess cancellation in _processTransfer/_processCompression, mark the interrupted file as pending (not failed) so it can be resumed
 
 **Checkpoint**: Stop Queue is responsive and files can be resumed.
 
@@ -116,10 +116,10 @@
 
 **Independent Test**: Complete a verified transfer, verify erase button at bottom. Swap drives, verify erase is blocked.
 
-- [ ] T025 [US6] In lib/ui/screens/job_detail_screen.dart, move erase button to the very bottom of the page (after file list)
-- [ ] T026 [US6] In lib/ui/screens/job_detail_screen.dart, gate erase button: only enabled when ALL files have verified == true. Show disabled message "Cannot erase — some files not verified" otherwise
-- [ ] T027 [US6] In lib/ui/screens/job_detail_screen.dart `_eraseSourceDrive()`, before erasing: call DriveService.getDriveIdentity() and compare label/size against the original source. If mismatch, show warning "Drive appears different from original source" and block erase
-- [ ] T028 [US6] Update the erase confirmation dialog to show drive label and size alongside path
+- [X] T025 [US6] In lib/ui/screens/job_detail_screen.dart, move erase button to the very bottom of the page (after file list)
+- [X] T026 [US6] In lib/ui/screens/job_detail_screen.dart, gate erase button: only enabled when ALL files have verified == true. Show disabled message "Cannot erase — some files not verified" otherwise
+- [X] T027 [US6] In lib/ui/screens/job_detail_screen.dart `_eraseSourceDrive()`, before erasing: call DriveService.getDriveIdentity() and compare label/size against the original source. If mismatch, show warning "Drive appears different from original source" and block erase
+- [X] T028 [US6] Update the erase confirmation dialog to show drive label and size alongside path
 
 **Checkpoint**: Erase is safe — verified, identity-checked, clearly positioned.
 
@@ -131,10 +131,10 @@
 
 **Independent Test**: Click a job, verify detail opens on right while queue stays visible on left.
 
-- [ ] T029 [US7] Create lib/ui/screens/shell_screen.dart — StatefulWidget with Row layout: SizedBox(width: 320) for left panel + VerticalDivider + Expanded for right panel. Holds selectedJobId and showCreateJob state
-- [ ] T030 [US7] Refactor lib/ui/screens/home_screen.dart to be embeddable as left panel — accept callbacks for onJobSelected, onCreateJob, onBatchCopy. Remove its own Scaffold/AppBar (ShellScreen provides those)
-- [ ] T031 [US7] Update lib/app.dart — route to ShellScreen instead of HomeScreen. Keep Settings as a pushed route (dialog-style)
-- [ ] T032 [US7] Update lib/ui/screens/create_job_screen.dart to work as an embeddable panel (no Scaffold) when used inside ShellScreen, or as standalone when pushed
+- [X] T029 [US7] Create lib/ui/screens/shell_screen.dart — StatefulWidget with Row layout: SizedBox(width: 320) for left panel + VerticalDivider + Expanded for right panel. Holds selectedJobId and showCreateJob state
+- [X] T030 [US7] Refactor lib/ui/screens/home_screen.dart to be embeddable as left panel — accept callbacks for onJobSelected, onCreateJob, onBatchCopy. Remove its own Scaffold/AppBar (ShellScreen provides those)
+- [X] T031 [US7] Update lib/app.dart — route to ShellScreen instead of HomeScreen. Keep Settings as a pushed route (dialog-style)
+- [X] T032 [US7] Update lib/ui/screens/create_job_screen.dart to work as an embeddable panel (no Scaffold) when used inside ShellScreen, or as standalone when pushed
 
 **Checkpoint**: Master-detail layout works. Queue visible alongside detail.
 
@@ -146,8 +146,8 @@
 
 **Independent Test**: Complete a job, verify it appears in History. Hover card path, verify tooltip.
 
-- [ ] T033 [US8] In lib/ui/screens/home_screen.dart (left panel), add a "History" section below the active queue — show completed/failed jobs from jobDao.watchCompletedJobs() in a collapsed/expandable list
-- [ ] T034 [US8] Update lib/ui/widgets/job_card.dart `_jobSubtitle()` — show only last folder name from source and destination paths. Wrap the subtitle Text in a Tooltip widget showing the full path
+- [X] T033 [US8] In lib/ui/screens/home_screen.dart (left panel), add a "History" section below the active queue — show completed/failed jobs from jobDao.watchCompletedJobs() in a collapsed/expandable list
+- [X] T034 [US8] Update lib/ui/widgets/job_card.dart `_jobSubtitle()` — show only last folder name from source and destination paths. Wrap the subtitle Text in a Tooltip widget showing the full path
 
 **Checkpoint**: History visible, cards readable.
 
@@ -159,9 +159,9 @@
 
 **Independent Test**: Trigger errors, verify friendly messages. Uninstall HandBrake, verify banner.
 
-- [ ] T035 [US9] In lib/ui/screens/job_detail_screen.dart, replace raw `job.errorMessage` display with error_mapper output — show friendly message prominently, raw error in expandable "Technical Details"
-- [ ] T036 [US9] In lib/ui/screens/create_job_screen.dart, on init check `compressionService.isHandbrakeInstalled()` — if not installed, show a prominent banner at top and disable Compress/Both segment buttons
-- [ ] T037 [US9] In lib/services/job_queue_service.dart, detect SD card removal errors specifically (check for path-not-found errors on removable drives) and set a specific error message: "SD card disconnected. Re-insert and retry"
+- [X] T035 [US9] In lib/ui/screens/job_detail_screen.dart, replace raw `job.errorMessage` display with error_mapper output — show friendly message prominently, raw error in expandable "Technical Details"
+- [X] T036 [US9] In lib/ui/screens/create_job_screen.dart, on init check `compressionService.isHandbrakeInstalled()` — if not installed, show a prominent banner at top and disable Compress/Both segment buttons
+- [X] T037 [US9] In lib/services/job_queue_service.dart, detect SD card removal errors specifically (check for path-not-found errors on removable drives) and set a specific error message: "SD card disconnected. Re-insert and retry"
 
 **Checkpoint**: Errors are understandable. Missing tools detected.
 
@@ -173,9 +173,9 @@
 
 **Independent Test**: Resize window below 800x600 — verify blocked. Start queue — verify snackbar.
 
-- [ ] T038 [US10] Minimum window size already handled by T008 — verify it works
-- [ ] T039 [US10] In lib/ui/screens/home_screen.dart `_toggleProcessing()`, add snackbar feedback: "Queue started — processing X jobs" or "Queue stopped"
-- [ ] T040 [US10] In lib/ui/screens/create_job_screen.dart `_createJob()`, wrap entire method body in try-catch, show error snackbar on failure: "Failed to create job — [reason]"
+- [X] T038 [US10] Minimum window size already handled by T008 — verify it works
+- [X] T039 [US10] In lib/ui/screens/home_screen.dart `_toggleProcessing()`, add snackbar feedback: "Queue started — processing X jobs" or "Queue stopped"
+- [X] T040 [US10] In lib/ui/screens/create_job_screen.dart `_createJob()`, wrap entire method body in try-catch, show error snackbar on failure: "Failed to create job — [reason]"
 
 **Checkpoint**: All small fixes in place.
 
@@ -185,8 +185,8 @@
 
 **Purpose**: Final validation
 
-- [ ] T041 Run `flutter analyze` and fix any issues
-- [ ] T042 Run `dart run build_runner build` to regenerate Drift code if needed
+- [X] T041 Run `flutter analyze` and fix any issues
+- [X] T042 Run `dart run build_runner build` to regenerate Drift code if needed
 
 ---
 

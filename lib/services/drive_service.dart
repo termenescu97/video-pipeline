@@ -88,6 +88,49 @@ class DriveService {
     return files;
   }
 
+  /// Get free space in bytes for a given path's drive.
+  Future<int> getDiskFreeSpace(String dirPath) async {
+    if (!Platform.isWindows) return -1;
+
+    final driveLetter = dirPath.substring(0, 1);
+    final result = await Process.run('powershell', [
+      '-NoProfile',
+      '-Command',
+      'Get-PSDrive -Name $driveLetter | Select-Object -ExpandProperty Free',
+    ]);
+
+    if (result.exitCode != 0) return -1;
+    return int.tryParse(result.stdout.toString().trim()) ?? -1;
+  }
+
+  /// Get drive identity info for verification before erase.
+  Future<({String label, int totalBytes})?> getDriveIdentity(
+      String drivePath) async {
+    if (!Platform.isWindows) return null;
+
+    final result = await Process.run('powershell', [
+      '-NoProfile',
+      '-Command',
+      r"Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DeviceID -eq '"
+          "${drivePath.substring(0, 2)}"
+          r"' } | Select-Object VolumeName, Size | ConvertTo-Json -Compress",
+    ]);
+
+    if (result.exitCode != 0) return null;
+    final output = result.stdout.toString().trim();
+    if (output.isEmpty || output == 'null') return null;
+
+    try {
+      final data = jsonDecode(output);
+      return (
+        label: (data['VolumeName'] as String?) ?? 'Unknown',
+        totalBytes: (data['Size'] as num?)?.toInt() ?? 0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Erase all files on a drive. Requires explicit confirmation before calling.
   Future<bool> eraseDrive(String drivePath) async {
     if (!Platform.isWindows) return false;

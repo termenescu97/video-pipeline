@@ -4,7 +4,7 @@ import 'database/daos/settings_dao.dart';
 import 'main.dart';
 import 'services/update_service.dart';
 import 'ui/theme/app_theme.dart';
-import 'ui/screens/home_screen.dart';
+import 'ui/screens/shell_screen.dart';
 
 class VideoPipelineApp extends StatefulWidget {
   const VideoPipelineApp({super.key});
@@ -81,7 +81,7 @@ class _VideoPipelineAppState extends State<VideoPipelineApp> {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.system,
-      home: const HomeScreen(),
+      home: const ShellScreen(),
     );
   }
 }

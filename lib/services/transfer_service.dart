@@ -13,12 +13,18 @@ typedef TransferProgressCallback = void Function(FileProgressEvent event);
 /// Uses /Z flag for resumable transfers.
 class TransferService {
   TransferProgressCallback? onProgress;
+  Process? _currentProcess;
+  DateTime? _fileStartTime;
+  int _fileTotalBytes = 0;
+
+  /// The start time of the current file transfer (for ETA calculation).
+  DateTime? get fileStartTime => _fileStartTime;
+
+  /// Total bytes of the current file being transferred.
+  int get fileTotalBytes => _fileTotalBytes;
 
   /// Transfer a single file from source to destination using robocopy.
   /// Returns true on success, false on failure.
-  ///
-  /// Robocopy works on directories, so we pass the source directory and
-  /// file filter to copy specific files.
   Future<bool> transferFile({
     required String sourceFile,
     required String destinationFile,
@@ -29,20 +35,16 @@ class TransferService {
     final destDir = p.dirname(destinationFile);
     final fileName = p.basename(sourceFile);
 
+    _fileStartTime = DateTime.now();
+    _fileTotalBytes = await File(sourceFile).length();
+
     final process = await Process.start(
       'robocopy',
-      [
-        sourceDir,
-        destDir,
-        fileName,
-        ...robocopyFlags,
-      ],
+      [sourceDir, destDir, fileName, ...robocopyFlags],
     );
+    _currentProcess = process;
 
-    // Stream stdout for progress parsing.
-    process.stdout
-        .transform(const SystemEncoding().decoder)
-        .listen((data) {
+    process.stdout.transform(const SystemEncoding().decoder).listen((data) {
       for (final line in data.split('\n')) {
         final event = RobocopyParser.parseLine(line);
         if (event != null) {
@@ -52,46 +54,17 @@ class TransferService {
     });
 
     final exitCode = await process.exitCode;
+    _currentProcess = null;
+    _fileStartTime = null;
     final result = RobocopyParser.parseExitCode(exitCode);
     return result.success;
   }
 
-  /// Transfer all video files from a source directory to a destination directory.
-  /// Returns the number of successfully transferred files.
-  Future<int> transferDirectory({
-    required String sourceDir,
-    required String destDir,
-  }) async {
-    if (!Platform.isWindows) return 0;
-
-    // Build file filter for video extensions.
-    final fileFilters = videoExtensions.map((ext) => '*$ext').toList();
-
-    final process = await Process.start(
-      'robocopy',
-      [
-        sourceDir,
-        destDir,
-        ...fileFilters,
-        '/S', // Include subdirectories (non-empty).
-        ...robocopyFlags,
-      ],
-    );
-
-    process.stdout
-        .transform(const SystemEncoding().decoder)
-        .listen((data) {
-      for (final line in data.split('\n')) {
-        final event = RobocopyParser.parseLine(line);
-        if (event != null) {
-          onProgress?.call(event);
-        }
-      }
-    });
-
-    final exitCode = await process.exitCode;
-    final result = RobocopyParser.parseExitCode(exitCode);
-    return result.success ? 1 : 0;
+  /// Kill the currently running subprocess.
+  void cancel() {
+    _currentProcess?.kill();
+    _currentProcess = null;
+    _fileStartTime = null;
   }
 
   /// Verify a transferred file by comparing file sizes.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../database/database.dart';
 import '../../database/tables.dart';
@@ -20,7 +21,10 @@ class JobCard extends StatelessWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(_jobSubtitle()),
+            Tooltip(
+              message: _fullPathSubtitle(),
+              child: Text(_jobSubtitle()),
+            ),
             if (job.status == JobStatus.inProgress) ...[
               const SizedBox(height: 8),
               LinearProgressIndicator(
@@ -91,6 +95,12 @@ class JobCard extends StatelessWidget {
   }
 
   String _jobSubtitle() {
+    final src = p.basename(job.sourcePath.replaceAll(RegExp(r'[/\\]$'), ''));
+    final dst = p.basename(job.destinationPath.replaceAll(RegExp(r'[/\\]$'), ''));
+    return '$src → $dst';
+  }
+
+  String _fullPathSubtitle() {
     return '${job.sourcePath} → ${job.destinationPath}';
   }
 }

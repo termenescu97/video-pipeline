@@ -57,9 +57,11 @@ class JobQueueService {
     }
   }
 
-  /// Stop processing after the current job completes.
+  /// Stop processing and kill the running subprocess immediately.
   void stopProcessing() {
     _isProcessing = false;
+    _transferService.cancel();
+    _compressionService.cancel();
   }
 
   Future<void> _processJob(Job job) async {
@@ -228,6 +230,68 @@ class JobQueueService {
       completedFiles: completedCount,
       totalFiles: files.length,
     );
+  }
+
+  /// Create transfer jobs for multiple drives in batch.
+  /// Returns the number of jobs created (skips drives with no video files).
+  Future<({int created, int skipped})> createBatchTransferJobs(
+    List<dynamic> drives,
+    String destination,
+  ) async {
+    var created = 0;
+    var skipped = 0;
+
+    for (final drive in drives) {
+      final drivePath = drive.path as String;
+      final files = await Directory(drivePath)
+          .list(recursive: true)
+          .where((e) => e is File)
+          .where((e) {
+            final ext = p.extension(e.path).toLowerCase();
+            return ['.mov', '.mp4'].contains(ext);
+          })
+          .toList();
+
+      if (files.isEmpty) {
+        skipped++;
+        continue;
+      }
+
+      final newJobId = await _jobDao.insertJob(
+        JobsCompanion.insert(
+          type: JobType.transfer,
+          status: JobStatus.queued,
+          sourcePath: drivePath,
+          destinationPath: destination,
+          createdAt: DateTime.now(),
+        ),
+      );
+
+      var totalBytes = 0;
+      final fileEntries = <JobFilesCompanion>[];
+      for (final entity in files) {
+        final file = File(entity.path);
+        final size = await file.length();
+        final fileName = p.basename(entity.path);
+        totalBytes += size;
+        fileEntries.add(
+          JobFilesCompanion.insert(
+            jobId: newJobId,
+            sourceFilePath: entity.path,
+            destinationFilePath: p.join(destination, fileName),
+            fileName: fileName,
+            fileSize: size,
+            status: FileStatus.pending,
+          ),
+        );
+      }
+
+      await _jobFileDao.insertFiles(fileEntries);
+      await _jobDao.updateJobTotals(newJobId, fileEntries.length, totalBytes);
+      created++;
+    }
+
+    return (created: created, skipped: skipped);
   }
 
   /// Create a chained compression job after a successful transfer.

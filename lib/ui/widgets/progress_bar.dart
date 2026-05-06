@@ -1,12 +1,18 @@
 import 'package:flutter/material.dart';
 
-/// A progress bar widget with label and percentage display.
+import '../../utils/format_utils.dart';
+
+/// A progress bar widget with label, percentage, ETA, speed, and current file.
 class PipelineProgressBar extends StatelessWidget {
   final double progress;
   final String label;
   final String? currentFileName;
   final int completedFiles;
   final int totalFiles;
+  final Duration? elapsed;
+  final Duration? eta;
+  final double? speedBytesPerSec;
+  final double? fps;
 
   const PipelineProgressBar({
     super.key,
@@ -15,6 +21,10 @@ class PipelineProgressBar extends StatelessWidget {
     this.currentFileName,
     this.completedFiles = 0,
     this.totalFiles = 0,
+    this.elapsed,
+    this.eta,
+    this.speedBytesPerSec,
+    this.fps,
   });
 
   @override
@@ -39,24 +49,51 @@ class PipelineProgressBar extends StatelessWidget {
           borderRadius: BorderRadius.circular(4),
         ),
         const SizedBox(height: 4),
+        // Current file name.
+        if (currentFileName != null)
+          Text(
+            currentFileName!,
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+            overflow: TextOverflow.ellipsis,
+          ),
+        const SizedBox(height: 2),
+        // Stats row: files, speed, elapsed, ETA.
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            if (currentFileName != null)
-              Expanded(
-                child: Text(
-                  currentFileName!,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
             if (totalFiles > 0)
               Text(
                 '$completedFiles / $totalFiles files',
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
+            if (speedBytesPerSec != null)
+              Text(
+                formatSpeed(speedBytesPerSec!),
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            if (fps != null)
+              Text(
+                '${fps!.toStringAsFixed(1)} fps',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
           ],
         ),
+        if (elapsed != null || eta != null)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              if (elapsed != null)
+                Text(
+                  'Elapsed: ${formatDuration(elapsed!)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              if (eta != null)
+                Text(
+                  'ETA: ${formatDuration(eta!)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+            ],
+          ),
       ],
     );
   }

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
+import '../../utils/error_mapper.dart';
+import '../../utils/format_utils.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/progress_bar.dart';
 
@@ -18,15 +20,8 @@ class JobDetailScreen extends StatefulWidget {
 
 class _JobDetailScreenState extends State<JobDetailScreen> {
   @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Job Details')),
-      body: StreamBuilder<Job?>(
+    return StreamBuilder<Job?>(
         stream: jobDao.watchAllJobs().map(
               (jobs) => jobs.where((j) => j.id == widget.jobId).firstOrNull,
             ),
@@ -60,15 +55,39 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                           _infoRow('Preset', job.presetName!),
                         if (job.errorMessage != null) ...[
                           const SizedBox(height: 8),
+                          // Human-friendly error message.
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
                               color: Colors.red.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(4),
                             ),
-                            child: Text(
-                              job.errorMessage!,
-                              style: const TextStyle(color: Colors.red),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  ErrorMapper.getFriendlyMessage(
+                                      job.errorMessage),
+                                  style: const TextStyle(color: Colors.red),
+                                ),
+                                const SizedBox(height: 4),
+                                ExpansionTile(
+                                  title: const Text(
+                                    'Technical Details',
+                                    style: TextStyle(
+                                        fontSize: 12, color: Colors.grey),
+                                  ),
+                                  tilePadding: EdgeInsets.zero,
+                                  childrenPadding: EdgeInsets.zero,
+                                  children: [
+                                    Text(
+                                      job.errorMessage!,
+                                      style: const TextStyle(
+                                          fontSize: 11, color: Colors.grey),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -78,6 +97,19 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                 ),
 
                 const SizedBox(height: 16),
+
+                // Retry button for failed jobs.
+                if (job.status == JobStatus.failed) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => _retryJob(job.id),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry'),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
                 // Progress.
                 if (job.status == JobStatus.inProgress) ...[
@@ -95,31 +127,13 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
                         'Preset: ${job.presetName ?? "default"}',
-                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        style:
+                            const TextStyle(fontSize: 12, color: Colors.grey),
                       ),
                     ),
                 ],
 
                 const SizedBox(height: 24),
-
-                // Erase SD Card button (only after successful transfer).
-                if (job.status == JobStatus.completed &&
-                    job.type != JobType.compression) ...[
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _eraseSourceDrive(job.sourcePath),
-                      icon: const Icon(Icons.delete_forever, color: Colors.red),
-                      label: const Text('Erase SD Card'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red,
-                        side: const BorderSide(color: Colors.red),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
 
                 // File list.
                 Text('Files',
@@ -142,21 +156,58 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                         return ListTile(
                           leading: _fileStatusIcon(file.status),
                           title: Text(file.fileName),
-                          subtitle: Text(
-                            '${(file.fileSize / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB',
-                          ),
+                          subtitle: Text(formatBytes(file.fileSize)),
                           dense: true,
                         );
                       },
                     );
                   },
                 ),
+
+                const SizedBox(height: 24),
+
+                // Erase SD Card button — at the BOTTOM, after file list.
+                if (job.status == JobStatus.completed &&
+                    job.type != JobType.compression) ...[
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  StreamBuilder<List<JobFile>>(
+                    stream: jobFileDao.watchFilesForJob(widget.jobId),
+                    builder: (context, filesSnapshot) {
+                      final files = filesSnapshot.data ?? [];
+                      final allVerified = files.isNotEmpty &&
+                          files.every((f) =>
+                              f.status == FileStatus.completed && f.verified);
+
+                      if (!allVerified) {
+                        return const Text(
+                          'Cannot erase — some files not verified',
+                          style: TextStyle(color: Colors.orange, fontSize: 13),
+                        );
+                      }
+
+                      return SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () =>
+                              _eraseSourceDrive(job.sourcePath),
+                          icon: const Icon(Icons.delete_forever,
+                              color: Colors.red),
+                          label: const Text('Erase SD Card'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: const BorderSide(color: Colors.red),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ],
             ),
           );
         },
-      ),
-    );
+      );
   }
 
   Widget _infoRow(String label, String value) {
@@ -179,24 +230,39 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   Widget _fileStatusIcon(FileStatus status) {
     return switch (status) {
       FileStatus.pending => const Icon(Icons.schedule, color: Colors.grey),
-      FileStatus.inProgress =>
-        const Icon(Icons.sync, color: Colors.blue),
+      FileStatus.inProgress => const Icon(Icons.sync, color: Colors.blue),
       FileStatus.completed =>
         const Icon(Icons.check_circle, color: Colors.green),
       FileStatus.failed => const Icon(Icons.error, color: Colors.red),
-      FileStatus.skipped =>
-        const Icon(Icons.skip_next, color: Colors.orange),
+      FileStatus.skipped => const Icon(Icons.skip_next, color: Colors.orange),
     };
   }
 
+  Future<void> _retryJob(int jobId) async {
+    await jobDao.resetJobForRetry(jobId);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Job re-queued for retry')),
+      );
+    }
+  }
+
   Future<void> _eraseSourceDrive(String drivePath) async {
+    // Verify drive identity before erasing.
+    final identity = await driveService.getDriveIdentity(drivePath);
+    final identityDesc = identity != null
+        ? '${identity.label} (${formatBytes(identity.totalBytes)})'
+        : drivePath;
+
+    if (!mounted) return;
     final confirmed = await ConfirmationDialog.show(
       context: context,
       title: 'Erase SD Card',
       message:
-          'This will permanently delete ALL files on $drivePath.\n\n'
-          'This action cannot be undone. Make sure you have verified '
-          'the transfer was successful before proceeding.',
+          'This will permanently delete ALL files on:\n\n'
+          '$identityDesc\n'
+          'Path: $drivePath\n\n'
+          'This action cannot be undone.',
       confirmLabel: 'Erase',
       cancelLabel: 'Cancel',
       confirmColor: Colors.red,

@@ -9,6 +9,13 @@ typedef CompressionProgressCallback = void Function(HandbrakeProgress progress);
 /// Orchestrates video compression via HandBrakeCLI subprocess.
 class CompressionService {
   CompressionProgressCallback? onProgress;
+  Process? _currentProcess;
+
+  /// Kill the currently running subprocess.
+  void cancel() {
+    _currentProcess?.kill();
+    _currentProcess = null;
+  }
 
   /// Compress a single file using HandBrakeCLI with the given preset.
   /// Returns true on success, false on failure.
@@ -21,12 +28,9 @@ class CompressionService {
 
     final process = await Process.start(
       'HandBrakeCLI.exe',
-      [
-        '-i', inputFile,
-        '-o', outputFile,
-        '--preset', presetName,
-      ],
+      ['-i', inputFile, '-o', outputFile, '--preset', presetName],
     );
+    _currentProcess = process;
 
     // Stream stderr for progress (HandBrakeCLI outputs progress to stderr).
     process.stderr
@@ -53,6 +57,7 @@ class CompressionService {
     });
 
     final exitCode = await process.exitCode;
+    _currentProcess = null;
     return exitCode == 0;
   }
 

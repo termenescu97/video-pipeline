@@ -9,11 +9,15 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../../utils/format_utils.dart';
 import '../widgets/drive_list.dart';
 
 /// Screen for creating a new job with source, destination, and options.
 class CreateJobScreen extends StatefulWidget {
-  const CreateJobScreen({super.key});
+  /// Callback for embedded mode (ShellScreen). If null, uses Navigator.pop.
+  final VoidCallback? onJobCreated;
+
+  const CreateJobScreen({super.key, this.onJobCreated});
 
   @override
   State<CreateJobScreen> createState() => _CreateJobScreenState();
@@ -29,12 +33,15 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   String? _selectedPreset;
   JobType _jobType = JobType.transfer;
   bool _loading = true;
+  int? _destinationFreeSpace;
+  bool _handbrakeInstalled = true;
 
   @override
   void initState() {
     super.initState();
     _refreshDrives();
     _loadPresets();
+    _checkHandbrake();
   }
 
   Future<void> _refreshDrives() async {
@@ -51,15 +58,54 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     setState(() => _presets = presets);
   }
 
+  Future<void> _checkHandbrake() async {
+    final installed = await compressionService.isHandbrakeInstalled();
+    setState(() => _handbrakeInstalled = installed);
+  }
+
+  Future<void> _updateFreeSpace(String path) async {
+    final free = await driveService.getDiskFreeSpace(path);
+    setState(() => _destinationFreeSpace = free > 0 ? free : null);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Create Job')),
+      appBar: widget.onJobCreated == null
+          ? AppBar(title: const Text('Create Job'))
+          : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // HandBrake not installed banner.
+            if (!_handbrakeInstalled) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: Colors.orange),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Compression requires HandBrake. '
+                        'Download it at handbrake.fr. '
+                        'Compression options are disabled.',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
             // Job type selector.
             Text('Job Type', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
@@ -144,8 +190,17 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   : FavoritePathType.destination,
               onPathSelected: (path) {
                 setState(() => _destinationPath = path);
+                _updateFreeSpace(path);
               },
             ),
+            if (_destinationFreeSpace != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${formatBytes(_destinationFreeSpace!)} free',
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ),
 
             const SizedBox(height: 24),
 
@@ -332,6 +387,21 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   }
 
   Future<void> _createJob() async {
+    try {
+      await _createJobInner();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to create job — $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _createJobInner() async {
     final sourcePath = _jobType == JobType.compression
         ? _sourcePath!
         : _selectedDrive!.path;
@@ -348,6 +418,39 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         );
       }
       return;
+    }
+
+    // Check disk space before creating.
+    var totalSourceBytes = 0;
+    for (final entity in videoFiles) {
+      totalSourceBytes += await File(entity.path).length();
+    }
+    if (_destinationFreeSpace != null &&
+        totalSourceBytes > _destinationFreeSpace!) {
+      if (mounted) {
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Insufficient Disk Space'),
+            content: Text(
+              'Source files (${formatBytes(totalSourceBytes)}) exceed '
+              'available space (${formatBytes(_destinationFreeSpace!)}).\n\n'
+              'Proceed anyway?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Proceed Anyway'),
+              ),
+            ],
+          ),
+        );
+        if (proceed != true) return;
+      }
     }
 
     final newJobId = await jobDao.insertJob(
@@ -389,6 +492,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     await jobFileDao.insertFiles(fileEntries);
     await jobDao.updateJobTotals(newJobId, fileEntries.length, totalBytes);
 
-    if (mounted) Navigator.pop(context, true);
+    if (mounted) {
+      if (widget.onJobCreated != null) {
+        widget.onJobCreated!();
+      } else {
+        Navigator.pop(context, true);
+      }
+    }
   }
 }
