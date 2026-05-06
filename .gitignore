@@ -4,6 +4,20 @@
 *.pyc
 *.swp
 .DS_Store
+.localized
+
+# Apple Music library (this project lives in ~/Music)
+Music/
+
+# Loose files at root (not part of the project)
+/icon-face.png
+/icon_good
+/video-pipeline-icon.ico
+/video-workflow-automation.md
+/ANAF_SPV_API_Documentation.md
+/INTEGRATION_SKILLS_ARCHITECTURE.md
+/Romanian_Bank_APIs_Documentation.md
+/SLACK_MESSAGE_DRAFT.md
 .atom/
 .build/
 .buildlog/
