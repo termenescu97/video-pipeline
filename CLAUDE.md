@@ -50,16 +50,17 @@ lib/
 ├── main.dart                    # Entry point, singleton services
 ├── app.dart                     # MaterialApp, update check on launch
 ├── database/
-│   ├── database.dart            # Drift database class (schema v2)
+│   ├── database.dart            # Drift database class (schema v4)
 │   ├── tables.dart              # Job, JobFile, FavoritePath, AppSettings
 │   ├── extensions.dart          # Extension methods on JobType, JobStatus, FileStatus
 │   └── daos/                    # Data access objects (JobDao, JobFileDao, etc.)
 ├── services/
-│   ├── job_queue_service.dart   # Queue processing, auto-chain, batch creation
+│   ├── job_queue_service.dart   # Queue processing, auto-chain, batch creation, progress notifier
 │   ├── transfer_service.dart    # Robocopy subprocess via ProcessRunner
 │   ├── compression_service.dart # HandBrakeCLI subprocess via ProcessRunner
-│   ├── slack_service.dart       # Webhook notifications
+│   ├── slack_service.dart       # Webhook notifications (with operator name)
 │   ├── drive_service.dart       # SD card detection, disk space, erase
+│   ├── log_service.dart         # Persistent file logger (copiatorul3000.log)
 │   └── update_service.dart      # GitHub Releases API check
 ├── ui/
 │   ├── screens/
@@ -67,21 +68,22 @@ lib/
 │   │   ├── home_screen.dart     # Left panel: job queue, batch copy, start/stop, history
 │   │   ├── create_job_screen.dart # Right panel: job creation form
 │   │   ├── job_detail_screen.dart # Right panel: job progress, retry, erase
-│   │   └── settings_screen.dart   # Slack webhook, update toggle
+│   │   └── settings_screen.dart   # Slack webhook, operator name, update toggle
 │   ├── widgets/                 # JobCard, DriveList, ProgressBar, ConfirmationDialog
 │   └── theme/app_theme.dart     # StatusColors theme extension
 └── utils/
     ├── constants.dart           # Video extensions, robocopy flags, regex patterns
-    ├── format_utils.dart        # formatBytes, formatDuration, formatSpeed
+    ├── format_utils.dart        # formatBytes, formatDuration, formatSpeed, formatRelativeTime
     ├── error_mapper.dart        # Raw errors → human-friendly messages
     ├── process_runner.dart      # Shared subprocess stdout/stderr streaming
     ├── robocopy_parser.dart     # Parse robocopy output and exit codes
-    └── handbrake_parser.dart    # Parse HandBrakeCLI progress output
+    ├── handbrake_parser.dart    # Parse HandBrakeCLI progress output
+    └── instance_lock.dart       # PID-based single-instance lock
 ```
 
 ## Current State (as of 2026-05-06)
 
-### Completed Features (6 spec-kit features)
+### Completed Features (9 spec-kit features)
 
 | Feature | Branch | Tasks | Status |
 |---------|--------|-------|--------|
@@ -95,7 +97,7 @@ lib/
 | 009 - Product Gaps | `009-product-gaps` | 21/21 | ✅ Complete |
 | 010 - Medium Fixes | `010-medium-fixes` | 21/21 | ✅ Complete |
 
-**Latest release**: v2.0.0 (tagged, built via GitHub Actions)
+**Latest release**: v2.1.0 (tagged, built via GitHub Actions)
 **Total tasks implemented**: 208
 
 ### What Works
@@ -119,7 +121,17 @@ lib/
 - Auto-update check from GitHub Releases (prompted, never silent)
 - Native folder picker (file_picker)
 - Favorites system for frequently used paths
+- Last-used destination auto-fill across sessions
 - Debounced settings save
+- Operator name tracking (in settings, jobs, Slack messages)
+- CSV history export via file save dialog
+- Relative timestamps on history cards
+- Real-time progress bar with speed (MB/s), ETA, current filename
+- Persistent local log file (copiatorul3000.log next to executable)
+- Single-instance lock (PID-based, prevents database corruption)
+- Slack webhook unconfigured banner on home screen
+- First-run welcome/onboarding state
+- Path length warning for Windows 260-char limit
 
 ### Known Issues (from review-report-v2.md)
 
@@ -179,8 +191,8 @@ dart run build_runner build
 flutter analyze
 
 # Release (triggers GitHub Actions Windows build)
-git tag v2.1.0
-git push origin v2.1.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 # → GitHub Actions builds .exe → creates Release with zip
 # → App checks GitHub Releases on launch and prompts to update
 ```
