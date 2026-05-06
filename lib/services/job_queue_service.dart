@@ -9,6 +9,7 @@ import '../database/daos/job_dao.dart';
 import '../database/daos/job_file_dao.dart';
 import '../database/tables.dart';
 import '../utils/constants.dart';
+import 'drive_service.dart';
 import 'slack_service.dart';
 import 'transfer_service.dart';
 import 'compression_service.dart';
@@ -133,15 +134,15 @@ class JobQueueService {
           sourceFile: file.sourceFilePath,
           destinationFile: file.destinationFilePath,
         );
-        await _jobFileDao.markFileCompleted(file.id, verified: verified);
-        if (!verified) {
+        if (verified) {
+          await _jobFileDao.markFileCompleted(file.id, verified: true);
+          completedCount++;
+        } else {
           await _jobFileDao.markFileFailed(
             file.id,
             'Verification failed: size mismatch',
           );
           failedCount++;
-        } else {
-          completedCount++;
         }
         await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
       } else {
@@ -236,14 +237,14 @@ class JobQueueService {
   /// Create transfer jobs for multiple drives in batch.
   /// Returns the number of jobs created (skips drives with no video files).
   Future<({int created, int skipped})> createBatchTransferJobs(
-    List<dynamic> drives,
+    List<DetectedDrive> drives,
     String destination,
   ) async {
     var created = 0;
     var skipped = 0;
 
     for (final drive in drives) {
-      final drivePath = drive.path as String;
+      final drivePath = drive.path;
       final files = await Directory(drivePath)
           .list(recursive: true)
           .where((e) => e is File)
@@ -273,13 +274,14 @@ class JobQueueService {
       for (final entity in files) {
         final file = File(entity.path);
         final size = await file.length();
+        final relativePath = p.relative(entity.path, from: drivePath);
         final fileName = p.basename(entity.path);
         totalBytes += size;
         fileEntries.add(
           JobFilesCompanion.insert(
             jobId: newJobId,
             sourceFilePath: entity.path,
-            destinationFilePath: p.join(destination, fileName),
+            destinationFilePath: p.join(destination, relativePath),
             fileName: fileName,
             fileSize: size,
             status: FileStatus.pending,

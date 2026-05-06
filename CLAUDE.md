@@ -81,7 +81,7 @@ lib/
 
 ## Current State (as of 2026-05-06)
 
-### Completed Features (5 spec-kit features)
+### Completed Features (6 spec-kit features)
 
 | Feature | Branch | Tasks | Status |
 |---------|--------|-------|--------|
@@ -90,9 +90,10 @@ lib/
 | 003 - Critical Bug Fixes | `003-fix-critical-bugs` | 23/23 | ✅ Complete |
 | 004 - Core UX Improvements | `004-core-ux-improvements` | 42/42 | ✅ Complete |
 | 005 - Polish & Code Quality | `005-polish-code-quality` | 29/29 | ✅ Complete |
+| 007 - Critical Bug Fixes (v2) | `007-critical-bug-fixes` | 10/10 | ✅ Complete |
 
 **Latest release**: v2.0.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 142
+**Total tasks implemented**: 152
 
 ### What Works
 
@@ -119,13 +120,13 @@ lib/
 
 ### Known Issues (from review-report-v2.md)
 
-**Critical (must fix before production use)**:
-1. Duplicate filenames from recursive listing overwrite at destination
-2. File marked completed then overwritten as failed (verify race)
-3. ProcessRunner streams not awaited before exitCode
-4. `exit(0)` in system tray kills without cleanup
-5. `DropdownButtonFormField.initialValue` compile error (should be `value`)
-6. `createBatchTransferJobs` parameter is `List<dynamic>` (should be `List<DetectedDrive>`)
+**Critical (fixed in 007-critical-bug-fixes)**:
+1. ~~Duplicate filenames from recursive listing overwrite at destination~~ — fixed: preserves full relative path from drive root
+2. ~~File marked completed then overwritten as failed (verify race)~~ — fixed: single status write per file
+3. ~~ProcessRunner streams not awaited before exitCode~~ — fixed: `Stream.forEach()` + `Future.wait()`
+4. ~~`exit(0)` in system tray kills without cleanup~~ — fixed: graceful shutdown sequence
+5. ~~`DropdownButtonFormField.initialValue` compile error~~ — false positive: `initialValue` is correct in Flutter 3.41.9
+6. ~~`createBatchTransferJobs` parameter is `List<dynamic>`~~ — fixed: typed as `List<DetectedDrive>`
 
 **High (should fix)**:
 - Progress bar ETA/speed/filename never wired from services to UI
@@ -171,5 +172,5 @@ git push origin v2.1.0
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/005-polish-code-quality/plan.md
+specs/007-critical-bug-fixes/plan.md
 <!-- SPECKIT END -->

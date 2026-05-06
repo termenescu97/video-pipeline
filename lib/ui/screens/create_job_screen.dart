@@ -485,13 +485,14 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     for (final entity in videoFiles) {
       final file = File(entity.path);
       final size = await file.length();
+      final relativePath = p.relative(entity.path, from: sourcePath);
       final fileName = p.basename(entity.path);
       totalBytes += size;
       fileEntries.add(
         JobFilesCompanion.insert(
           jobId: newJobId,
           sourceFilePath: entity.path,
-          destinationFilePath: p.join(destPath, fileName),
+          destinationFilePath: p.join(destPath, relativePath),
           fileName: fileName,
           fileSize: size,
           status: FileStatus.pending,

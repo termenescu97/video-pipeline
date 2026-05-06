@@ -61,8 +61,14 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
       // Bring window to front — handled by window_manager if needed.
     }
     if (menuItem.key == 'quit') {
-      exit(0);
+      _gracefulShutdown();
     }
+  }
+
+  Future<void> _gracefulShutdown() async {
+    jobQueueService.stopProcessing();
+    await database.close();
+    exit(0);
   }
 
   @override

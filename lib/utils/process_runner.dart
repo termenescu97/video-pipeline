@@ -14,22 +14,23 @@ class ProcessRunner {
     _process = await Process.start(executable, arguments);
     final process = _process!;
 
-    if (onStdoutLine != null) {
-      process.stdout.transform(const SystemEncoding().decoder).listen((data) {
-        for (final line in data.split('\n')) {
-          if (line.trim().isNotEmpty) onStdoutLine(line);
-        }
-      });
-    }
+    final stdoutDone = onStdoutLine != null
+        ? process.stdout.transform(const SystemEncoding().decoder).forEach((data) {
+            for (final line in data.split('\n')) {
+              if (line.trim().isNotEmpty) onStdoutLine(line);
+            }
+          })
+        : Future<void>.value();
 
-    if (onStderrLine != null) {
-      process.stderr.transform(const SystemEncoding().decoder).listen((data) {
-        for (final line in data.split('\n')) {
-          if (line.trim().isNotEmpty) onStderrLine(line);
-        }
-      });
-    }
+    final stderrDone = onStderrLine != null
+        ? process.stderr.transform(const SystemEncoding().decoder).forEach((data) {
+            for (final line in data.split('\n')) {
+              if (line.trim().isNotEmpty) onStderrLine(line);
+            }
+          })
+        : Future<void>.value();
 
+    await Future.wait([stdoutDone, stderrDone]);
     final exitCode = await process.exitCode;
     _process = null;
     return exitCode;
