@@ -94,9 +94,10 @@ lib/
 | 008 - High-Priority QA Fixes | `008-high-priority-qa-fixes` | 14/14 | ✅ Complete |
 | 009 - Product Gaps | `009-product-gaps` | 21/21 | ✅ Complete |
 | 010 - Medium Fixes | `010-medium-fixes` | 21/21 | ✅ Complete |
+| 011 - SHA-256 Verification | `011-sha256-verification` | 19/19 | ✅ Complete |
 
-**Latest release**: v2.0.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 208
+**Latest release**: v2.1.0 (tagged, built via GitHub Actions)
+**Total tasks implemented**: 227
 
 ### What Works
 
@@ -120,6 +121,8 @@ lib/
 - Native folder picker (file_picker)
 - Favorites system for frequently used paths
 - Debounced settings save
+- Optional SHA-256 hash verification per job (toggle in creation form + batch copy)
+- Hash audit trail — source and destination hashes stored per file, viewable in UI
 
 ### Known Issues (from review-report-v2.md)
 
@@ -166,7 +169,7 @@ Full report: `specs/006-review-findings/review-report-v2.md`
 
 ### v3.0 Roadmap (from PM review)
 
-**Tier 1**: NAS upload automation, auto-detect SD cards, dashboard stats, SHA-256 verification
+**Tier 1**: NAS upload automation, auto-detect SD cards, dashboard stats, ~~SHA-256 verification~~ (done in 011)
 **Tier 2**: Job templates, scheduled jobs, multi-machine sync, selective file copy
 **Tier 3**: Cloud backup, metadata extraction, team activity feed
 
@@ -195,5 +198,5 @@ git push origin v2.1.0
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/010-medium-fixes/plan.md
+specs/011-sha256-verification/plan.md
 <!-- SPECKIT END -->

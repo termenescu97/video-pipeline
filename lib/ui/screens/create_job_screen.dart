@@ -32,6 +32,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   String? _compressionOutputPath;
   String? _selectedPreset;
   JobType _jobType = JobType.transfer;
+  VerificationMode _verificationMode = VerificationMode.size;
   bool _loading = true;
   int? _destinationFreeSpace;
   bool _handbrakeInstalled = true;
@@ -267,6 +268,40 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   padding: EdgeInsets.only(top: 4),
                   child: Text(
                     'No presets found. Check HandBrake installation.',
+                    style: TextStyle(color: Colors.orange, fontSize: 12),
+                  ),
+                ),
+              const SizedBox(height: 24),
+            ],
+
+            // Verification mode (for transfer jobs).
+            if (_jobType != JobType.compression) ...[
+              Text('Verification',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              SegmentedButton<VerificationMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: VerificationMode.size,
+                    label: Text('Quick (size)'),
+                    icon: Icon(Icons.speed),
+                  ),
+                  ButtonSegment(
+                    value: VerificationMode.sha256,
+                    label: Text('Full (SHA-256)'),
+                    icon: Icon(Icons.verified_user),
+                  ),
+                ],
+                selected: {_verificationMode},
+                onSelectionChanged: (selection) {
+                  setState(() => _verificationMode = selection.first);
+                },
+              ),
+              if (_verificationMode == VerificationMode.sha256)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    'SHA-256 hashing adds ~8 min per 50 GB file',
                     style: TextStyle(color: Colors.orange, fontSize: 12),
                   ),
                 ),
@@ -569,6 +604,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         presetName: Value(_selectedPreset),
         autoChain: Value(_jobType == JobType.transferAndCompress),
         operatorName: Value(operatorName != null && operatorName.isNotEmpty ? operatorName : null),
+        verificationMode: Value(_jobType != JobType.compression ? _verificationMode : VerificationMode.size),
         createdAt: DateTime.now(),
       ),
     );

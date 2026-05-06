@@ -393,12 +393,66 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Ask for verification mode.
+    var verificationMode = VerificationMode.size;
+    if (mounted) {
+      final selected = await showDialog<VerificationMode>(
+        context: context,
+        builder: (context) {
+          var mode = VerificationMode.size;
+          return StatefulBuilder(
+            builder: (context, setDialogState) => AlertDialog(
+              title: const Text('Copy All Cards'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Verification mode:'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<VerificationMode>(
+                    segments: const [
+                      ButtonSegment(
+                        value: VerificationMode.size,
+                        label: Text('Quick'),
+                        icon: Icon(Icons.speed),
+                      ),
+                      ButtonSegment(
+                        value: VerificationMode.sha256,
+                        label: Text('SHA-256'),
+                        icon: Icon(Icons.verified_user),
+                      ),
+                    ],
+                    selected: {mode},
+                    onSelectionChanged: (s) =>
+                        setDialogState(() => mode = s.first),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, mode),
+                  child: const Text('Continue'),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+      if (selected == null) return;
+      verificationMode = selected;
+    }
+
     final destination = await FilePicker.platform.getDirectoryPath();
     if (destination == null) return;
 
     final result = await jobQueueService.createBatchTransferJobs(
       drives,
       destination,
+      verificationMode: verificationMode,
     );
 
     if (result.created > 0) {

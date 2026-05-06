@@ -76,6 +76,16 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     );
   }
 
+  /// Store SHA-256 hashes on a file record.
+  Future<void> updateFileHashes(int fileId, {String? sourceHash, String? destinationHash}) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      JobFilesCompanion(
+        sourceHash: Value(sourceHash),
+        destinationHash: Value(destinationHash),
+      ),
+    );
+  }
+
   /// Count completed files for a job.
   Future<int> countCompletedFiles(int jobId) async {
     final count = jobFiles.id.count();

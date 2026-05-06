@@ -12,6 +12,9 @@ enum FileStatus { pending, inProgress, completed, failed, skipped }
 /// Favorite path type — what this path is typically used for.
 enum FavoritePathType { source, destination, output }
 
+/// Verification mode for file transfers.
+enum VerificationMode { size, sha256 }
+
 /// Central unit of work in the queue.
 class Jobs extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -32,6 +35,8 @@ class Jobs extends Table {
   IntColumn get totalBytes => integer().withDefault(const Constant(0))();
   IntColumn get completedBytes => integer().withDefault(const Constant(0))();
   TextColumn get operatorName => text().nullable()();
+  TextColumn get verificationMode =>
+      textEnum<VerificationMode>().withDefault(Constant(VerificationMode.size.name))();
 }
 
 /// Tracks individual file status within a job.
@@ -47,6 +52,8 @@ class JobFiles extends Table {
   TextColumn get errorMessage => text().nullable()();
   DateTimeColumn get startedAt => dateTime().nullable()();
   DateTimeColumn get completedAt => dateTime().nullable()();
+  TextColumn get sourceHash => text().nullable()();
+  TextColumn get destinationHash => text().nullable()();
 }
 
 /// User-saved folder paths for quick reuse.

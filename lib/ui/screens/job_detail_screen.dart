@@ -165,6 +165,46 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       itemCount: files.length,
                       itemBuilder: (context, index) {
                         final file = files[index];
+                        final hasHash = file.sourceHash != null;
+                        if (hasHash) {
+                          return ExpansionTile(
+                            leading: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _fileStatusIcon(file.status),
+                                const SizedBox(width: 4),
+                                const Icon(Icons.verified_user,
+                                    size: 16, color: Colors.blue),
+                              ],
+                            ),
+                            title: Text(file.fileName),
+                            subtitle: Text(formatBytes(file.fileSize)),
+                            dense: true,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Source SHA-256:',
+                                        style: TextStyle(
+                                            fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text(file.sourceHash ?? '—',
+                                        style: const TextStyle(
+                                            fontSize: 10, fontFamily: 'monospace')),
+                                    const SizedBox(height: 4),
+                                    const Text('Destination SHA-256:',
+                                        style: TextStyle(
+                                            fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text(file.destinationHash ?? '—',
+                                        style: const TextStyle(
+                                            fontSize: 10, fontFamily: 'monospace')),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        }
                         return ListTile(
                           leading: _fileStatusIcon(file.status),
                           title: Text(file.fileName),
