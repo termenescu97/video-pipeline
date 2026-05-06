@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../database/daos/settings_dao.dart';
 import '../../main.dart';
-import '../../services/slack_service.dart';
 
 /// App settings screen — Slack webhook URL, update preferences.
 class SettingsScreen extends StatefulWidget {
@@ -13,8 +11,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final SettingsDao _settingsDao;
-  late final SlackService _slackService;
   final _webhookController = TextEditingController();
   bool _testingWebhook = false;
   bool _checkUpdates = true;
@@ -22,13 +18,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _settingsDao = SettingsDao(database);
-    _slackService = SlackService(settingsDao: _settingsDao);
     _loadSettings();
   }
 
   Future<void> _loadSettings() async {
-    final settings = await _settingsDao.getSettings();
+    final settings = await settingsDao.getSettings();
     _webhookController.text = settings.slackWebhookUrl;
     setState(() => _checkUpdates = settings.checkUpdatesOnLaunch);
   }
@@ -59,7 +53,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 border: OutlineInputBorder(),
               ),
               onChanged: (value) {
-                _settingsDao.setSlackWebhookUrl(value);
+                settingsDao.setSlackWebhookUrl(value);
               },
             ),
             const SizedBox(height: 8),
@@ -83,7 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: _checkUpdates,
               onChanged: (value) {
                 setState(() => _checkUpdates = value);
-                _settingsDao.setCheckUpdatesOnLaunch(value);
+                settingsDao.setCheckUpdatesOnLaunch(value);
               },
             ),
           ],
@@ -94,7 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _testWebhook() async {
     setState(() => _testingWebhook = true);
-    final success = await _slackService.sendTestNotification();
+    final success = await slackService.sendTestNotification();
     setState(() => _testingWebhook = false);
 
     if (mounted) {

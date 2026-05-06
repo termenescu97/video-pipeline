@@ -20,10 +20,14 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.status.equalsValue(status))).watch();
   }
 
-  /// Get the next queued job (first in queue).
+  /// Get the next queued or paused job (first in queue).
   Future<Job?> getNextQueuedJob() {
     return (select(jobs)
-          ..where((t) => t.status.equalsValue(JobStatus.queued))
+          ..where(
+            (t) =>
+                t.status.equalsValue(JobStatus.queued) |
+                t.status.equalsValue(JobStatus.paused),
+          )
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)])
           ..limit(1))
         .getSingleOrNull();
@@ -83,6 +87,16 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         status: const Value(JobStatus.failed),
         errorMessage: Value(error),
         completedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  /// Update job totals after file enumeration.
+  Future<void> updateJobTotals(int jobId, int totalFiles, int totalBytes) {
+    return (update(jobs)..where((t) => t.id.equals(jobId))).write(
+      JobsCompanion(
+        totalFiles: Value(totalFiles),
+        totalBytes: Value(totalBytes),
       ),
     );
   }

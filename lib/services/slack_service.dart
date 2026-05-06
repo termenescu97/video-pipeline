@@ -52,6 +52,7 @@ class SlackService {
   Future<void> notifyTransferCompleted({
     required Job job,
     required int completedFiles,
+    bool allVerified = true,
   }) async {
     final totalGb = (job.totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
     final duration = job.startedAt != null
@@ -63,7 +64,7 @@ class SlackService {
       'Files: $completedFiles/${job.totalFiles}\n'
       'Size: $totalGb GB\n'
       'Duration: $duration min\n'
-      'Verification: Passed',
+      'Verification: ${allVerified ? "Passed" : "FAILED — some files did not match"}',
     );
   }
 

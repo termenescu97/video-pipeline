@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+
+import '../utils/constants.dart';
+
 /// Represents a detected removable storage device.
 class DetectedDrive {
   final String path;
@@ -75,8 +79,8 @@ class DriveService {
     final files = <FileSystemEntity>[];
     await for (final entity in dir.list(recursive: true)) {
       if (entity is File) {
-        final ext = entity.path.split('.').last.toLowerCase();
-        if (ext == 'mov' || ext == 'mp4') {
+        final ext = p.extension(entity.path).toLowerCase();
+        if (videoExtensions.contains(ext)) {
           files.add(entity);
         }
       }

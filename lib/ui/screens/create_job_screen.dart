@@ -1,13 +1,13 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart' hide Column;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../database/database.dart';
-import '../../database/daos/favorite_path_dao.dart';
-import '../../database/daos/job_dao.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
-import '../../services/compression_service.dart';
 import '../../services/drive_service.dart';
 import '../widgets/drive_list.dart';
 
@@ -20,11 +20,6 @@ class CreateJobScreen extends StatefulWidget {
 }
 
 class _CreateJobScreenState extends State<CreateJobScreen> {
-  final _driveService = DriveService();
-  final _compressionService = CompressionService();
-  late final JobDao _jobDao;
-  late final FavoritePathDao _favoritePathDao;
-
   List<DetectedDrive> _drives = [];
   List<String> _presets = [];
   DetectedDrive? _selectedDrive;
@@ -38,15 +33,13 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   @override
   void initState() {
     super.initState();
-    _jobDao = JobDao(database);
-    _favoritePathDao = FavoritePathDao(database);
     _refreshDrives();
     _loadPresets();
   }
 
   Future<void> _refreshDrives() async {
     setState(() => _loading = true);
-    final drives = await _driveService.getRemovableDrives();
+    final drives = await driveService.getRemovableDrives();
     setState(() {
       _drives = drives;
       _loading = false;
@@ -54,7 +47,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   }
 
   Future<void> _loadPresets() async {
-    final presets = await _compressionService.getAvailablePresets();
+    final presets = await compressionService.getAvailablePresets();
     setState(() => _presets = presets);
   }
 
@@ -258,7 +251,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         const SizedBox(height: 8),
         // Favorites dropdown.
         StreamBuilder<List<FavoritePath>>(
-          stream: _favoritePathDao.watchFavoritesByType(favoriteType),
+          stream: favoritePathDao.watchFavoritesByType(favoriteType),
           builder: (context, snapshot) {
             final favorites = snapshot.data ?? [];
             if (favorites.isEmpty) return const SizedBox.shrink();
@@ -271,7 +264,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   label: Text(fav.label),
                   onPressed: () {
                     onPathSelected(fav.path);
-                    _favoritePathDao.markUsed(fav.id);
+                    favoritePathDao.markUsed(fav.id);
                   },
                 );
               }).toList(),
@@ -313,7 +306,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     );
 
     if (label != null && label.isNotEmpty) {
-      await _favoritePathDao.insertFavorite(
+      await favoritePathDao.insertFavorite(
         FavoritePathsCompanion.insert(
           path: path,
           label: label,
@@ -343,7 +336,21 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         ? _sourcePath!
         : _selectedDrive!.path;
 
-    await _jobDao.insertJob(
+    // Enumerate video files from source.
+    final videoFiles = await driveService.listVideoFiles(sourcePath);
+    if (videoFiles.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No video files (.MOV, .MP4) found in the source'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final newJobId = await jobDao.insertJob(
       JobsCompanion.insert(
         type: _jobType,
         status: JobStatus.queued,
@@ -355,6 +362,32 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         createdAt: DateTime.now(),
       ),
     );
+
+    // Build file entries with proper paths.
+    final destPath = _jobType == JobType.compression
+        ? _destinationPath! // For compression, destination is the output folder.
+        : _destinationPath!;
+    var totalBytes = 0;
+    final fileEntries = <JobFilesCompanion>[];
+    for (final entity in videoFiles) {
+      final file = File(entity.path);
+      final size = await file.length();
+      final fileName = p.basename(entity.path);
+      totalBytes += size;
+      fileEntries.add(
+        JobFilesCompanion.insert(
+          jobId: newJobId,
+          sourceFilePath: entity.path,
+          destinationFilePath: p.join(destPath, fileName),
+          fileName: fileName,
+          fileSize: size,
+          status: FileStatus.pending,
+        ),
+      );
+    }
+
+    await jobFileDao.insertFiles(fileEntries);
+    await jobDao.updateJobTotals(newJobId, fileEntries.length, totalBytes);
 
     if (mounted) Navigator.pop(context, true);
   }

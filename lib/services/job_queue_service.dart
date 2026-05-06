@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
+import 'package:path/path.dart' as p;
 
 import '../database/database.dart';
 import '../database/daos/job_dao.dart';
@@ -107,6 +108,7 @@ class JobQueueService {
 
     final files = await _jobFileDao.getFilesForJob(job.id);
     var completedCount = 0;
+    var failedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
@@ -123,11 +125,25 @@ class JobQueueService {
       );
 
       if (success) {
-        await _jobFileDao.markFileCompleted(file.id, verified: true);
-        completedCount++;
+        // Verify transfer by comparing file sizes.
+        final verified = await _transferService.verifyTransfer(
+          sourceFile: file.sourceFilePath,
+          destinationFile: file.destinationFilePath,
+        );
+        await _jobFileDao.markFileCompleted(file.id, verified: verified);
+        if (!verified) {
+          await _jobFileDao.markFileFailed(
+            file.id,
+            'Verification failed: size mismatch',
+          );
+          failedCount++;
+        } else {
+          completedCount++;
+        }
         await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
       } else {
         await _jobFileDao.markFileFailed(file.id, 'Transfer failed');
+        failedCount++;
         await _jobDao.markJobFailed(job.id, 'File transfer failed: ${file.fileName}');
         await _slackService.notifyTransferFailed(
           job: job,
@@ -139,10 +155,25 @@ class JobQueueService {
       }
     }
 
-    await _jobDao.markJobCompleted(job.id);
+    // Check if interrupted by stop.
+    if (!_isProcessing) {
+      await _jobDao.updateJobStatus(job.id, JobStatus.paused);
+      return;
+    }
+
+    final allVerified = failedCount == 0;
+    if (failedCount > 0) {
+      await _jobDao.markJobFailed(
+        job.id,
+        '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed verification',
+      );
+    } else {
+      await _jobDao.markJobCompleted(job.id);
+    }
     await _slackService.notifyTransferCompleted(
       job: job,
       completedFiles: completedCount,
+      allVerified: allVerified,
     );
   }
 
@@ -151,6 +182,7 @@ class JobQueueService {
 
     final files = await _jobFileDao.getFilesForJob(job.id);
     var completedCount = 0;
+    var failedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
@@ -172,12 +204,25 @@ class JobQueueService {
         completedCount++;
         await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
       } else {
-        // Skip failed file, continue with next.
         await _jobFileDao.markFileFailed(file.id, 'Compression failed');
+        failedCount++;
       }
     }
 
-    await _jobDao.markJobCompleted(job.id);
+    // Check if interrupted by stop.
+    if (!_isProcessing) {
+      await _jobDao.updateJobStatus(job.id, JobStatus.paused);
+      return;
+    }
+
+    if (failedCount > 0) {
+      await _jobDao.markJobFailed(
+        job.id,
+        '$completedCount/${files.length} files compressed, $failedCount failed',
+      );
+    } else {
+      await _jobDao.markJobCompleted(job.id);
+    }
     await _slackService.notifyCompressionCompleted(
       job: job,
       completedFiles: completedCount,
@@ -204,13 +249,12 @@ class JobQueueService {
     // Copy file list from transfer job, pointing to transferred files.
     final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
     final compressionFiles = transferFiles
-        .where((f) => f.status == FileStatus.completed)
+        .where((f) => f.status == FileStatus.completed && f.verified)
         .map(
           (f) => JobFilesCompanion.insert(
             jobId: jobId,
             sourceFilePath: f.destinationFilePath,
-            destinationFilePath:
-                '$outputPath/${f.fileName}', // TODO: proper path join
+            destinationFilePath: p.join(outputPath, f.fileName),
             fileName: f.fileName,
             fileSize: f.fileSize,
             status: FileStatus.pending,

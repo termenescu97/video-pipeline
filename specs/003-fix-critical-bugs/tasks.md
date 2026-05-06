@@ -19,11 +19,11 @@
 
 **Purpose**: Shared infrastructure changes that multiple bug fixes depend on
 
-- [ ] T001 Create singleton service instances (JobQueueService, TransferService, CompressionService, SlackService, DriveService, all DAOs) in lib/main.dart
-- [ ] T002 Add `updateJobTotals(int jobId, int totalFiles, int totalBytes)` method to lib/database/daos/job_dao.dart
-- [ ] T003 Update `getNextQueuedJob()` to also pick up paused jobs (status == queued OR status == paused) in lib/database/daos/job_dao.dart
-- [ ] T004 Add `import 'package:path/path.dart' as p;` to lib/services/job_queue_service.dart
-- [ ] T005 Regenerate Drift code with `dart run build_runner build`
+- [X] T001 Create singleton service instances (JobQueueService, TransferService, CompressionService, SlackService, DriveService, all DAOs) in lib/main.dart
+- [X] T002 Add `updateJobTotals(int jobId, int totalFiles, int totalBytes)` method to lib/database/daos/job_dao.dart
+- [X] T003 Update `getNextQueuedJob()` to also pick up paused jobs (status == queued OR status == paused) in lib/database/daos/job_dao.dart
+- [X] T004 Add `import 'package:path/path.dart' as p;` to lib/services/job_queue_service.dart
+- [X] T005 Regenerate Drift code with `dart run build_runner build`
 
 ---
 
@@ -33,10 +33,10 @@
 
 **CRITICAL**: Must complete before user story work begins
 
-- [ ] T006 [P] Update lib/ui/screens/home_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
-- [ ] T007 [P] Update lib/ui/screens/create_job_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
-- [ ] T008 [P] Update lib/ui/screens/job_detail_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
-- [ ] T009 [P] Update lib/ui/screens/settings_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
+- [X] T006 [P] Update lib/ui/screens/home_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
+- [X] T007 [P] Update lib/ui/screens/create_job_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
+- [X] T008 [P] Update lib/ui/screens/job_detail_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
+- [X] T009 [P] Update lib/ui/screens/settings_screen.dart to import and use singleton services from main.dart instead of creating local instances in initState()
 
 **Checkpoint**: All screens share singleton service instances. No duplicate processing possible.
 
@@ -48,9 +48,9 @@
 
 **Independent Test**: Create a transfer job for a source with video files. Start the queue. Verify files appear on the destination.
 
-- [ ] T010 [US1] In lib/ui/screens/create_job_screen.dart `_createJob()`, after inserting the job, scan source path for video files using DriveService.listVideoFiles(), create JobFilesCompanion entries with proper paths via p.join(), insert via JobFileDao.insertFiles(), update job totals via JobDao.updateJobTotals()
-- [ ] T011 [US1] In lib/ui/screens/create_job_screen.dart `_createJob()`, if zero video files found in source, show error snackbar and delete the just-created job (or don't create it)
-- [ ] T012 [US1] Update lib/services/drive_service.dart `listVideoFiles()` to use constants from lib/utils/constants.dart for video extensions instead of hardcoded strings, and use p.extension() for robust extension matching
+- [X] T010 [US1] In lib/ui/screens/create_job_screen.dart `_createJob()`, after inserting the job, scan source path for video files using DriveService.listVideoFiles(), create JobFilesCompanion entries with proper paths via p.join(), insert via JobFileDao.insertFiles(), update job totals via JobDao.updateJobTotals()
+- [X] T011 [US1] In lib/ui/screens/create_job_screen.dart `_createJob()`, if zero video files found in source, show error snackbar and delete the just-created job (or don't create it)
+- [X] T012 [US1] Update lib/services/drive_service.dart `listVideoFiles()` to use constants from lib/utils/constants.dart for video extensions instead of hardcoded strings, and use p.extension() for robust extension matching
 
 **Checkpoint**: Jobs are created with accurate file lists. Queue processes actual files.
 
@@ -62,7 +62,7 @@
 
 **Independent Test**: Start queue, navigate away and back, verify no duplicate processing.
 
-- [ ] T013 [US2] Already fixed by Phase 2 (singleton JobQueueService). Verify in lib/ui/screens/home_screen.dart that `_isProcessing` state is read from the singleton `jobQueueService.isProcessing` rather than local state, so it survives navigation
+- [X] T013 [US2] Already fixed by Phase 2 (singleton JobQueueService). Verify in lib/ui/screens/home_screen.dart that `_isProcessing` state is read from the singleton `jobQueueService.isProcessing` rather than local state, so it survives navigation
 
 **Checkpoint**: Navigation does not spawn duplicate queue processors.
 
@@ -74,9 +74,9 @@
 
 **Independent Test**: Transfer files, verify that file statuses reflect actual size comparison results.
 
-- [ ] T014 [US3] In lib/services/job_queue_service.dart `_processTransfer()`, after successful `transferFile()`, call `transferService.verifyTransfer()` with source and destination paths. Pass actual result to `markFileCompleted(verified: actualResult)`. If verification fails, mark file as failed with error "Verification failed: size mismatch"
-- [ ] T015 [US3] Update lib/services/slack_service.dart `notifyTransferCompleted()` to accept a `bool allVerified` parameter and report actual verification status instead of hardcoded "Verification: Passed"
-- [ ] T016 [US3] In lib/services/job_queue_service.dart `_createChainedCompressionJob()`, filter files on `f.status == FileStatus.completed && f.verified == true` (not just completed) so unverified files are excluded from compression
+- [X] T014 [US3] In lib/services/job_queue_service.dart `_processTransfer()`, after successful `transferFile()`, call `transferService.verifyTransfer()` with source and destination paths. Pass actual result to `markFileCompleted(verified: actualResult)`. If verification fails, mark file as failed with error "Verification failed: size mismatch"
+- [X] T015 [US3] Update lib/services/slack_service.dart `notifyTransferCompleted()` to accept a `bool allVerified` parameter and report actual verification status instead of hardcoded "Verification: Passed"
+- [X] T016 [US3] In lib/services/job_queue_service.dart `_createChainedCompressionJob()`, filter files on `f.status == FileStatus.completed && f.verified == true` (not just completed) so unverified files are excluded from compression
 
 **Checkpoint**: Transferred files have real verification status. Slack reports truth. Chained compression only includes verified files.
 
@@ -88,9 +88,9 @@
 
 **Independent Test**: (a) Compression with failed files shows partial failure status. (b) Stopping queue mid-job marks it as paused.
 
-- [ ] T017 [US4] In lib/services/job_queue_service.dart `_processCompression()`, after the file loop, count failed files. If any failed, mark job as failed with error "X/Y files compressed, Z failed" instead of marking as completed
-- [ ] T018 [US4] In lib/services/job_queue_service.dart `_processTransfer()`, after the file loop, check if interrupted by `!_isProcessing`. If so, mark job as `paused` via `jobDao.updateJobStatus(job.id, JobStatus.paused)` and return without sending completion notification
-- [ ] T019 [US4] In lib/services/job_queue_service.dart `_processCompression()`, after the file loop, check if interrupted by `!_isProcessing`. If so, mark job as `paused` and return without sending completion notification
+- [X] T017 [US4] In lib/services/job_queue_service.dart `_processCompression()`, after the file loop, count failed files. If any failed, mark job as failed with error "X/Y files compressed, Z failed" instead of marking as completed
+- [X] T018 [US4] In lib/services/job_queue_service.dart `_processTransfer()`, after the file loop, check if interrupted by `!_isProcessing`. If so, mark job as `paused` via `jobDao.updateJobStatus(job.id, JobStatus.paused)` and return without sending completion notification
+- [X] T019 [US4] In lib/services/job_queue_service.dart `_processCompression()`, after the file loop, check if interrupted by `!_isProcessing`. If so, mark job as `paused` and return without sending completion notification
 
 **Checkpoint**: Job status always reflects reality. Paused jobs resume when queue restarts.
 
@@ -102,8 +102,8 @@
 
 **Independent Test**: Create a transfer+compress job. Verify compression output paths are correct Windows paths.
 
-- [ ] T020 [US5] In lib/services/job_queue_service.dart `_createChainedCompressionJob()`, replace `'$outputPath/${f.fileName}'` with `p.join(outputPath, f.fileName)`
-- [ ] T021 [US5] In lib/ui/screens/create_job_screen.dart `_createJob()` file enumeration, use `p.join(destinationPath, fileName)` when constructing destination file paths for JobFiles
+- [X] T020 [US5] In lib/services/job_queue_service.dart `_createChainedCompressionJob()`, replace `'$outputPath/${f.fileName}'` with `p.join(outputPath, f.fileName)`
+- [X] T021 [US5] In lib/ui/screens/create_job_screen.dart `_createJob()` file enumeration, use `p.join(destinationPath, fileName)` when constructing destination file paths for JobFiles
 
 **Checkpoint**: All paths are Windows-compatible.
 
@@ -113,8 +113,8 @@
 
 **Purpose**: Final validation
 
-- [ ] T022 Run `flutter analyze` and fix any issues
-- [ ] T023 Run `dart run build_runner build` to regenerate Drift code if any DAO changes were made after T005
+- [X] T022 Run `flutter analyze` and fix any issues
+- [X] T023 Run `dart run build_runner build` to regenerate Drift code if any DAO changes were made after T005
 
 ---
 

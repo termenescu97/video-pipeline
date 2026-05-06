@@ -1,15 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
-import '../../database/daos/job_dao.dart';
-import '../../database/daos/job_file_dao.dart';
-import '../../database/daos/settings_dao.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
-import '../../services/compression_service.dart';
-import '../../services/job_queue_service.dart';
-import '../../services/slack_service.dart';
-import '../../services/transfer_service.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/job_card.dart';
 import 'create_job_screen.dart';
@@ -25,25 +18,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late final JobDao _jobDao;
-  late final JobQueueService _jobQueueService;
-  bool _isProcessing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _jobDao = JobDao(database);
-    final jobFileDao = JobFileDao(database);
-    final settingsDao = SettingsDao(database);
-    _jobQueueService = JobQueueService(
-      jobDao: _jobDao,
-      jobFileDao: jobFileDao,
-      slackService: SlackService(settingsDao: settingsDao),
-      transferService: TransferService(),
-      compressionService: CompressionService(),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -60,7 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: StreamBuilder<List<Job>>(
-        stream: _jobDao.watchAllJobs(),
+        stream: jobDao.watchAllJobs(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -92,6 +66,8 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }
 
+          final isProcessing = jobQueueService.isProcessing;
+
           return Column(
             children: [
               // Start/Stop bar.
@@ -101,9 +77,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   width: double.infinity,
                   child: FilledButton.icon(
                     onPressed: _toggleProcessing,
-                    icon: Icon(_isProcessing ? Icons.stop : Icons.play_arrow),
-                    label: Text(_isProcessing ? 'Stop Queue' : 'Start Queue'),
-                    style: _isProcessing
+                    icon: Icon(isProcessing ? Icons.stop : Icons.play_arrow),
+                    label: Text(isProcessing ? 'Stop Queue' : 'Start Queue'),
+                    style: isProcessing
                         ? FilledButton.styleFrom(
                             backgroundColor: Colors.red.shade700,
                           )
@@ -144,15 +120,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _toggleProcessing() {
-    setState(() {
-      _isProcessing = !_isProcessing;
-    });
-    if (_isProcessing) {
-      _jobQueueService.startProcessing().then((_) {
-        if (mounted) setState(() => _isProcessing = false);
-      });
+    if (jobQueueService.isProcessing) {
+      jobQueueService.stopProcessing();
+      setState(() {});
     } else {
-      _jobQueueService.stopProcessing();
+      setState(() {});
+      jobQueueService.startProcessing().then((_) {
+        if (mounted) setState(() {});
+      });
     }
   }
 
@@ -169,7 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (confirmed) {
-      await _jobDao.deleteJob(job.id);
+      await jobDao.deleteJob(job.id);
     }
   }
 

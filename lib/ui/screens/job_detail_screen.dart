@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
-import '../../database/daos/job_dao.dart';
-import '../../database/daos/job_file_dao.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
-import '../../services/drive_service.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/progress_bar.dart';
 
@@ -20,15 +17,9 @@ class JobDetailScreen extends StatefulWidget {
 }
 
 class _JobDetailScreenState extends State<JobDetailScreen> {
-  late final JobDao _jobDao;
-  late final JobFileDao _jobFileDao;
-  final _driveService = DriveService();
-
   @override
   void initState() {
     super.initState();
-    _jobDao = JobDao(database);
-    _jobFileDao = JobFileDao(database);
   }
 
   @override
@@ -36,7 +27,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Job Details')),
       body: StreamBuilder<Job?>(
-        stream: _jobDao.watchAllJobs().map(
+        stream: jobDao.watchAllJobs().map(
               (jobs) => jobs.where((j) => j.id == widget.jobId).firstOrNull,
             ),
         builder: (context, jobSnapshot) {
@@ -135,7 +126,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 StreamBuilder<List<JobFile>>(
-                  stream: _jobFileDao.watchFilesForJob(widget.jobId),
+                  stream: jobFileDao.watchFilesForJob(widget.jobId),
                   builder: (context, filesSnapshot) {
                     final files = filesSnapshot.data ?? [];
                     if (files.isEmpty) {
@@ -213,7 +204,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
     if (!confirmed) return;
 
-    final success = await _driveService.eraseDrive(drivePath);
+    final success = await driveService.eraseDrive(drivePath);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
