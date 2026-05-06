@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/001-video-pipeline-automation/plan.md
+specs/003-fix-critical-bugs/plan.md
 <!-- SPECKIT END -->
