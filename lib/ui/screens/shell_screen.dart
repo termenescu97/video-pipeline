@@ -39,7 +39,9 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
   Future<void> _initSystemTray() async {
     if (!Platform.isWindows) return;
     try {
-      await trayManager.setIcon('windows/runner/resources/video-pipeline-icon.ico');
+      // Resolve icon path relative to the executable.
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      await trayManager.setIcon('$exeDir/data/flutter_assets/assets/video-pipeline-icon.ico');
       await trayManager.setToolTip('Video Pipeline — Idle');
       await trayManager.setContextMenu(
         Menu(items: [
