@@ -42,11 +42,16 @@ class SlackService {
     }
   }
 
+  String _operatorLine(Job job) {
+    final name = job.operatorName;
+    return (name != null && name.isNotEmpty) ? '\nOperator: $name' : '';
+  }
+
   Future<void> notifyTransferStarted({required Job job}) async {
     final totalGb = formatBytes(job.totalBytes);
     await _send(
       '📂 *Transfer Started*\n'
-      'Job: ${job.id}\n'
+      'Job: ${job.id}${_operatorLine(job)}\n'
       'Source: ${job.sourcePath}\n'
       'Destination: ${job.destinationPath}\n'
       'Files: ${job.totalFiles} ($totalGb)',
@@ -64,7 +69,7 @@ class SlackService {
         : 0;
     await _send(
       '✅ *Transfer Complete*\n'
-      'Job: ${job.id}\n'
+      'Job: ${job.id}${_operatorLine(job)}\n'
       'Files: $completedFiles/${job.totalFiles}\n'
       'Size: $totalGb\n'
       'Duration: $duration min\n'
@@ -80,7 +85,7 @@ class SlackService {
   }) async {
     await _send(
       '❌ *Transfer FAILED*\n'
-      'Job: ${job.id}\n'
+      'Job: ${job.id}${_operatorLine(job)}\n'
       'File: $fileName\n'
       'Error: $error\n'
       'Completed: $completedFiles/${job.totalFiles} before failure',
@@ -90,7 +95,7 @@ class SlackService {
   Future<void> notifyCompressionStarted({required Job job}) async {
     await _send(
       '🎬 *Compression Started*\n'
-      'Job: ${job.id}\n'
+      'Job: ${job.id}${_operatorLine(job)}\n'
       'Preset: ${job.presetName ?? "unknown"}\n'
       'Files: ${job.totalFiles}\n'
       'Output: ${job.compressionOutputPath ?? job.destinationPath}',
@@ -107,7 +112,7 @@ class SlackService {
         : 0;
     await _send(
       '✅ *Compression Complete*\n'
-      'Job: ${job.id}\n'
+      'Job: ${job.id}${_operatorLine(job)}\n'
       'Files: $completedFiles/$totalFiles\n'
       'Duration: $duration min',
     );

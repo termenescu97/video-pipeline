@@ -32,6 +32,24 @@ class SettingsDao extends DatabaseAccessor<AppDatabase>
         .write(AppSettingsCompanion(checkUpdatesOnLaunch: Value(check)));
   }
 
+  /// Update last-used destination path.
+  Future<void> setLastUsedDestination(String path) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(lastUsedDestination: Value(path)));
+  }
+
+  /// Update last-used compression output path.
+  Future<void> setLastUsedOutput(String path) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(lastUsedOutput: Value(path)));
+  }
+
+  /// Update operator name.
+  Future<void> setOperatorName(String name) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(operatorName: Value(name)));
+  }
+
   /// Mark first-run onboarding as completed.
   Future<void> setFirstRunCompleted(bool completed) {
     return (update(appSettings)..where((t) => t.id.equals(1)))

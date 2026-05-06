@@ -1,9 +1,13 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
+import '../../database/extensions.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
+import '../../utils/format_utils.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/job_card.dart';
 import 'settings_screen.dart';
@@ -225,14 +229,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   // History section.
                   if (historyJobs.isNotEmpty) ...[
-                    const SliverToBoxAdapter(
+                    SliverToBoxAdapter(
                       child: Padding(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: Text('History',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.grey)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Row(
+                          children: [
+                            const Text('History',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey)),
+                            const Spacer(),
+                            IconButton(
+                              icon: const Icon(Icons.download, size: 18,
+                                  color: Colors.grey),
+                              tooltip: 'Export CSV',
+                              onPressed: _exportHistory,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     SliverList(
@@ -315,6 +330,54 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Job re-queued for retry')),
+      );
+    }
+  }
+
+  Future<void> _exportHistory() async {
+    final jobs = await jobDao.getCompletedJobsList();
+    if (jobs.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No history to export')),
+        );
+      }
+      return;
+    }
+
+    // Generate CSV content.
+    final buffer = StringBuffer();
+    buffer.writeln('Date,Type,Source,Destination,Files,Size,Status,Duration,Operator');
+    for (final job in jobs) {
+      final date = job.completedAt?.toIso8601String().split('T').first ?? '';
+      final duration = (job.startedAt != null && job.completedAt != null)
+          ? formatDuration(job.completedAt!.difference(job.startedAt!))
+          : '';
+      final size = formatBytes(job.totalBytes);
+      final operator = job.operatorName ?? '';
+      buffer.writeln(
+        '"$date","${job.type.label}","${job.sourcePath}","${job.destinationPath}",'
+        '${job.totalFiles},"$size","${job.status.label}","$duration","$operator"',
+      );
+    }
+
+    final now = DateTime.now();
+    final defaultName = 'copiatorul3000-history-${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}.csv';
+
+    final savePath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Export History',
+      fileName: defaultName,
+      type: FileType.custom,
+      allowedExtensions: ['csv'],
+    );
+
+    if (savePath == null) return;
+
+    await File(savePath).writeAsString(buffer.toString());
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('History exported to $savePath')),
       );
     }
   }

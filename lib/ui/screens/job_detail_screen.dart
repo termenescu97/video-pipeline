@@ -53,6 +53,8 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                         _infoRow('Destination', job.destinationPath),
                         if (job.presetName != null)
                           _infoRow('Preset', job.presetName!),
+                        if (job.operatorName != null && job.operatorName!.isNotEmpty)
+                          _infoRow('Operator', job.operatorName!),
                         if (job.errorMessage != null) ...[
                           const SizedBox(height: 8),
                           // Human-friendly error message.

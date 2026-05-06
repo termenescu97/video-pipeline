@@ -42,6 +42,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     _refreshDrives();
     _loadPresets();
     _checkHandbrake();
+    _loadLastUsedPaths();
   }
 
   Future<void> _refreshDrives() async {
@@ -71,6 +72,20 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   Future<void> _checkHandbrake() async {
     final installed = await compressionService.isHandbrakeInstalled();
     setState(() => _handbrakeInstalled = installed);
+  }
+
+  Future<void> _loadLastUsedPaths() async {
+    final settings = await settingsDao.getSettings();
+    if (settings != null) {
+      setState(() {
+        if (settings.lastUsedDestination.isNotEmpty) {
+          _destinationPath = settings.lastUsedDestination;
+        }
+        if (settings.lastUsedOutput.isNotEmpty) {
+          _compressionOutputPath = settings.lastUsedOutput;
+        }
+      });
+    }
   }
 
   Future<void> _updateFreeSpace(String path) async {
@@ -348,7 +363,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   }
 
   Future<void> _saveAsFavorite(String path, FavoritePathType type) async {
-    final controller = TextEditingController(text: path.split(r'\').last);
+    final controller = TextEditingController(text: p.basename(path));
     final label = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -464,6 +479,49 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       return;
     }
 
+    // Check for paths exceeding Windows MAX_PATH (260 chars).
+    final longPaths = <String>[];
+    for (final entity in videoFiles) {
+      final relativePath = p.relative(entity.path, from: sourcePath);
+      final destFullPath = p.join(_destinationPath!, relativePath);
+      if (destFullPath.length > 260) {
+        longPaths.add(destFullPath);
+      }
+    }
+    if (longPaths.isNotEmpty && mounted) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Long file paths detected'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('${longPaths.length} file(s) have destination paths exceeding 260 characters, '
+                    'which may cause failures on Windows:'),
+                const SizedBox(height: 8),
+                ...longPaths.take(10).map((path) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text('• $path',
+                          style: const TextStyle(fontSize: 11)),
+                    )),
+                if (longPaths.length > 10)
+                  Text('... and ${longPaths.length - 10} more',
+                      style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+
     // Check disk space before creating.
     var totalSourceBytes = 0;
     for (final entity in videoFiles) {
@@ -497,6 +555,10 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       }
     }
 
+    // Read operator name from settings.
+    final settings = await settingsDao.getSettings();
+    final operatorName = settings?.operatorName;
+
     final newJobId = await jobDao.insertJob(
       JobsCompanion.insert(
         type: _jobType,
@@ -506,6 +568,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         compressionOutputPath: Value(_compressionOutputPath),
         presetName: Value(_selectedPreset),
         autoChain: Value(_jobType == JobType.transferAndCompress),
+        operatorName: Value(operatorName != null && operatorName.isNotEmpty ? operatorName : null),
         createdAt: DateTime.now(),
       ),
     );
@@ -536,6 +599,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
     await jobFileDao.insertFiles(fileEntries);
     await jobDao.updateJobTotals(newJobId, fileEntries.length, totalBytes);
+
+    // Save last-used paths for next session.
+    settingsDao.setLastUsedDestination(_destinationPath!);
+    if (_compressionOutputPath != null) {
+      settingsDao.setLastUsedOutput(_compressionOutputPath!);
+    }
 
     if (mounted) {
       if (widget.onJobCreated != null) {

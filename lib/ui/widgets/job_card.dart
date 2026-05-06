@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import '../../database/database.dart';
 import '../../database/extensions.dart';
 import '../../database/tables.dart';
+import '../../utils/format_utils.dart';
 
 /// Displays a job's status in the queue.
 class JobCard extends StatelessWidget {
@@ -108,7 +109,12 @@ class JobCard extends StatelessWidget {
   String _jobSubtitle() {
     final src = p.basename(job.sourcePath.replaceAll(RegExp(r'[/\\]$'), ''));
     final dst = p.basename(job.destinationPath.replaceAll(RegExp(r'[/\\]$'), ''));
-    return '$src → $dst';
+    final base = '$src → $dst';
+    if (job.completedAt != null &&
+        (job.status == JobStatus.completed || job.status == JobStatus.failed)) {
+      return '$base · ${formatRelativeTime(job.completedAt!)}';
+    }
+    return base;
   }
 
   String _fullPathSubtitle() {

@@ -14,6 +14,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _webhookController = TextEditingController();
+  final _operatorController = TextEditingController();
   Timer? _debounceTimer;
   bool _testingWebhook = false;
   bool _checkUpdates = true;
@@ -27,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final settings = await settingsDao.getSettings();
     _webhookController.text = settings?.slackWebhookUrl ?? '';
+    _operatorController.text = settings?.operatorName ?? '';
     setState(() => _checkUpdates = settings?.checkUpdatesOnLaunch ?? true);
   }
 
@@ -34,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _debounceTimer?.cancel();
     _webhookController.dispose();
+    _operatorController.dispose();
     super.dispose();
   }
 
@@ -74,6 +77,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Test Notification'),
+            ),
+            const SizedBox(height: 32),
+            Text('Operator',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _operatorController,
+              decoration: const InputDecoration(
+                labelText: 'Operator Name',
+                hintText: 'Your name (shown in Slack and job history)',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) {
+                _debounceTimer?.cancel();
+                _debounceTimer = Timer(
+                  const Duration(milliseconds: 500),
+                  () => settingsDao.setOperatorName(value),
+                );
+              },
             ),
             const SizedBox(height: 32),
             Text('App Updates',

@@ -31,6 +31,7 @@ class Jobs extends Table {
   IntColumn get completedFiles => integer().withDefault(const Constant(0))();
   IntColumn get totalBytes => integer().withDefault(const Constant(0))();
   IntColumn get completedBytes => integer().withDefault(const Constant(0))();
+  TextColumn get operatorName => text().nullable()();
 }
 
 /// Tracks individual file status within a job.
@@ -69,6 +70,12 @@ class AppSettings extends Table {
       text().withDefault(const Constant('1.0.0'))();
   BoolColumn get firstRunCompleted =>
       boolean().withDefault(const Constant(false))();
+  TextColumn get lastUsedDestination =>
+      text().withDefault(const Constant(''))();
+  TextColumn get lastUsedOutput =>
+      text().withDefault(const Constant(''))();
+  TextColumn get operatorName =>
+      text().withDefault(const Constant(''))();
 
   @override
   Set<Column> get primaryKey => {id};

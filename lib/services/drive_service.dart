@@ -144,7 +144,7 @@ class DriveService {
     if (!Platform.isWindows) return false;
 
     // Validate drive path to prevent command injection.
-    if (!RegExp(r'^[A-Z]:\\$').hasMatch(drivePath)) return false;
+    if (!RegExp(r'^[A-Za-z]:\\$').hasMatch(drivePath)) return false;
 
     final result = await Process.run('powershell', [
       '-NoProfile',

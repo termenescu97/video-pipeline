@@ -93,9 +93,10 @@ lib/
 | 007 - Critical Bug Fixes (v2) | `007-critical-bug-fixes` | 10/10 | ✅ Complete |
 | 008 - High-Priority QA Fixes | `008-high-priority-qa-fixes` | 14/14 | ✅ Complete |
 | 009 - Product Gaps | `009-product-gaps` | 21/21 | ✅ Complete |
+| 010 - Medium Fixes | `010-medium-fixes` | 21/21 | ✅ Complete |
 
 **Latest release**: v2.0.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 187
+**Total tasks implemented**: 208
 
 ### What Works
 
@@ -148,7 +149,20 @@ lib/
 - ~~No first-run onboarding~~ — fixed: welcome state with guidance on first launch (schema v3)
 - ~~`githubRepo` is placeholder~~ — fixed: set to `termenescu97/video-pipeline`
 
+**Medium (fixed in 010-medium-fixes)**:
+- ~~No last-used destination memory~~ — fixed: auto-fills from settings, persists across sessions (schema v4)
+- ~~No operator name tracking~~ — fixed: configurable in settings, stamped on jobs and Slack messages
+- ~~No CSV export~~ — fixed: Export History button generates CSV via file save dialog
+- ~~No timestamps on history cards~~ — fixed: relative timestamps ("5 min ago", "Yesterday")
+- ~~Favorite label path split broken on macOS~~ — fixed: uses `p.basename()` instead of backslash split
+- ~~Erase rejects lowercase drive letters~~ — fixed: regex accepts `[A-Za-z]`
+- ~~No path length warning~~ — fixed: warns when destination paths exceed 260 chars
+- ~~formatBytes shows "0 B" for errors~~ — fixed: shows "N/A" for negative values
+- Selective file copy (PM-10) — deferred to v3.0
+
 Full report: `specs/006-review-findings/review-report-v2.md`
+
+**All 30 review issues resolved** (28 fixed, 2 false positives, 1 deferred to v3.0 by design).
 
 ### v3.0 Roadmap (from PM review)
 
@@ -181,5 +195,5 @@ git push origin v2.1.0
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/009-product-gaps/plan.md
+specs/010-medium-fixes/plan.md
 <!-- SPECKIT END -->

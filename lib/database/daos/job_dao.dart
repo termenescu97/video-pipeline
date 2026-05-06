@@ -132,6 +132,18 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
   }
 
+  /// Get completed and failed jobs as a one-time list (for CSV export).
+  Future<List<Job>> getCompletedJobsList() {
+    return (select(jobs)
+          ..where(
+            (t) =>
+                t.status.equalsValue(JobStatus.completed) |
+                t.status.equalsValue(JobStatus.failed),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
+        .get();
+  }
+
   /// Watch completed and failed jobs (history).
   Stream<List<Job>> watchCompletedJobs() {
     return (select(jobs)
