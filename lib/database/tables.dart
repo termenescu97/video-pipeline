@@ -67,6 +67,8 @@ class AppSettings extends Table {
   DateTimeColumn get lastUpdateCheck => dateTime().nullable()();
   TextColumn get currentVersion =>
       text().withDefault(const Constant('1.0.0'))();
+  BoolColumn get firstRunCompleted =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};

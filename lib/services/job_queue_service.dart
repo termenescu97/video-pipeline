@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../database/database.dart';
@@ -10,9 +11,27 @@ import '../database/daos/job_file_dao.dart';
 import '../database/tables.dart';
 import '../utils/constants.dart';
 import 'drive_service.dart';
+import 'log_service.dart';
 import 'slack_service.dart';
 import 'transfer_service.dart';
 import 'compression_service.dart';
+
+/// Real-time progress data for a running job.
+class ProgressData {
+  final String? currentFileName;
+  final double? speedBytesPerSec;
+  final Duration? eta;
+  final Duration? elapsed;
+  final double? fps;
+
+  ProgressData({
+    this.currentFileName,
+    this.speedBytesPerSec,
+    this.eta,
+    this.elapsed,
+    this.fps,
+  });
+}
 
 /// Manages the job queue — processes jobs sequentially, handles auto-chain,
 /// and triggers Slack notifications at phase transitions.
@@ -22,9 +41,13 @@ class JobQueueService {
   final SlackService _slackService;
   final TransferService _transferService;
   final CompressionService _compressionService;
+  final LogService? _logService;
 
   bool _isProcessing = false;
   int? _currentJobId;
+
+  /// Real-time progress data for UI consumption.
+  final ValueNotifier<ProgressData?> progressNotifier = ValueNotifier(null);
 
   JobQueueService({
     required JobDao jobDao,
@@ -32,11 +55,13 @@ class JobQueueService {
     required SlackService slackService,
     required TransferService transferService,
     required CompressionService compressionService,
+    LogService? logService,
   })  : _jobDao = jobDao,
         _jobFileDao = jobFileDao,
         _slackService = slackService,
         _transferService = transferService,
-        _compressionService = compressionService;
+        _compressionService = compressionService,
+        _logService = logService;
 
   bool get isProcessing => _isProcessing;
   int? get currentJobId => _currentJobId;
@@ -67,6 +92,7 @@ class JobQueueService {
   }
 
   Future<void> _processJob(Job job) async {
+    _logService?.info('Job #${job.id} started — ${job.type.name} ${job.sourcePath} → ${job.destinationPath}');
     await _jobDao.markJobStarted(job.id);
 
     try {
@@ -123,10 +149,40 @@ class JobQueueService {
 
       await _jobFileDao.markFileStarted(file.id);
 
+      // Wire progress callback for real-time UI updates.
+      _transferService.onProgress = (event) {
+        final startTime = _transferService.fileStartTime;
+        final totalBytes = _transferService.fileTotalBytes;
+        if (startTime != null && totalBytes > 0 && event.percentage != null) {
+          final elapsed = DateTime.now().difference(startTime);
+          final transferredBytes = (event.percentage! / 100.0) * totalBytes;
+          final speed = elapsed.inMilliseconds > 0
+              ? transferredBytes / (elapsed.inMilliseconds / 1000.0)
+              : 0.0;
+          final remainingBytes = totalBytes - transferredBytes;
+          final eta = speed > 0
+              ? Duration(seconds: (remainingBytes / speed).round())
+              : null;
+          progressNotifier.value = ProgressData(
+            currentFileName: event.fileName ?? file.fileName,
+            speedBytesPerSec: speed,
+            eta: eta,
+            elapsed: elapsed,
+          );
+        } else if (event.fileName != null) {
+          progressNotifier.value = ProgressData(
+            currentFileName: event.fileName,
+          );
+        }
+      };
+
       final success = await _transferService.transferFile(
         sourceFile: file.sourceFilePath,
         destinationFile: file.destinationFilePath,
       );
+
+      _transferService.onProgress = null;
+      progressNotifier.value = null;
 
       if (success) {
         // Verify transfer by comparing file sizes.
@@ -137,17 +193,20 @@ class JobQueueService {
         if (verified) {
           await _jobFileDao.markFileCompleted(file.id, verified: true);
           completedCount++;
+          _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
         } else {
           await _jobFileDao.markFileFailed(
             file.id,
             'Verification failed: size mismatch',
           );
           failedCount++;
+          _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
         }
         await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
       } else {
         await _jobFileDao.markFileFailed(file.id, 'Transfer failed');
         failedCount++;
+        _logService?.error('Job #${job.id} file transfer failed: ${file.fileName}');
         await _jobDao.markJobFailed(job.id, 'File transfer failed: ${file.fileName}');
         await _slackService.notifyTransferFailed(
           job: job,
@@ -167,11 +226,13 @@ class JobQueueService {
 
     final allVerified = failedCount == 0;
     if (failedCount > 0) {
+      _logService?.error('Job #${job.id} failed — $completedCount transferred, $failedCount failed verification');
       await _jobDao.markJobFailed(
         job.id,
         '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed verification',
       );
     } else {
+      _logService?.info('Job #${job.id} completed — $completedCount files transferred');
       await _jobDao.markJobCompleted(job.id);
     }
     await _slackService.notifyTransferCompleted(
@@ -197,11 +258,35 @@ class JobQueueService {
 
       await _jobFileDao.markFileStarted(file.id);
 
+      // Wire progress callback for real-time UI updates.
+      _compressionService.onProgress = (progress) {
+        Duration? eta;
+        if (progress.eta != null) {
+          // Parse HandBrake ETA string like "00h33m34s".
+          final match = RegExp(r'(\d+)h(\d+)m(\d+)s').firstMatch(progress.eta!);
+          if (match != null) {
+            eta = Duration(
+              hours: int.parse(match.group(1)!),
+              minutes: int.parse(match.group(2)!),
+              seconds: int.parse(match.group(3)!),
+            );
+          }
+        }
+        progressNotifier.value = ProgressData(
+          currentFileName: file.fileName,
+          fps: progress.fps,
+          eta: eta,
+        );
+      };
+
       final success = await _compressionService.compressFile(
         inputFile: file.sourceFilePath,
         outputFile: file.destinationFilePath,
         presetName: job.presetName ?? '',
       );
+
+      _compressionService.onProgress = null;
+      progressNotifier.value = null;
 
       if (success) {
         await _jobFileDao.markFileCompleted(file.id, verified: true);

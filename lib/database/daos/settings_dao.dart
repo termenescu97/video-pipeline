@@ -32,6 +32,12 @@ class SettingsDao extends DatabaseAccessor<AppDatabase>
         .write(AppSettingsCompanion(checkUpdatesOnLaunch: Value(check)));
   }
 
+  /// Mark first-run onboarding as completed.
+  Future<void> setFirstRunCompleted(bool completed) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(firstRunCompleted: Value(completed)));
+  }
+
   /// Update last update check timestamp.
   Future<void> setLastUpdateCheck(DateTime timestamp) {
     return (update(appSettings)..where((t) => t.id.equals(1)))

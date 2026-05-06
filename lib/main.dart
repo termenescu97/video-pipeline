@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:window_manager/window_manager.dart';
@@ -8,9 +10,11 @@ import 'database/daos/favorite_path_dao.dart';
 import 'database/daos/job_dao.dart';
 import 'database/daos/job_file_dao.dart';
 import 'database/daos/settings_dao.dart';
+import 'utils/instance_lock.dart';
 import 'services/compression_service.dart';
 import 'services/drive_service.dart';
 import 'services/job_queue_service.dart';
+import 'services/log_service.dart';
 import 'services/slack_service.dart';
 import 'services/transfer_service.dart';
 
@@ -29,8 +33,18 @@ late final TransferService transferService;
 late final CompressionService compressionService;
 late final SlackService slackService;
 late final JobQueueService jobQueueService;
+late final LogService logService;
+late final InstanceLock instanceLock;
 
 void main() async {
+  // Single-instance lock — must run before Flutter init.
+  instanceLock = InstanceLock();
+  final acquired = await instanceLock.acquire();
+  if (!acquired) {
+    stderr.writeln('Another instance of Copiatorul3000 is already running.');
+    exit(1);
+  }
+
   WidgetsFlutterBinding.ensureInitialized();
 
   // Set minimum window size.
@@ -51,6 +65,11 @@ void main() async {
   favoritePathDao = FavoritePathDao(database);
   settingsDao = SettingsDao(database);
 
+  // Logger.
+  logService = LogService();
+  await logService.init();
+  logService.info('App started');
+
   // Services.
   driveService = DriveService();
   transferService = TransferService();
@@ -62,6 +81,7 @@ void main() async {
     slackService: slackService,
     transferService: transferService,
     compressionService: compressionService,
+    logService: logService,
   );
 
   runApp(const VideoPipelineApp());

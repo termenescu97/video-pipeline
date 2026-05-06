@@ -5,7 +5,7 @@ const videoExtensions = ['.mov', '.mp4'];
 const appVersion = '1.0.0';
 
 /// GitHub repository for update checking.
-const githubRepo = 'YOUR_ORG/video-pipeline';
+const githubRepo = 'termenescu97/video-pipeline';
 
 /// Default robocopy flags for resumable transfer.
 const robocopyFlags = ['/Z', '/V', '/ETA', '/R:3', '/W:5'];

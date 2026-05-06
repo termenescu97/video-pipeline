@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../database/database.dart';
 import '../database/daos/settings_dao.dart';
+import '../main.dart' show logService;
 import '../utils/constants.dart';
 import '../utils/format_utils.dart';
 
@@ -35,8 +36,9 @@ class SlackService {
           receiveTimeout: Duration(milliseconds: slackTimeoutMs),
         ),
       );
-    } catch (_) {
-      // Best-effort: swallow errors, pipeline continues.
+      logService.info('Slack notification sent');
+    } catch (e) {
+      logService.error('Slack notification failed: $e');
     }
   }
 

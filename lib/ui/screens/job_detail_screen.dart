@@ -4,6 +4,7 @@ import '../../database/database.dart';
 import '../../database/extensions.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
+import '../../services/job_queue_service.dart';
 import '../../utils/error_mapper.dart';
 import '../../utils/format_utils.dart';
 import '../widgets/confirmation_dialog.dart';
@@ -112,13 +113,23 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
                 // Progress.
                 if (job.status == JobStatus.inProgress) ...[
-                  PipelineProgressBar(
-                    progress: job.totalFiles > 0
-                        ? job.completedFiles / job.totalFiles
-                        : 0,
-                    label: job.type.label,
-                    completedFiles: job.completedFiles,
-                    totalFiles: job.totalFiles,
+                  ValueListenableBuilder<ProgressData?>(
+                    valueListenable: jobQueueService.progressNotifier,
+                    builder: (context, progress, _) {
+                      return PipelineProgressBar(
+                        progress: job.totalFiles > 0
+                            ? job.completedFiles / job.totalFiles
+                            : 0,
+                        label: job.type.label,
+                        completedFiles: job.completedFiles,
+                        totalFiles: job.totalFiles,
+                        currentFileName: progress?.currentFileName,
+                        speedBytesPerSec: progress?.speedBytesPerSec,
+                        eta: progress?.eta,
+                        elapsed: progress?.elapsed,
+                        fps: progress?.fps,
+                      );
+                    },
                   ),
                   if (job.type == JobType.compression ||
                       job.type == JobType.transferAndCompress)

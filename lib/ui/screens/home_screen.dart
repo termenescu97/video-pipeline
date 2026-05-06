@@ -6,6 +6,7 @@ import '../../database/tables.dart';
 import '../../main.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/job_card.dart';
+import 'settings_screen.dart';
 
 /// Queue list panel — can be used standalone or as left panel in ShellScreen.
 class HomeScreen extends StatefulWidget {
@@ -43,27 +44,79 @@ class _HomeScreenState extends State<HomeScreen> {
             .toList();
 
         if (jobs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.queue, size: 48, color: Colors.grey),
-                const SizedBox(height: 16),
-                const Text('No jobs in queue'),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: _onCreateJob,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Create Job'),
+          return StreamBuilder<AppSetting?>(
+            stream: settingsDao.watchSettings(),
+            builder: (context, settingsSnapshot) {
+              final settings = settingsSnapshot.data;
+              final firstRunDone = settings?.firstRunCompleted ?? false;
+
+              if (!firstRunDone) {
+                // First-run welcome state.
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.video_library, size: 64, color: Colors.blue),
+                        const SizedBox(height: 16),
+                        Text('Welcome to Copiatorul3000',
+                            style: Theme.of(context).textTheme.headlineSmall),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Automate video file transfer and compression.\n'
+                          'Insert an SD card and create your first job to get started.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                        const SizedBox(height: 24),
+                        FilledButton.icon(
+                          onPressed: () {
+                            settingsDao.setFirstRunCompleted(true);
+                            _onCreateJob();
+                          },
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('Get Started'),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => const SettingsScreen()));
+                          },
+                          icon: const Icon(Icons.settings),
+                          label: const Text('Configure Slack'),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              // Normal empty state (first run already completed).
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.queue, size: 48, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    const Text('No jobs in queue'),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      onPressed: _onCreateJob,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Create Job'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _batchCopyAllCards,
+                      icon: const Icon(Icons.sd_storage),
+                      label: const Text('Copy All Cards'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _batchCopyAllCards,
-                  icon: const Icon(Icons.sd_storage),
-                  label: const Text('Copy All Cards'),
-                ),
-              ],
-            ),
+              );
+            },
           );
         }
 
@@ -71,6 +124,38 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Column(
           children: [
+            // Slack webhook banner.
+            StreamBuilder<AppSetting?>(
+              stream: settingsDao.watchSettings(),
+              builder: (context, settingsSnapshot) {
+                final settings = settingsSnapshot.data;
+                if (settings == null || settings.slackWebhookUrl.isEmpty) {
+                  return GestureDetector(
+                    onTap: () => Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const SettingsScreen())),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Slack notifications disabled — tap to configure',
+                              style: TextStyle(fontSize: 12, color: Colors.orange),
+                            ),
+                          ),
+                          Icon(Icons.chevron_right, color: Colors.orange, size: 18),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
             // Start/Stop + batch buttons.
             Padding(
               padding: const EdgeInsets.all(8),
@@ -252,6 +337,10 @@ class _HomeScreenState extends State<HomeScreen> {
       drives,
       destination,
     );
+
+    if (result.created > 0) {
+      settingsDao.setFirstRunCompleted(true);
+    }
 
     if (mounted) {
       final msg = result.skipped > 0

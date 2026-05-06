@@ -92,9 +92,10 @@ lib/
 | 005 - Polish & Code Quality | `005-polish-code-quality` | 29/29 | ✅ Complete |
 | 007 - Critical Bug Fixes (v2) | `007-critical-bug-fixes` | 10/10 | ✅ Complete |
 | 008 - High-Priority QA Fixes | `008-high-priority-qa-fixes` | 14/14 | ✅ Complete |
+| 009 - Product Gaps | `009-product-gaps` | 21/21 | ✅ Complete |
 
 **Latest release**: v2.0.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 166
+**Total tasks implemented**: 187
 
 ### What Works
 
@@ -139,13 +140,13 @@ lib/
 - ~~watchSettings()/getSettings() crash if settings row missing~~ — fixed: null-safe with defaults
 - ~~No filesystem error handling in listVideoFiles~~ — fixed: try/catch with blocking dialog for skipped paths
 
-**High (remaining — deferred to 009-product-gaps)**:
-- Progress bar ETA/speed/filename never wired from services to UI
-- No persistent log file
-- No single-instance lock
-- No Slack webhook unconfigured banner
-- No first-run onboarding
-- `githubRepo` constant is placeholder `'YOUR_ORG/video-pipeline'`
+**High (fixed in 009-product-gaps)**:
+- ~~Progress bar ETA/speed/filename never wired~~ — fixed: ValueNotifier pipes real-time data to PipelineProgressBar
+- ~~No persistent log file~~ — fixed: LogService writes to copiatorul3000.log next to executable
+- ~~No single-instance lock~~ — fixed: PID-based lock file prevents concurrent instances
+- ~~No Slack webhook unconfigured banner~~ — fixed: orange banner on home screen when webhook empty
+- ~~No first-run onboarding~~ — fixed: welcome state with guidance on first launch (schema v3)
+- ~~`githubRepo` is placeholder~~ — fixed: set to `termenescu97/video-pipeline`
 
 Full report: `specs/006-review-findings/review-report-v2.md`
 
@@ -180,5 +181,5 @@ git push origin v2.1.0
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/008-high-priority-qa-fixes/plan.md
+specs/009-product-gaps/plan.md
 <!-- SPECKIT END -->

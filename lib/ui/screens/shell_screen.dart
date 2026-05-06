@@ -67,6 +67,9 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
 
   Future<void> _gracefulShutdown() async {
     jobQueueService.stopProcessing();
+    logService.info('App closed');
+    await logService.close();
+    await instanceLock.release();
     await database.close();
     exit(0);
   }
