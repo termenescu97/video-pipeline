@@ -26,8 +26,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final settings = await settingsDao.getSettings();
-    _webhookController.text = settings.slackWebhookUrl;
-    setState(() => _checkUpdates = settings.checkUpdatesOnLaunch);
+    _webhookController.text = settings?.slackWebhookUrl ?? '';
+    setState(() => _checkUpdates = settings?.checkUpdatesOnLaunch ?? true);
   }
 
   @override

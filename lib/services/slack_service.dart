@@ -17,6 +17,7 @@ class SlackService {
 
   Future<String?> _getWebhookUrl() async {
     final settings = await _settingsDao.getSettings();
+    if (settings == null) return null;
     final url = settings.slackWebhookUrl;
     return url.isEmpty ? null : url;
   }

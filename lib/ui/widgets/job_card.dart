@@ -10,8 +10,9 @@ class JobCard extends StatelessWidget {
   final Job job;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
+  final VoidCallback? onRetry;
 
-  const JobCard({super.key, required this.job, this.onTap, this.onDelete});
+  const JobCard({super.key, required this.job, this.onTap, this.onDelete, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -78,6 +79,7 @@ class JobCard extends StatelessWidget {
     ).then((value) {
       if (value == 'details') onTap?.call();
       if (value == 'delete') onDelete?.call();
+      if (value == 'retry') onRetry?.call();
     });
   }
 

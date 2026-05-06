@@ -91,9 +91,10 @@ lib/
 | 004 - Core UX Improvements | `004-core-ux-improvements` | 42/42 | ✅ Complete |
 | 005 - Polish & Code Quality | `005-polish-code-quality` | 29/29 | ✅ Complete |
 | 007 - Critical Bug Fixes (v2) | `007-critical-bug-fixes` | 10/10 | ✅ Complete |
+| 008 - High-Priority QA Fixes | `008-high-priority-qa-fixes` | 14/14 | ✅ Complete |
 
 **Latest release**: v2.0.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 152
+**Total tasks implemented**: 166
 
 ### What Works
 
@@ -128,15 +129,22 @@ lib/
 5. ~~`DropdownButtonFormField.initialValue` compile error~~ — false positive: `initialValue` is correct in Flutter 3.41.9
 6. ~~`createBatchTransferJobs` parameter is `List<dynamic>`~~ — fixed: typed as `List<DetectedDrive>`
 
-**High (should fix)**:
+**High (fixed in 008-high-priority-qa-fixes)**:
+- ~~startProcessing() race condition~~ — false positive: Dart's single-threaded event loop makes the guard correct
+- ~~Chained compression job missing totalFiles/totalBytes~~ — fixed: updateJobTotals called after insert
+- ~~Compression preset not validated in `_canCreate()`~~ — fixed: preset null check added
+- ~~Reorder indices mismatch between filtered list and DAO~~ — fixed: reorder by job ID instead of index
+- ~~Retry doesn't reset completedFiles/completedBytes~~ — fixed: counters reset to 0
+- ~~Context menu "Retry" has no handler~~ — fixed: onRetry callback added to JobCard
+- ~~watchSettings()/getSettings() crash if settings row missing~~ — fixed: null-safe with defaults
+- ~~No filesystem error handling in listVideoFiles~~ — fixed: try/catch with blocking dialog for skipped paths
+
+**High (remaining — deferred to 009-product-gaps)**:
 - Progress bar ETA/speed/filename never wired from services to UI
 - No persistent log file
 - No single-instance lock
 - No Slack webhook unconfigured banner
 - No first-run onboarding
-- Compression preset not validated in `_canCreate()`
-- Reorder indices mismatch between filtered list and DAO
-- Chained compression job missing totalFiles/totalBytes
 - `githubRepo` constant is placeholder `'YOUR_ORG/video-pipeline'`
 
 Full report: `specs/006-review-findings/review-report-v2.md`
@@ -172,5 +180,5 @@ git push origin v2.1.0
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/007-critical-bug-fixes/plan.md
+specs/008-high-priority-qa-fixes/plan.md
 <!-- SPECKIT END -->

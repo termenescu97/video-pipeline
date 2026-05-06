@@ -393,6 +393,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         _compressionOutputPath == null) {
       return false;
     }
+    if (_jobType != JobType.transfer && _selectedPreset == null) return false;
     return true;
   }
 
@@ -417,7 +418,40 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         : _selectedDrive!.path;
 
     // Enumerate video files from source.
-    final videoFiles = await driveService.listVideoFiles(sourcePath);
+    final scanResult = await driveService.listVideoFiles(sourcePath);
+    final videoFiles = scanResult.files;
+
+    // Show skipped paths dialog if any errors occurred.
+    if (scanResult.skippedPaths.isNotEmpty && mounted) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Some paths were inaccessible'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('The following paths could not be scanned:'),
+                const SizedBox(height: 8),
+                ...scanResult.skippedPaths.map((path) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text('• $path',
+                          style: const TextStyle(fontSize: 13)),
+                    )),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (videoFiles.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

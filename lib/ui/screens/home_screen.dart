@@ -117,7 +117,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: activeJobs.length,
                     onReorder: (oldIndex, newIndex) {
                       if (newIndex > oldIndex) newIndex--;
-                      jobDao.reorderJobs(oldIndex, newIndex);
+                      jobDao.reorderJobs(
+                        activeJobs[oldIndex].id,
+                        activeJobs[newIndex].id,
+                      );
                     },
                     itemBuilder: (context, index) {
                       final job = activeJobs[index];
@@ -128,6 +131,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           job: job,
                           onTap: () => _onJobTap(job),
                           onDelete: () => _deleteJob(job),
+                          onRetry: job.status == JobStatus.failed
+                              ? () => _retryJob(job)
+                              : null,
                         ),
                       );
                     },
@@ -152,6 +158,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             job: job,
                             onTap: () => _onJobTap(job),
                             onDelete: () => _deleteJob(job),
+                            onRetry: job.status == JobStatus.failed
+                                ? () => _retryJob(job)
+                                : null,
                           );
                         },
                         childCount: historyJobs.length,
@@ -213,6 +222,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed) {
       await jobDao.deleteJob(job.id);
+    }
+  }
+
+  Future<void> _retryJob(Job job) async {
+    await jobDao.resetJobForRetry(job.id);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Job re-queued for retry')),
+      );
     }
   }
 

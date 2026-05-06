@@ -10,14 +10,14 @@ class SettingsDao extends DatabaseAccessor<AppDatabase>
     with _$SettingsDaoMixin {
   SettingsDao(super.db);
 
-  /// Watch the settings (singleton row).
-  Stream<AppSetting> watchSettings() {
-    return select(appSettings).watchSingle();
+  /// Watch the settings (singleton row). Returns null if no row exists.
+  Stream<AppSetting?> watchSettings() {
+    return select(appSettings).watchSingleOrNull();
   }
 
-  /// Get current settings.
-  Future<AppSetting> getSettings() {
-    return select(appSettings).getSingle();
+  /// Get current settings. Returns null if no row exists.
+  Future<AppSetting?> getSettings() {
+    return select(appSettings).getSingleOrNull();
   }
 
   /// Update Slack webhook URL.

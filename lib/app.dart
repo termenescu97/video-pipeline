@@ -22,7 +22,7 @@ class _VideoPipelineAppState extends State<VideoPipelineApp> {
   Future<void> _checkForUpdates() async {
     try {
       final settings = await settingsDao.getSettings();
-      if (!settings.checkUpdatesOnLaunch) return;
+      if (settings == null || !settings.checkUpdatesOnLaunch) return;
 
       final updateService = UpdateService();
       final result = await updateService.checkForUpdate();

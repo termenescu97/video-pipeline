@@ -330,5 +330,11 @@ class JobQueueService {
         .toList();
 
     await _jobFileDao.insertFiles(compressionFiles);
+
+    final totalBytes = compressionFiles.fold<int>(
+      0,
+      (sum, f) => sum + f.fileSize.value,
+    );
+    await _jobDao.updateJobTotals(jobId, compressionFiles.length, totalBytes);
   }
 }

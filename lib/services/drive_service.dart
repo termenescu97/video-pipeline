@@ -71,20 +71,29 @@ class DriveService {
   }
 
   /// List video files (.mov, .mp4) on a drive.
-  Future<List<FileSystemEntity>> listVideoFiles(String drivePath) async {
+  /// Returns found files and any paths that were skipped due to errors.
+  Future<({List<FileSystemEntity> files, List<String> skippedPaths})>
+      listVideoFiles(String drivePath) async {
     final dir = Directory(drivePath);
-    if (!await dir.exists()) return [];
+    if (!await dir.exists()) {
+      return (files: <FileSystemEntity>[], skippedPaths: <String>[]);
+    }
 
     final files = <FileSystemEntity>[];
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is File) {
-        final ext = p.extension(entity.path).toLowerCase();
-        if (videoExtensions.contains(ext)) {
-          files.add(entity);
+    final skippedPaths = <String>[];
+    try {
+      await for (final entity in dir.list(recursive: true)) {
+        if (entity is File) {
+          final ext = p.extension(entity.path).toLowerCase();
+          if (videoExtensions.contains(ext)) {
+            files.add(entity);
+          }
         }
       }
+    } on FileSystemException catch (e) {
+      skippedPaths.add(e.path ?? drivePath);
     }
-    return files;
+    return (files: files, skippedPaths: skippedPaths);
   }
 
   /// Get free space in bytes for a given path's drive.

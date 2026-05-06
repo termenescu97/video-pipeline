@@ -19,30 +19,19 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         .watch();
   }
 
-  /// Reorder jobs by updating their sortOrder values.
-  Future<void> reorderJobs(int oldIndex, int newIndex) async {
-    final allJobs = await (select(jobs)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.sortOrder),
-            (t) => OrderingTerm.asc(t.createdAt),
-          ]))
-        .get();
+  /// Reorder jobs by swapping sortOrder values between two jobs identified by ID.
+  Future<void> reorderJobs(int movedJobId, int targetJobId) async {
+    if (movedJobId == targetJobId) return;
 
-    if (oldIndex < 0 ||
-        oldIndex >= allJobs.length ||
-        newIndex < 0 ||
-        newIndex >= allJobs.length) {
-      return;
-    }
-
-    final movedJob = allJobs.removeAt(oldIndex);
-    allJobs.insert(newIndex, movedJob);
+    final movedJob = await getJob(movedJobId);
+    final targetJob = await getJob(targetJobId);
+    if (movedJob == null || targetJob == null) return;
 
     await transaction(() async {
-      for (var i = 0; i < allJobs.length; i++) {
-        await (update(jobs)..where((t) => t.id.equals(allJobs[i].id)))
-            .write(JobsCompanion(sortOrder: Value(i)));
-      }
+      await (update(jobs)..where((t) => t.id.equals(movedJobId)))
+          .write(JobsCompanion(sortOrder: Value(targetJob.sortOrder)));
+      await (update(jobs)..where((t) => t.id.equals(targetJobId)))
+          .write(JobsCompanion(sortOrder: Value(movedJob.sortOrder)));
     });
   }
 
@@ -164,6 +153,8 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           status: Value(JobStatus.queued),
           errorMessage: Value(null),
           completedAt: Value(null),
+          completedFiles: Value(0),
+          completedBytes: Value(0),
         ),
       );
       // Reset failed files to pending.
