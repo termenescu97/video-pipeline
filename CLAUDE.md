@@ -95,9 +95,10 @@ lib/
 | 009 - Product Gaps | `009-product-gaps` | 21/21 | ✅ Complete |
 | 010 - Medium Fixes | `010-medium-fixes` | 21/21 | ✅ Complete |
 | 011 - SHA-256 Verification | `011-sha256-verification` | 19/19 | ✅ Complete |
+| 012 - Test Card Prep | `012-test-card-prep` | 4/4 | ✅ Complete |
 
 **Latest release**: v2.1.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 227
+**Total tasks implemented**: 231
 
 ### What Works
 
@@ -198,5 +199,5 @@ git push origin v2.1.0
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/011-sha256-verification/plan.md
+specs/012-test-card-prep/plan.md
 <!-- SPECKIT END -->
