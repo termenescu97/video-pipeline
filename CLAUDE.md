@@ -138,7 +138,7 @@ lib/
 - Chained compression job missing totalFiles/totalBytes
 - `githubRepo` constant is placeholder `'YOUR_ORG/video-pipeline'`
 
-Full report: `specs/005-polish-code-quality/review-report-v2.md`
+Full report: `specs/006-review-findings/review-report-v2.md`
 
 ### v3.0 Roadmap (from PM review)
 
@@ -164,7 +164,7 @@ git push origin v2.1.0
 ## Key Files for Context
 
 - `.specify/memory/constitution.md` — project principles (6 rules)
-- `specs/005-polish-code-quality/review-report-v2.md` — latest review (30 issues + roadmap)
+- `specs/006-review-findings/review-report-v2.md` — latest review (30 issues + roadmap)
 - `specs/001-video-pipeline-automation/spec.md` — original feature spec
 - `specs/001-video-pipeline-automation/plan.md` — original architecture plan
 
