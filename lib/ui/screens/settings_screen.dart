@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
+import '../widgets/confirmation_dialog.dart';
 
 /// App settings screen — Slack webhook URL, update preferences.
 class SettingsScreen extends StatefulWidget {
@@ -110,8 +113,104 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 settingsDao.setCheckUpdatesOnLaunch(value);
               },
             ),
+            if (Platform.isWindows) ...[
+              const SizedBox(height: 32),
+              Text('Testing',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              FilledButton.tonal(
+                onPressed: _prepTestCards,
+                child: const Text('Prep Test Cards'),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  'Copy test video files to all inserted SD cards',
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _prepTestCards() async {
+    // Detect drives.
+    final drives = await driveService.getRemovableDrives();
+    if (drives.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No removable drives detected')),
+        );
+      }
+      return;
+    }
+
+    // Confirm before proceeding (Constitution I — destructive action).
+    if (mounted) {
+      final confirmed = await ConfirmationDialog.show(
+        context: context,
+        title: 'Prep Test Cards',
+        message: 'This will create DCIM/100TEST/ on ${drives.length} card(s) '
+            'with test video files.\n\n'
+            'Existing DCIM/100TEST/ folders will be replaced.\n'
+            'Other files on the cards will NOT be affected.',
+        confirmLabel: 'Prep Cards',
+      );
+      if (!confirmed) return;
+    }
+
+    // Pick source folder.
+    final sourceFolder = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select folder with test video files',
+    );
+    if (sourceFolder == null) return;
+
+    // Run prep.
+    final result = await driveService.prepTestCards(sourceFolder, drives);
+
+    if (!mounted) return;
+
+    if (result.filesCopied == 0 && result.errors.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No video files (.MOV, .MP4) found in the selected folder'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Show results.
+    final filesPerCard = drives.isNotEmpty && result.cardsPrepped > 0
+        ? result.filesCopied ~/ result.cardsPrepped
+        : 0;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Test Cards Prepped'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Prepped ${result.cardsPrepped} card(s) with $filesPerCard test file(s) each.'),
+            Text('Total files copied: ${result.filesCopied}'),
+            if (result.errors.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Text('Errors:', style: TextStyle(color: Colors.red)),
+              ...result.errors.map((e) => Text('• $e',
+                  style: const TextStyle(fontSize: 12, color: Colors.red))),
+            ],
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
       ),
     );
   }

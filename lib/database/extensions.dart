@@ -38,6 +38,19 @@ extension JobStatusX on JobStatus {
       };
 }
 
+/// Extension methods on VerificationMode for display.
+extension VerificationModeX on VerificationMode {
+  String get label => switch (this) {
+        VerificationMode.size => 'Quick (size)',
+        VerificationMode.sha256 => 'Full (SHA-256)',
+      };
+
+  IconData get icon => switch (this) {
+        VerificationMode.size => Icons.speed,
+        VerificationMode.sha256 => Icons.verified_user,
+      };
+}
+
 /// Extension methods on FileStatus for consistent icon display.
 extension FileStatusX on FileStatus {
   IconData get icon => switch (this) {

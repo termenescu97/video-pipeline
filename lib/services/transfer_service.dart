@@ -58,6 +58,27 @@ class TransferService {
     _fileStartTime = null;
   }
 
+  /// Compute SHA-256 hash of a file using PowerShell Get-FileHash.
+  /// Returns the hex hash string, or null on non-Windows / error.
+  Future<String?> computeFileHash(String filePath) async {
+    if (!Platform.isWindows) return null;
+
+    try {
+      final result = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
+        filePath,
+      ]);
+
+      if (result.exitCode != 0) return null;
+      final hash = result.stdout.toString().trim();
+      return hash.isNotEmpty ? hash : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Verify a transferred file by comparing file sizes.
   Future<bool> verifyTransfer({
     required String sourceFile,

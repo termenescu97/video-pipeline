@@ -185,22 +185,63 @@ class JobQueueService {
       progressNotifier.value = null;
 
       if (success) {
-        // Verify transfer by comparing file sizes.
-        final verified = await _transferService.verifyTransfer(
-          sourceFile: file.sourceFilePath,
-          destinationFile: file.destinationFilePath,
-        );
-        if (verified) {
-          await _jobFileDao.markFileCompleted(file.id, verified: true);
-          completedCount++;
-          _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
-        } else {
-          await _jobFileDao.markFileFailed(
-            file.id,
-            'Verification failed: size mismatch',
+        if (job.verificationMode == VerificationMode.sha256) {
+          // SHA-256 hash verification — parallel since source and dest are on different drives.
+          progressNotifier.value = ProgressData(
+            currentFileName: 'Verifying: computing hashes...',
           );
-          failedCount++;
-          _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
+          final results = await Future.wait([
+            _transferService.computeFileHash(file.sourceFilePath),
+            _transferService.computeFileHash(file.destinationFilePath),
+          ]);
+          final sourceHash = results[0];
+          final destHash = results[1];
+          progressNotifier.value = null;
+
+          await _jobFileDao.updateFileHashes(
+            file.id,
+            sourceHash: sourceHash,
+            destinationHash: destHash,
+          );
+
+          if (sourceHash == null || destHash == null) {
+            // Hash computation failed — not a mismatch, hashing itself broke.
+            await _jobFileDao.markFileFailed(
+              file.id,
+              'SHA-256 verification failed: could not compute hash',
+            );
+            failedCount++;
+            _logService?.error('Job #${job.id} file ${file.fileName} — SHA-256 hash computation failed: source=$sourceHash dest=$destHash');
+          } else if (sourceHash == destHash) {
+            await _jobFileDao.markFileCompleted(file.id, verified: true);
+            completedCount++;
+            _logService?.info('Job #${job.id} file ${file.fileName} — SHA-256 verified: source=$sourceHash dest=$destHash MATCH');
+          } else {
+            await _jobFileDao.markFileFailed(
+              file.id,
+              'SHA-256 hash mismatch',
+            );
+            failedCount++;
+            _logService?.warning('Job #${job.id} file ${file.fileName} — SHA-256 MISMATCH: source=$sourceHash dest=$destHash');
+          }
+        } else {
+          // Size-based verification (default).
+          final verified = await _transferService.verifyTransfer(
+            sourceFile: file.sourceFilePath,
+            destinationFile: file.destinationFilePath,
+          );
+          if (verified) {
+            await _jobFileDao.markFileCompleted(file.id, verified: true);
+            completedCount++;
+            _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
+          } else {
+            await _jobFileDao.markFileFailed(
+              file.id,
+              'Verification failed: size mismatch',
+            );
+            failedCount++;
+            _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
+          }
         }
         await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
       } else {
@@ -323,8 +364,9 @@ class JobQueueService {
   /// Returns the number of jobs created (skips drives with no video files).
   Future<({int created, int skipped})> createBatchTransferJobs(
     List<DetectedDrive> drives,
-    String destination,
-  ) async {
+    String destination, {
+    VerificationMode verificationMode = VerificationMode.size,
+  }) async {
     var created = 0;
     var skipped = 0;
 
@@ -350,6 +392,7 @@ class JobQueueService {
           status: JobStatus.queued,
           sourcePath: drivePath,
           destinationPath: destination,
+          verificationMode: Value(verificationMode),
           createdAt: DateTime.now(),
         ),
       );

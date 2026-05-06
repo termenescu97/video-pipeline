@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../database/database.dart';
 import '../database/daos/settings_dao.dart';
+import '../database/tables.dart';
 import '../main.dart' show logService;
 import '../utils/constants.dart';
 import '../utils/format_utils.dart';
@@ -73,7 +74,7 @@ class SlackService {
       'Files: $completedFiles/${job.totalFiles}\n'
       'Size: $totalGb\n'
       'Duration: $duration min\n'
-      'Verification: ${allVerified ? "Passed" : "FAILED — some files did not match"}',
+      'Verification: ${job.verificationMode == VerificationMode.sha256 ? "SHA-256" : "Size"} — ${allVerified ? "Passed" : "FAILED — some files did not match"}',
     );
   }
 

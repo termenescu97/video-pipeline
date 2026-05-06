@@ -154,4 +154,52 @@ class DriveService {
 
     return result.exitCode == 0;
   }
+
+  /// Prep test cards by copying test video files to DCIM/100TEST/ on each drive.
+  Future<({int cardsPrepped, int filesCopied, List<String> errors})>
+      prepTestCards(String sourceFolder, List<DetectedDrive> drives) async {
+    // Find video files in source folder.
+    final sourceDir = Directory(sourceFolder);
+    if (!await sourceDir.exists()) {
+      return (cardsPrepped: 0, filesCopied: 0, errors: ['Source folder not found: $sourceFolder']);
+    }
+
+    final testFiles = <File>[];
+    await for (final entity in sourceDir.list(recursive: true)) {
+      if (entity is File) {
+        final ext = p.extension(entity.path).toLowerCase();
+        if (videoExtensions.contains(ext)) {
+          testFiles.add(entity);
+        }
+      }
+    }
+
+    var cardsPrepped = 0;
+    var filesCopied = 0;
+    final errors = <String>[];
+
+    for (final drive in drives) {
+      try {
+        final testDir = Directory(p.join(drive.path, 'DCIM', '100TEST'));
+
+        // Clean existing test folder.
+        if (await testDir.exists()) {
+          await testDir.delete(recursive: true);
+        }
+        await testDir.create(recursive: true);
+
+        // Copy test files.
+        for (final file in testFiles) {
+          final destPath = p.join(testDir.path, p.basename(file.path));
+          await file.copy(destPath);
+          filesCopied++;
+        }
+        cardsPrepped++;
+      } catch (e) {
+        errors.add('${drive.label} (${drive.path}): $e');
+      }
+    }
+
+    return (cardsPrepped: cardsPrepped, filesCopied: filesCopied, errors: errors);
+  }
 }

@@ -21,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration {
@@ -45,6 +45,11 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(appSettings, appSettings.lastUsedOutput);
           await m.addColumn(appSettings, appSettings.operatorName);
           await m.addColumn(jobs, jobs.operatorName);
+        }
+        if (from < 5) {
+          await m.addColumn(jobs, jobs.verificationMode);
+          await m.addColumn(jobFiles, jobFiles.sourceHash);
+          await m.addColumn(jobFiles, jobFiles.destinationHash);
         }
       },
     );
