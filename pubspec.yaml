@@ -42,6 +42,9 @@ dependencies:
   # HTTP client (Slack webhooks, GitHub API)
   dio: ^5.0.0
 
+  # Native file/folder picker
+  file_picker: ^8.0.0
+
   # Path utilities
   path: ^1.0.0
   path_provider: ^2.0.0

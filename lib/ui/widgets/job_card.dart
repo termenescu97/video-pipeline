@@ -7,8 +7,9 @@ import '../../database/tables.dart';
 class JobCard extends StatelessWidget {
   final Job job;
   final VoidCallback? onTap;
+  final VoidCallback? onDelete;
 
-  const JobCard({super.key, required this.job, this.onTap});
+  const JobCard({super.key, required this.job, this.onTap, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +36,18 @@ class JobCard extends StatelessWidget {
             ],
           ],
         ),
-        trailing: _buildStatusBadge(context),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (onDelete != null && job.status != JobStatus.inProgress)
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 20),
+                onPressed: onDelete,
+                tooltip: 'Remove from queue',
+              ),
+            _buildStatusBadge(context),
+          ],
+        ),
         onTap: onTap,
         isThreeLine: true,
       ),

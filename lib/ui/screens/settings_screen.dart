@@ -17,6 +17,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final SlackService _slackService;
   final _webhookController = TextEditingController();
   bool _testingWebhook = false;
+  bool _checkUpdates = true;
 
   @override
   void initState() {
@@ -29,6 +30,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final settings = await _settingsDao.getSettings();
     _webhookController.text = settings.slackWebhookUrl;
+    setState(() => _checkUpdates = settings.checkUpdatesOnLaunch);
   }
 
   @override
@@ -70,6 +72,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Test Notification'),
+            ),
+            const SizedBox(height: 32),
+            Text('App Updates',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              title: const Text('Check for updates on launch'),
+              subtitle: const Text('Prompts when a new version is available'),
+              value: _checkUpdates,
+              onChanged: (value) {
+                setState(() => _checkUpdates = value);
+                _settingsDao.setCheckUpdatesOnLaunch(value);
+              },
             ),
           ],
         ),

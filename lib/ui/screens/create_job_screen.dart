@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart' hide Column;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
@@ -27,6 +28,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   List<DetectedDrive> _drives = [];
   List<String> _presets = [];
   DetectedDrive? _selectedDrive;
+  String? _sourcePath;
   String? _destinationPath;
   String? _compressionOutputPath;
   String? _selectedPreset;
@@ -121,12 +123,32 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               const SizedBox(height: 24),
             ],
 
-            // Destination folder.
-            Text('Destination', style: Theme.of(context).textTheme.titleMedium),
+            // Source folder (compression-only jobs).
+            if (_jobType == JobType.compression) ...[
+              Text('Input Folder',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              _buildFolderPicker(
+                currentPath: _sourcePath,
+                favoriteType: FavoritePathType.source,
+                onPathSelected: (path) {
+                  setState(() => _sourcePath = path);
+                },
+              ),
+              const SizedBox(height: 24),
+            ],
+
+            // Destination / output folder.
+            Text(
+              _jobType == JobType.compression ? 'Output Folder' : 'Destination',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 8),
             _buildFolderPicker(
               currentPath: _destinationPath,
-              favoriteType: FavoritePathType.destination,
+              favoriteType: _jobType == JobType.compression
+                  ? FavoritePathType.output
+                  : FavoritePathType.destination,
               onPathSelected: (path) {
                 setState(() => _destinationPath = path);
               },
@@ -134,7 +156,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
             const SizedBox(height: 24),
 
-            // Auto-chain option (for transfer jobs).
+            // Compression output (for transfer+compress jobs).
             if (_jobType == JobType.transferAndCompress) ...[
               Text('Compression Output',
                   style: Theme.of(context).textTheme.titleMedium),
@@ -261,34 +283,8 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   }
 
   Future<void> _pickFolder(ValueChanged<String> onSelected) async {
-    // On Windows, use a simple directory picker via PowerShell.
-    // In production, consider using file_picker package.
-    // For now, show a text input dialog.
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Enter folder path'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: r'E:\Videos\Raw',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Select'),
-          ),
-        ],
-      ),
-    );
-
-    if (result != null && result.isNotEmpty) {
+    final result = await FilePicker.platform.getDirectoryPath();
+    if (result != null) {
       onSelected(result);
     }
   }
@@ -330,7 +326,10 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   }
 
   bool _canCreate() {
-    if (_jobType != JobType.compression && _selectedDrive == null) return false;
+    if (_jobType == JobType.compression) {
+      return _sourcePath != null && _destinationPath != null;
+    }
+    if (_selectedDrive == null) return false;
     if (_destinationPath == null) return false;
     if (_jobType == JobType.transferAndCompress &&
         _compressionOutputPath == null) {
@@ -341,7 +340,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
   Future<void> _createJob() async {
     final sourcePath = _jobType == JobType.compression
-        ? _destinationPath! // For compression-only, "destination" is the input.
+        ? _sourcePath!
         : _selectedDrive!.path;
 
     await _jobDao.insertJob(
@@ -357,6 +356,6 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       ),
     );
 
-    if (mounted) Navigator.pop(context);
+    if (mounted) Navigator.pop(context, true);
   }
 }

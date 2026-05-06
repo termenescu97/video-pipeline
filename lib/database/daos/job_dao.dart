@@ -5,7 +5,7 @@ import '../tables.dart';
 
 part 'job_dao.g.dart';
 
-@DriftAccessor(tables: [Jobs])
+@DriftAccessor(tables: [Jobs, JobFiles])
 class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   JobDao(super.db);
 
@@ -90,5 +90,13 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// Get a single job by ID.
   Future<Job?> getJob(int jobId) {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
+  }
+
+  /// Delete a job and its associated files.
+  Future<void> deleteJob(int jobId) async {
+    await transaction(() async {
+      await (delete(db.jobFiles)..where((t) => t.jobId.equals(jobId))).go();
+      await (delete(jobs)..where((t) => t.id.equals(jobId))).go();
+    });
   }
 }
