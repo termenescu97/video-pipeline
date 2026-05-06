@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../database/database.dart';
 import '../database/daos/settings_dao.dart';
 import '../utils/constants.dart';
+import '../utils/format_utils.dart';
 
 /// Sends Slack notifications at pipeline phase transitions.
 /// Best-effort delivery — failures are logged but don't stop the pipeline.
@@ -39,13 +40,13 @@ class SlackService {
   }
 
   Future<void> notifyTransferStarted({required Job job}) async {
-    final totalGb = (job.totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
+    final totalGb = formatBytes(job.totalBytes);
     await _send(
       '📂 *Transfer Started*\n'
       'Job: ${job.id}\n'
       'Source: ${job.sourcePath}\n'
       'Destination: ${job.destinationPath}\n'
-      'Files: ${job.totalFiles} ($totalGb GB)',
+      'Files: ${job.totalFiles} ($totalGb)',
     );
   }
 
@@ -54,7 +55,7 @@ class SlackService {
     required int completedFiles,
     bool allVerified = true,
   }) async {
-    final totalGb = (job.totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
+    final totalGb = formatBytes(job.totalBytes);
     final duration = job.startedAt != null
         ? DateTime.now().difference(job.startedAt!).inMinutes
         : 0;
@@ -62,7 +63,7 @@ class SlackService {
       '✅ *Transfer Complete*\n'
       'Job: ${job.id}\n'
       'Files: $completedFiles/${job.totalFiles}\n'
-      'Size: $totalGb GB\n'
+      'Size: $totalGb\n'
       'Duration: $duration min\n'
       'Verification: ${allVerified ? "Passed" : "FAILED — some files did not match"}',
     );

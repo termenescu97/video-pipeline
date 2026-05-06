@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
+import '../utils/format_utils.dart';
 
 /// Represents a detected removable storage device.
 class DetectedDrive {
@@ -20,9 +21,7 @@ class DetectedDrive {
   });
 
   int get freeBytes => totalBytes - usedBytes;
-  String get displaySize =>
-      '${(usedBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} / '
-      '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  String get displaySize => '${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}';
 }
 
 /// Detects removable storage devices (SD cards) on Windows.
@@ -134,6 +133,9 @@ class DriveService {
   /// Erase all files on a drive. Requires explicit confirmation before calling.
   Future<bool> eraseDrive(String drivePath) async {
     if (!Platform.isWindows) return false;
+
+    // Validate drive path to prevent command injection.
+    if (!RegExp(r'^[A-Z]:\\$').hasMatch(drivePath)) return false;
 
     final result = await Process.run('powershell', [
       '-NoProfile',

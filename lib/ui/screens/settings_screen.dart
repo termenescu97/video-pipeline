@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
@@ -12,6 +14,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _webhookController = TextEditingController();
+  Timer? _debounceTimer;
   bool _testingWebhook = false;
   bool _checkUpdates = true;
 
@@ -29,6 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _webhookController.dispose();
     super.dispose();
   }
@@ -53,7 +57,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 border: OutlineInputBorder(),
               ),
               onChanged: (value) {
-                settingsDao.setSlackWebhookUrl(value);
+                _debounceTimer?.cancel();
+                _debounceTimer = Timer(
+                  const Duration(milliseconds: 500),
+                  () => settingsDao.setSlackWebhookUrl(value),
+                );
               },
             ),
             const SizedBox(height: 8),

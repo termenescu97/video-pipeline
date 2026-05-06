@@ -48,6 +48,9 @@ dependencies:
   # Window management (minimum size, title)
   window_manager: ^0.4.0
 
+  # System tray icon
+  tray_manager: ^0.2.0
+
   # Path utilities
   path: ^1.0.0
   path_provider: ^2.0.0

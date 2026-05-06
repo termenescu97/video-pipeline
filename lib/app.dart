@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'database/daos/settings_dao.dart';
 import 'main.dart';
 import 'services/update_service.dart';
 import 'ui/theme/app_theme.dart';
@@ -21,16 +20,19 @@ class _VideoPipelineAppState extends State<VideoPipelineApp> {
   }
 
   Future<void> _checkForUpdates() async {
-    final settingsDao = SettingsDao(database);
-    final settings = await settingsDao.getSettings();
-    if (!settings.checkUpdatesOnLaunch) return;
+    try {
+      final settings = await settingsDao.getSettings();
+      if (!settings.checkUpdatesOnLaunch) return;
 
-    final updateService = UpdateService();
-    final result = await updateService.checkForUpdate();
+      final updateService = UpdateService();
+      final result = await updateService.checkForUpdate();
 
-    if (result.updateAvailable && mounted) {
-      await settingsDao.setLastUpdateCheck(DateTime.now());
-      _showUpdateDialog(result);
+      if (result.updateAvailable && mounted) {
+        await settingsDao.setLastUpdateCheck(DateTime.now());
+        _showUpdateDialog(result);
+      }
+    } catch (_) {
+      // Non-critical — app continues normally if update check fails.
     }
   }
 

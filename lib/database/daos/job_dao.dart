@@ -20,6 +20,12 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.status.equalsValue(status))).watch();
   }
 
+  /// Watch a single job by ID (efficient).
+  Stream<Job?> watchJob(int jobId) {
+    return (select(jobs)..where((t) => t.id.equals(jobId)))
+        .watchSingleOrNull();
+  }
+
   /// Get the next queued or paused job (first in queue).
   Future<Job?> getNextQueuedJob() {
     return (select(jobs)

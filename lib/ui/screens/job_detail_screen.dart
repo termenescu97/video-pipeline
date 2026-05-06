@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
+import '../../database/extensions.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../utils/error_mapper.dart';
@@ -22,9 +23,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Job?>(
-        stream: jobDao.watchAllJobs().map(
-              (jobs) => jobs.where((j) => j.id == widget.jobId).firstOrNull,
-            ),
+        stream: jobDao.watchJob(widget.jobId),
         builder: (context, jobSnapshot) {
           final job = jobSnapshot.data;
           if (job == null) {
@@ -44,11 +43,11 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _jobTypeLabel(job.type),
+                          job.type.label,
                           style: Theme.of(context).textTheme.headlineSmall,
                         ),
                         const SizedBox(height: 8),
-                        _infoRow('Status', _statusLabel(job.status)),
+                        _infoRow('Status', job.status.label),
                         _infoRow('Source', job.sourcePath),
                         _infoRow('Destination', job.destinationPath),
                         if (job.presetName != null)
@@ -117,7 +116,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                     progress: job.totalFiles > 0
                         ? job.completedFiles / job.totalFiles
                         : 0,
-                    label: _jobTypeLabel(job.type),
+                    label: job.type.label,
                     completedFiles: job.completedFiles,
                     totalFiles: job.totalFiles,
                   ),
@@ -228,14 +227,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   }
 
   Widget _fileStatusIcon(FileStatus status) {
-    return switch (status) {
-      FileStatus.pending => const Icon(Icons.schedule, color: Colors.grey),
-      FileStatus.inProgress => const Icon(Icons.sync, color: Colors.blue),
-      FileStatus.completed =>
-        const Icon(Icons.check_circle, color: Colors.green),
-      FileStatus.failed => const Icon(Icons.error, color: Colors.red),
-      FileStatus.skipped => const Icon(Icons.skip_next, color: Colors.orange),
-    };
+    return Icon(status.icon, color: status.color);
   }
 
   Future<void> _retryJob(int jobId) async {
@@ -284,17 +276,4 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     }
   }
 
-  String _jobTypeLabel(JobType type) => switch (type) {
-        JobType.transfer => 'Transfer',
-        JobType.compression => 'Compression',
-        JobType.transferAndCompress => 'Transfer + Compress',
-      };
-
-  String _statusLabel(JobStatus status) => switch (status) {
-        JobStatus.queued => 'Queued',
-        JobStatus.inProgress => 'In Progress',
-        JobStatus.completed => 'Completed',
-        JobStatus.failed => 'Failed',
-        JobStatus.paused => 'Paused',
-      };
 }

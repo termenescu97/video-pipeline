@@ -51,6 +51,16 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       _drives = drives;
       _loading = false;
     });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(drives.isEmpty
+              ? 'No removable drives found'
+              : 'Found ${drives.length} drive${drives.length == 1 ? '' : 's'}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _loadPresets() async {
@@ -123,7 +133,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 ),
                 ButtonSegment(
                   value: JobType.transferAndCompress,
-                  label: Text('Both'),
+                  label: Text('Copy & Compress'),
                   icon: Icon(Icons.sync),
                 ),
               ],

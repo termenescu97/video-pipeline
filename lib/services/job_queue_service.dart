@@ -8,6 +8,7 @@ import '../database/database.dart';
 import '../database/daos/job_dao.dart';
 import '../database/daos/job_file_dao.dart';
 import '../database/tables.dart';
+import '../utils/constants.dart';
 import 'slack_service.dart';
 import 'transfer_service.dart';
 import 'compression_service.dart';
@@ -248,7 +249,7 @@ class JobQueueService {
           .where((e) => e is File)
           .where((e) {
             final ext = p.extension(e.path).toLowerCase();
-            return ['.mov', '.mp4'].contains(ext);
+            return videoExtensions.contains(ext);
           })
           .toList();
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../../database/database.dart';
+import '../../database/extensions.dart';
 import '../../database/tables.dart';
 
 /// Displays a job's status in the queue.
@@ -14,8 +15,11 @@ class JobCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
+    return GestureDetector(
+      onSecondaryTapDown: (details) =>
+          _showContextMenu(context, details.globalPosition),
+      child: Card(
+        child: ListTile(
         leading: _buildStatusIcon(),
         title: Text(_jobTitle()),
         subtitle: Column(
@@ -55,7 +59,26 @@ class JobCard extends StatelessWidget {
         onTap: onTap,
         isThreeLine: true,
       ),
+      ),
     );
+  }
+
+  void _showContextMenu(BuildContext context, Offset position) {
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+          position.dx, position.dy, position.dx, position.dy),
+      items: [
+        const PopupMenuItem(value: 'details', child: Text('View Details')),
+        if (job.status != JobStatus.inProgress)
+          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+        if (job.status == JobStatus.failed)
+          const PopupMenuItem(value: 'retry', child: Text('Retry')),
+      ],
+    ).then((value) {
+      if (value == 'details') onTap?.call();
+      if (value == 'delete') onDelete?.call();
+    });
   }
 
   Widget _buildStatusIcon() {
@@ -70,29 +93,15 @@ class JobCard extends StatelessWidget {
   }
 
   Widget _buildStatusBadge(BuildContext context) {
-    final (color, label) = switch (job.status) {
-      JobStatus.queued => (Colors.grey, 'Queued'),
-      JobStatus.inProgress => (Colors.blue, 'Running'),
-      JobStatus.completed => (Colors.green, 'Done'),
-      JobStatus.failed => (Colors.red, 'Failed'),
-      JobStatus.paused => (Colors.orange, 'Paused'),
-    };
-
     return Chip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      backgroundColor: color.withValues(alpha: 0.15),
+      label: Text(job.status.label, style: const TextStyle(fontSize: 11)),
+      backgroundColor: job.status.color.withValues(alpha: 0.15),
       side: BorderSide.none,
       padding: EdgeInsets.zero,
     );
   }
 
-  String _jobTitle() {
-    return switch (job.type) {
-      JobType.transfer => 'Transfer',
-      JobType.compression => 'Compression',
-      JobType.transferAndCompress => 'Transfer + Compress',
-    };
-  }
+  String _jobTitle() => job.type.label;
 
   String _jobSubtitle() {
     final src = p.basename(job.sourcePath.replaceAll(RegExp(r'[/\\]$'), ''));
