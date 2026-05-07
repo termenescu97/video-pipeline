@@ -21,26 +21,20 @@ import 'job_card_done.dart';
 /// The CSV export is shared with the Ctrl+E shortcut (US11 T097) via
 /// `lib/utils/history_export.dart`, so the button and the shortcut both
 /// invoke the same flow.
-class ActivityPanel extends StatefulWidget {
-  const ActivityPanel({super.key});
+class ActivityPanel extends StatelessWidget {
+  /// Shared expansion set — owned by the shell (Phase 7 fix-commit).
+  /// Same set is passed to HomeScreen, so a job's expansion state
+  /// survives the queue → history transition.
+  final Set<int> expandedJobIds;
+  final ValueChanged<int> onToggleExpanded;
+  final ValueChanged<int> onJobDeleted;
 
-  @override
-  State<ActivityPanel> createState() => _ActivityPanelState();
-}
-
-class _ActivityPanelState extends State<ActivityPanel> {
-  /// Job IDs in this panel whose inline DetailTabs are expanded.
-  /// Owned independently from HomeScreen's expanded set (T050) so
-  /// expanding history rows does not affect the queue panel.
-  final Set<int> _expandedJobIds = <int>{};
-
-  void _toggleExpanded(int jobId) {
-    setState(() {
-      if (!_expandedJobIds.add(jobId)) {
-        _expandedJobIds.remove(jobId);
-      }
-    });
-  }
+  const ActivityPanel({
+    super.key,
+    required this.expandedJobIds,
+    required this.onToggleExpanded,
+    required this.onJobDeleted,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -86,8 +80,9 @@ class _ActivityPanelState extends State<ActivityPanel> {
                 }
                 return _GroupedHistoryList(
                   jobs: jobs,
-                  expandedJobIds: _expandedJobIds,
-                  onToggleExpanded: _toggleExpanded,
+                  expandedJobIds: expandedJobIds,
+                  onToggleExpanded: onToggleExpanded,
+                  onJobDeleted: onJobDeleted,
                 );
               },
             ),
@@ -113,11 +108,13 @@ class _GroupedHistoryList extends StatelessWidget {
   final List<Job> jobs;
   final Set<int> expandedJobIds;
   final ValueChanged<int> onToggleExpanded;
+  final ValueChanged<int> onJobDeleted;
 
   const _GroupedHistoryList({
     required this.jobs,
     required this.expandedJobIds,
     required this.onToggleExpanded,
+    required this.onJobDeleted,
   });
 
   @override
@@ -173,6 +170,7 @@ class _GroupedHistoryList extends StatelessWidget {
     );
     if (confirmed) {
       await jobDao.deleteJob(job.id);
+      onJobDeleted(job.id);
     }
   }
 

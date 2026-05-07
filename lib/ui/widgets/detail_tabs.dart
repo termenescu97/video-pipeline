@@ -13,6 +13,10 @@ import 'files_tab.dart';
 /// The Errors tab label shows "Errors (N)" including "(0)" when empty so
 /// operators can scan-confirm "no errors" without clicking.
 ///
+/// Owns a SINGLE `watchFilesForJob` subscription and passes the resolved
+/// `List<JobFile>` to each tab — avoids duplicate streams across the three
+/// tab views (review-fix from Phase 7's Codex review).
+///
 /// Variant policy:
 ///   - Active / Queued / Next-up cards open with the Files tab selected.
 ///   - Done cards open with the Audit tab selected (history-friendly).
@@ -68,9 +72,9 @@ class DetailTabs extends StatelessWidget {
               Expanded(
                 child: TabBarView(
                   children: [
-                    FilesTab(jobId: job.id),
-                    AuditTab(job: job),
-                    ErrorsTab(jobId: job.id),
+                    FilesTab(files: files),
+                    AuditTab(job: job, files: files),
+                    ErrorsTab(files: files),
                   ],
                 ),
               ),

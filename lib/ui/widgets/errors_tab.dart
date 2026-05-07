@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
 import '../../database/tables.dart';
-import '../../main.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
@@ -10,24 +9,22 @@ import '../theme/text_styles.dart';
 
 /// Errors tab inside DetailTabs (Phase F). Always visible (FR-014); the
 /// label shows "(0)" when empty so the operator can scan and confirm
-/// "no errors" without clicking.
+/// "no errors" without clicking. Files come from the parent's single
+/// subscription (Phase 7 fix-commit refactor).
 class ErrorsTab extends StatelessWidget {
-  final int jobId;
+  final List<JobFile> files;
 
-  const ErrorsTab({super.key, required this.jobId});
+  const ErrorsTab({super.key, required this.files});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final statusColors = Theme.of(context).extension<StatusColors>()!;
+    final failed =
+        files.where((f) => f.status == FileStatus.failed).toList();
 
-    return StreamBuilder<List<JobFile>>(
-      stream: jobFileDao.watchFilesForJob(jobId),
-      builder: (context, snapshot) {
-        final files = snapshot.data ?? const <JobFile>[];
-        final failed =
-            files.where((f) => f.status == FileStatus.failed).toList();
-
+    return Builder(
+      builder: (context) {
         if (failed.isEmpty) {
           return Center(
             child: Padding(
@@ -107,3 +104,4 @@ class ErrorsTab extends StatelessWidget {
     );
   }
 }
+

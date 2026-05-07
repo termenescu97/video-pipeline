@@ -160,7 +160,11 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 360,
-                  child: FilesTab(jobId: widget.jobId),
+                  child: StreamBuilder<List<JobFile>>(
+                    stream: jobFileDao.watchFilesForJob(widget.jobId),
+                    builder: (context, fs) =>
+                        FilesTab(files: fs.data ?? const <JobFile>[]),
+                  ),
                 ),
 
                 const SizedBox(height: 24),

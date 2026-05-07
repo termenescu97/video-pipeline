@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import '../../database/database.dart';
 import '../../database/extensions.dart';
 import '../../database/tables.dart';
-import '../../main.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
@@ -20,10 +19,14 @@ import '../theme/text_styles.dart';
 ///   [status icon]  filename (middle-ellipsis)  size  [✓ matches]?
 ///
 /// Tapping the "✓ matches" badge opens the hash popover (T041).
+///
+/// **Files** is supplied by the parent (DetailTabs in Phase 7's review-fix
+/// commit), avoiding redundant `watchFilesForJob` subscriptions across
+/// multiple tabs of the same expanded card.
 class FilesTab extends StatefulWidget {
-  final int jobId;
+  final List<JobFile> files;
 
-  const FilesTab({super.key, required this.jobId});
+  const FilesTab({super.key, required this.files});
 
   @override
   State<FilesTab> createState() => _FilesTabState();
@@ -35,30 +38,25 @@ class _FilesTabState extends State<FilesTab> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<JobFile>>(
-      stream: jobFileDao.watchFilesForJob(widget.jobId),
-      builder: (context, snapshot) {
-        final all = snapshot.data ?? const <JobFile>[];
-        final files = _filter == null
-            ? all
-            : all.where((f) => f.status == _filter).toList();
+    final all = widget.files;
+    final files = _filter == null
+        ? all
+        : all.where((f) => f.status == _filter).toList();
 
-        // index 0 = filter chip header; rest = file rows.
-        return ListView.builder(
-          padding: EdgeInsets.zero,
-          itemCount: files.length + 1,
-          itemBuilder: (context, index) {
-            if (index == 0) {
-              return _FilterChipRow(
-                all: all,
-                selected: _filter,
-                onSelected: (s) => setState(() => _filter = s),
-              );
-            }
-            final file = files[index - 1];
-            return _FileRow(file: file);
-          },
-        );
+    // index 0 = filter chip header; rest = file rows.
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      itemCount: files.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return _FilterChipRow(
+            all: all,
+            selected: _filter,
+            onSelected: (s) => setState(() => _filter = s),
+          );
+        }
+        final file = files[index - 1];
+        return _FileRow(file: file);
       },
     );
   }

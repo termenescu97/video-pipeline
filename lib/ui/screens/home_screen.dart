@@ -12,32 +12,34 @@ import 'settings_screen.dart';
 
 /// Queue list panel — can be used standalone or as left panel in ShellScreen.
 class HomeScreen extends StatefulWidget {
-  /// Callbacks for master-detail mode (when embedded in ShellScreen).
-  final ValueChanged<int>? onJobSelected;
+  /// Shared expansion set — owned by the shell. Reading is OK; toggling
+  /// goes through [onToggleExpanded] so the shell can notify all listeners.
+  final Set<int>? expandedJobIds;
+  final ValueChanged<int>? onToggleExpanded;
+
+  /// Notifies the shell when a job is deleted so the expansion set can
+  /// drop its ID (prevents unbounded set growth).
+  final ValueChanged<int>? onJobDeleted;
+
+  /// Callback for embedded mode (ShellScreen).
   final VoidCallback? onCreateJob;
 
-  const HomeScreen({super.key, this.onJobSelected, this.onCreateJob});
+  const HomeScreen({
+    super.key,
+    this.expandedJobIds,
+    this.onToggleExpanded,
+    this.onJobDeleted,
+    this.onCreateJob,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool get _isEmbedded => widget.onJobSelected != null;
+  bool get _isEmbedded => widget.onCreateJob != null;
 
-  /// Job IDs whose inline DetailTabs panel is currently expanded.
-  /// Multiple cards may be expanded simultaneously (T050). Cleared
-  /// when the operator collapses a card explicitly. Owned here at
-  /// the panel level so reorders / queue updates don't reset it.
-  final Set<int> _expandedJobIds = <int>{};
-
-  void _toggleExpanded(int jobId) {
-    setState(() {
-      if (!_expandedJobIds.add(jobId)) {
-        _expandedJobIds.remove(jobId);
-      }
-    });
-  }
+  Set<int> get _expandedJobIds => widget.expandedJobIds ?? const <int>{};
 
   @override
   Widget build(BuildContext context) {
@@ -250,6 +252,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: activeJobs.length,
                     onReorder: (oldIndex, newIndex) {
                       if (newIndex > oldIndex) newIndex--;
+                      // FR-006: refuse moves that try to insert anything
+                      // into the active job's slot. The active job is
+                      // positionally fixed; queued/next-up may shuffle
+                      // among themselves below it.
+                      final activeIdx = activeJobs.indexWhere(
+                          (j) => j.status == JobStatus.inProgress);
+                      if (activeIdx != -1 && newIndex <= activeIdx) {
+                        return;
+                      }
                       jobDao.reorderJobs(
                         activeJobs[oldIndex].id,
                         activeJobs[newIndex].id,
@@ -257,19 +268,32 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     itemBuilder: (context, index) {
                       final job = activeJobs[index];
+                      final card = JobCard(
+                        job: job,
+                        isNextUp: index == nextUpIndex,
+                        isExpanded: _expandedJobIds.contains(job.id),
+                        onTap: () => widget.onToggleExpanded?.call(job.id),
+                        onDelete: () => _deleteJob(job),
+                        onRetry: job.status == JobStatus.failed
+                            ? () => _retryJob(job)
+                            : null,
+                      );
+                      // FR-006: only Active is positionally fixed.
+                      // Wrap others in ReorderableDragStartListener so they
+                      // can be dragged; leave inProgress as a plain keyed
+                      // child so it cannot be moved. Reorder targets that
+                      // would land at index 0 (the active slot) are
+                      // additionally rejected in onReorder above.
+                      if (job.status == JobStatus.inProgress) {
+                        return KeyedSubtree(
+                          key: ValueKey(job.id),
+                          child: card,
+                        );
+                      }
                       return ReorderableDragStartListener(
                         key: ValueKey(job.id),
                         index: index,
-                        child: JobCard(
-                          job: job,
-                          isNextUp: index == nextUpIndex,
-                          isExpanded: _expandedJobIds.contains(job.id),
-                          onTap: () => _toggleExpanded(job.id),
-                          onDelete: () => _deleteJob(job),
-                          onRetry: job.status == JobStatus.failed
-                              ? () => _retryJob(job)
-                              : null,
-                        ),
+                        child: card,
                       );
                     },
                   ),
@@ -321,6 +345,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed) {
       await jobDao.deleteJob(job.id);
+      widget.onJobDeleted?.call(job.id);
     }
   }
 

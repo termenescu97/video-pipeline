@@ -32,6 +32,29 @@ class _ShellScreenState extends State<ShellScreen>
   // dismisses or another panel state takes over.
   DetectedDrive? _preSelectedDrive;
 
+  /// Shared expansion state. Lifted to the shell so a job whose card
+  /// migrates between panels (queued → completed → moves to Activity)
+  /// keeps its expansion state — fixes a Principle V regression Codex
+  /// flagged in the Phase 7 review. Both HomeScreen and ActivityPanel
+  /// read from / write to the same set.
+  final Set<int> _expandedJobIds = <int>{};
+
+  void _toggleExpanded(int jobId) {
+    setState(() {
+      if (!_expandedJobIds.add(jobId)) {
+        _expandedJobIds.remove(jobId);
+      }
+    });
+  }
+
+  void _onJobDeleted(int jobId) {
+    if (_expandedJobIds.remove(jobId)) {
+      // Removed from expansion set on delete — prevents the set from
+      // growing unbounded over the app's lifetime.
+      setState(() {});
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -199,11 +222,9 @@ class _ShellScreenState extends State<ShellScreen>
                       SizedBox(
                         width: 360,
                         child: HomeScreen(
-                          // onJobSelected kept as a no-op signal so
-                          // HomeScreen still treats itself as embedded.
-                          // Inline expansion is local to HomeScreen now;
-                          // no shell navigation occurs on card tap (US5).
-                          onJobSelected: (_) {},
+                          expandedJobIds: _expandedJobIds,
+                          onToggleExpanded: _toggleExpanded,
+                          onJobDeleted: _onJobDeleted,
                           onCreateJob: () {
                             setState(() {
                               _showCreateJob = true;
@@ -221,9 +242,13 @@ class _ShellScreenState extends State<ShellScreen>
                 // Right column — Activity (FR-031/032). History rows
                 // expand inline within this column (US5 T054); no
                 // navigation away to a detail screen.
-                const SizedBox(
+                SizedBox(
                   width: 300,
-                  child: ActivityPanel(),
+                  child: ActivityPanel(
+                    expandedJobIds: _expandedJobIds,
+                    onToggleExpanded: _toggleExpanded,
+                    onJobDeleted: _onJobDeleted,
+                  ),
                 ),
               ],
             ),
