@@ -11,15 +11,20 @@ import '../../main.dart';
 import '../../services/drive_service.dart';
 import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
+import '../theme/app_theme.dart';
 import '../widgets/conflict_dialog.dart';
-import '../widgets/drive_list.dart';
 
 /// Screen for creating a new job with source, destination, and options.
 class CreateJobScreen extends StatefulWidget {
   /// Callback for embedded mode (ShellScreen). If null, uses Navigator.pop.
   final VoidCallback? onJobCreated;
 
-  const CreateJobScreen({super.key, this.onJobCreated});
+  /// When provided, the source drive radio chip for this drive is
+  /// pre-selected on first build (used when launched from SourcesPanel —
+  /// FR-022).
+  final DetectedDrive? preSelectedDrive;
+
+  const CreateJobScreen({super.key, this.onJobCreated, this.preSelectedDrive});
 
   @override
   State<CreateJobScreen> createState() => _CreateJobScreenState();
@@ -42,6 +47,10 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.preSelectedDrive != null) {
+      _selectedDrive = widget.preSelectedDrive;
+      _drives = [widget.preSelectedDrive!];
+    }
     _refreshDrives();
     _loadPresets();
     _checkHandbrake();
@@ -54,17 +63,13 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     setState(() {
       _drives = drives;
       _loading = false;
+      // If the operator pre-selected a drive that's no longer detected, drop
+      // the selection so the form doesn't reference a vanished drive.
+      if (_selectedDrive != null &&
+          !drives.any((d) => d.path == _selectedDrive!.path)) {
+        _selectedDrive = null;
+      }
     });
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(drives.isEmpty
-              ? 'No removable drives found'
-              : 'Found ${drives.length} drive${drives.length == 1 ? '' : 's'}'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
   }
 
   Future<void> _loadPresets() async {
@@ -98,6 +103,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
     return Scaffold(
       appBar: widget.onJobCreated == null
           ? AppBar(title: const Text('Create Job'))
@@ -112,15 +118,15 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.1),
+                  color: statusColors.warning.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange),
+                  border: Border.all(color: statusColors.warning),
                 ),
-                child: const Row(
+                child: Row(
                   children: [
-                    Icon(Icons.warning_amber, color: Colors.orange),
-                    SizedBox(width: 8),
-                    Expanded(
+                    Icon(Icons.warning_amber, color: statusColors.warning),
+                    const SizedBox(width: 8),
+                    const Expanded(
                       child: Text(
                         'Compression requires HandBrake. '
                         'Download it at handbrake.fr. '
@@ -163,30 +169,25 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
             const SizedBox(height: 24),
 
-            // Source drive selection (for transfer jobs).
+            // Source drive selection (for transfer jobs) — inline radio chips.
             if (_jobType != JobType.compression) ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Source Drive',
+                  Text('From',
                       style: Theme.of(context).textTheme.titleMedium),
                   IconButton(
                     icon: const Icon(Icons.refresh),
                     onPressed: _refreshDrives,
+                    tooltip: 'Re-scan drives',
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              if (_loading)
+              if (_loading && _drives.isEmpty)
                 const Center(child: CircularProgressIndicator())
               else
-                DriveList(
-                  drives: _drives,
-                  selectedDrivePath: _selectedDrive?.path,
-                  onDriveSelected: (drive) {
-                    setState(() => _selectedDrive = drive);
-                  },
-                ),
+                _buildSourceChips(),
               const SizedBox(height: 24),
             ],
 
@@ -224,55 +225,71 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
             if (_destinationFreeSpace != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  '${formatBytes(_destinationFreeSpace!)} free',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                child: _FreeSpaceSentence(
+                  freeBytes: _destinationFreeSpace!,
+                  // Plan summary panel (US8) feeds back the planned-bytes;
+                  // for now we only have free-space without plan totals, so
+                  // we render a simple "plenty/cutting close" verdict
+                  // without the won't-fit case.
+                  plannedBytes: null,
                 ),
               ),
 
             const SizedBox(height: 24),
 
-            // Compression output (for transfer+compress jobs).
-            if (_jobType == JobType.transferAndCompress) ...[
-              Text('Compression Output',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              _buildFolderPicker(
-                currentPath: _compressionOutputPath,
-                favoriteType: FavoritePathType.output,
-                onPathSelected: (path) {
-                  setState(() => _compressionOutputPath = path);
-                },
-              ),
-              const SizedBox(height: 24),
-            ],
-
-            // Preset selector (for compression jobs).
+            // Compression options — collapsed by default (FR-025).
+            // Only the common case (Transfer to a known destination) needs
+            // to be visible; compression configuration is progressive
+            // disclosure.
             if (_jobType != JobType.transfer) ...[
-              Text('Compression Preset',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                initialValue: _selectedPreset,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: 'Select a HandBrake preset',
-                ),
-                items: _presets
-                    .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                    .toList(),
-                onChanged: (value) {
-                  setState(() => _selectedPreset = value);
-                },
-              ),
-              if (_presets.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 4),
-                  child: Text(
-                    'No presets found. Check HandBrake installation.',
-                    style: TextStyle(color: Colors.orange, fontSize: 12),
+              ExpansionTile(
+                initiallyExpanded:
+                    _jobType == JobType.compression || _selectedPreset != null,
+                title: const Text('Compression options'),
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                children: [
+                  if (_jobType == JobType.transferAndCompress) ...[
+                    Text('Compression Output',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 8),
+                    _buildFolderPicker(
+                      currentPath: _compressionOutputPath,
+                      favoriteType: FavoritePathType.output,
+                      onPathSelected: (path) {
+                        setState(() => _compressionOutputPath = path);
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  Text('Compression Preset',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: _selectedPreset,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'Select a HandBrake preset',
+                    ),
+                    items: _presets
+                        .map((p) =>
+                            DropdownMenuItem(value: p, child: Text(p)))
+                        .toList(),
+                    onChanged: (value) {
+                      setState(() => _selectedPreset = value);
+                    },
                   ),
-                ),
+                  if (_presets.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'No presets found. Check HandBrake installation.',
+                        style: TextStyle(
+                            color: statusColors.warning, fontSize: 12),
+                      ),
+                    ),
+                ],
+              ),
               const SizedBox(height: 24),
             ],
 
@@ -300,11 +317,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 },
               ),
               if (_verificationMode == VerificationMode.sha256)
-                const Padding(
-                  padding: EdgeInsets.only(top: 4),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     'SHA-256 hashing adds ~8 min per 50 GB file',
-                    style: TextStyle(color: Colors.orange, fontSize: 12),
+                    style: TextStyle(color: statusColors.warning, fontSize: 12),
                   ),
                 ),
               const SizedBox(height: 24),
@@ -322,6 +339,78 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSourceChips() {
+    final scheme = Theme.of(context).colorScheme;
+    if (_drives.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          border: Border.all(color: scheme.outlineVariant),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.sd_storage,
+                size: 18, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'No removable drives detected. Click "Folder…" to pick a path.',
+                style:
+                    TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text('Folder…'),
+              onPressed: () => _pickFolder((path) {
+                setState(() {
+                  // Pseudo-drive for folder source: build a one-off
+                  // DetectedDrive so the rest of the form treats it
+                  // uniformly.
+                  _selectedDrive = DetectedDrive(
+                    path: path,
+                    label: p.basename(path),
+                    totalBytes: 0,
+                    usedBytes: 0,
+                  );
+                });
+              }),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final drive in _drives)
+          ChoiceChip(
+            avatar: const Icon(Icons.sd_storage, size: 16),
+            label: Text('${drive.path}  ${drive.label}'),
+            selected: _selectedDrive?.path == drive.path,
+            onSelected: (_) => setState(() => _selectedDrive = drive),
+          ),
+        ActionChip(
+          avatar: const Icon(Icons.folder_open, size: 16),
+          label: const Text('Folder…'),
+          onPressed: () => _pickFolder((path) {
+            setState(() {
+              _selectedDrive = DetectedDrive(
+                path: path,
+                label: p.basename(path),
+                totalBytes: 0,
+                usedBytes: 0,
+              );
+            });
+          }),
+        ),
+      ],
     );
   }
 
@@ -454,10 +543,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       await _createJobInner();
     } catch (e) {
       if (mounted) {
+        final statusColors = Theme.of(context).extension<StatusColors>()!;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to create job — $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: statusColors.error,
           ),
         );
       }
@@ -506,10 +596,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
     if (videoFiles.isEmpty) {
       if (mounted) {
+        final statusColors = Theme.of(context).extension<StatusColors>()!;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No video files (.MOV, .MP4) found in the source'),
-            backgroundColor: Colors.orange,
+          SnackBar(
+            content: const Text('No video files (.MOV, .MP4) found in the source'),
+            backgroundColor: statusColors.warning,
           ),
         );
       }
@@ -665,12 +756,13 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       if (resolved.isEmpty) {
         // Skip-all — nothing to transfer. Don't create a phantom job.
         if (mounted) {
+          final statusColors = Theme.of(context).extension<StatusColors>()!;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
+            SnackBar(
+              content: const Text(
                 'All files already exist at destination — no files to transfer.',
               ),
-              backgroundColor: Colors.orange,
+              backgroundColor: statusColors.warning,
             ),
           );
         }
@@ -789,4 +881,43 @@ class _PlannedFile {
         fileName: fileName,
         fileSize: fileSize,
       );
+}
+
+/// Verdict-style free-space sentence (FR-027). Composes the right phrasing
+/// based on absolute free bytes and (when available) planned-bytes total.
+class _FreeSpaceSentence extends StatelessWidget {
+  final int freeBytes;
+  final int? plannedBytes;
+
+  const _FreeSpaceSentence({required this.freeBytes, this.plannedBytes});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    final freeText = formatBytes(freeBytes);
+
+    String sentence;
+    Color color = scheme.onSurfaceVariant;
+
+    if (plannedBytes != null && plannedBytes! > freeBytes) {
+      final shortBy = plannedBytes! - freeBytes;
+      sentence =
+          "$freeText free — won't fit, you have ${formatBytes(plannedBytes!)} to copy (${formatBytes(shortBy)} short)";
+      color = statusColors.error;
+    } else if (plannedBytes != null && plannedBytes! > freeBytes * 0.9) {
+      sentence =
+          '$freeText free — cutting it close (planned ${formatBytes(plannedBytes!)})';
+      color = statusColors.warning;
+    } else if (freeBytes > 1024 * 1024 * 1024 * 1024) {
+      sentence = '$freeText free — plenty of room';
+    } else {
+      sentence = '$freeText free';
+    }
+
+    return Text(
+      sentence,
+      style: TextStyle(color: color, fontSize: 12),
+    );
+  }
 }
