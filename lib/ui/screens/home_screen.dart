@@ -55,6 +55,20 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<QueueStateEvent>? _queueStateSub;
   Timer? _celebrationDismissTimer;
 
+  /// Wall-clock time when the most recent run transitioned from idle
+  /// to running. Captured on `runningStarted`, used at `allDone` to
+  /// pick out the jobs that completed during this run. Replaces the
+  /// previous fixed 60s window which silently dropped jobs that
+  /// completed early in long batches (Codex Phase 8 review).
+  DateTime? _runStartTime;
+
+  /// Monotonic counter incremented on every event that should
+  /// invalidate any in-flight celebration query. Without it, an
+  /// `allDone` async could resolve and resurrect a dismissed
+  /// celebration card after the operator clicked "Dismiss" or
+  /// "New Job" (Codex Phase 8 review).
+  int _celebrationGen = 0;
+
   @override
   void initState() {
     super.initState();
@@ -71,32 +85,50 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _handleQueueStateEvent(QueueStateEvent event) async {
     if (!mounted) return;
     switch (event) {
+      case QueueStateEvent.runningStarted:
+        // Stamp the run's start time and clear any stale celebration.
+        _celebrationGen++;
+        _celebrationDismissTimer?.cancel();
+        setState(() {
+          _runStartTime = DateTime.now();
+          _celebrationBatch = null;
+        });
+        break;
       case QueueStateEvent.allDone:
-        // Snapshot the most recent completed jobs to drive the
-        // celebration's per-card erase sequence (T061). Use a small
-        // window (last 60s) so we capture only this batch.
-        final cutoff =
-            DateTime.now().subtract(const Duration(seconds: 60));
+        final start = _runStartTime;
+        if (start == null) {
+          // App started after the run was already in progress; we have
+          // no anchor, so skip the celebration rather than guess.
+          break;
+        }
+        final gen = ++_celebrationGen;
         final allCompleted = await jobDao.getCompletedJobsList();
-        if (!mounted) return;
+        // Stale-async guard: if the operator dismissed (or a new run
+        // started) while we were awaiting the DB, our generation no
+        // longer matches and the result must be discarded.
+        if (!mounted || gen != _celebrationGen) return;
         final batch = allCompleted
             .where((j) =>
                 j.status == JobStatus.completed &&
                 j.completedAt != null &&
-                j.completedAt!.isAfter(cutoff))
+                !j.completedAt!.isBefore(start))
             .toList();
+        if (batch.isEmpty) break;
         setState(() => _celebrationBatch = batch);
         // Auto-dismiss alongside the StatusBar green dot (5 minutes).
         _celebrationDismissTimer?.cancel();
         _celebrationDismissTimer = Timer(
           const Duration(minutes: 5),
           () {
-            if (mounted) setState(() => _celebrationBatch = null);
+            if (mounted) {
+              _celebrationGen++;
+              setState(() => _celebrationBatch = null);
+            }
           },
         );
         break;
-      case QueueStateEvent.runningStarted:
       case QueueStateEvent.dismissedByUser:
+        _celebrationGen++;
         _celebrationDismissTimer?.cancel();
         if (_celebrationBatch != null) {
           setState(() => _celebrationBatch = null);
