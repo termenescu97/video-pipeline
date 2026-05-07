@@ -7,10 +7,11 @@ import '../../database/database.dart';
 import '../../database/extensions.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
-import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
+import '../../services/drive_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/confirmation_dialog.dart';
-import '../widgets/conflict_dialog.dart';
+import '../widgets/copy_all_cards_dialog.dart';
 import '../widgets/job_card.dart';
 import 'settings_screen.dart';
 
@@ -48,6 +49,16 @@ class _HomeScreenState extends State<HomeScreen> {
             .where((j) =>
                 j.status == JobStatus.completed || j.status == JobStatus.failed)
             .toList();
+
+        // Compute the next-up index: first queued/paused job's index in
+        // activeJobs when no job is in progress. -1 if no next-up exists.
+        final hasInProgress =
+            activeJobs.any((j) => j.status == JobStatus.inProgress);
+        final nextUpIndex = hasInProgress
+            ? -1
+            : activeJobs.indexWhere((j) =>
+                j.status == JobStatus.queued ||
+                j.status == JobStatus.paused);
 
         if (jobs.isEmpty) {
           return StreamBuilder<AppSetting?>(
@@ -99,28 +110,68 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
-              // Normal empty state (first run already completed).
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.queue, size: 48, color: Colors.grey),
-                    const SizedBox(height: 16),
-                    const Text('No jobs in queue'),
-                    const SizedBox(height: 8),
-                    FilledButton.icon(
-                      onPressed: _onCreateJob,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Create Job'),
+              // Normal empty state. If removable drives are present, hero
+              // the "Copy All Cards" CTA (FR-048); otherwise fall back to
+              // the standard "Create Job" affordance.
+              return FutureBuilder<List<DetectedDrive>>(
+                future: driveService.getRemovableDrives(),
+                builder: (context, drivesSnapshot) {
+                  final drives = drivesSnapshot.data ?? const <DetectedDrive>[];
+                  if (drives.isNotEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.sd_storage,
+                                size: 56, color: Theme.of(context).colorScheme.primary),
+                            const SizedBox(height: 16),
+                            Text(
+                              '${drives.length} card${drives.length == 1 ? '' : 's'} detected',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 24),
+                            FilledButton.icon(
+                              onPressed: _batchCopyAllCards,
+                              icon: const Icon(Icons.sd_storage),
+                              label: const Text('Copy All Cards'),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton.icon(
+                              onPressed: _onCreateJob,
+                              icon: const Icon(Icons.add),
+                              label: const Text('Create Job…'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.queue, size: 48, color: Colors.grey),
+                        const SizedBox(height: 16),
+                        const Text('No jobs in queue'),
+                        const SizedBox(height: 8),
+                        FilledButton.icon(
+                          onPressed: _onCreateJob,
+                          icon: const Icon(Icons.add),
+                          label: const Text('Create Job'),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: _batchCopyAllCards,
+                          icon: const Icon(Icons.sd_storage),
+                          label: const Text('Copy All Cards'),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed: _batchCopyAllCards,
-                      icon: const Icon(Icons.sd_storage),
-                      label: const Text('Copy All Cards'),
-                    ),
-                  ],
-                ),
+                  );
+                },
               );
             },
           );
@@ -130,38 +181,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Column(
           children: [
-            // Slack webhook banner.
-            StreamBuilder<AppSetting?>(
-              stream: settingsDao.watchSettings(),
-              builder: (context, settingsSnapshot) {
-                final settings = settingsSnapshot.data;
-                if (settings == null || settings.slackWebhookUrl.isEmpty) {
-                  return GestureDetector(
-                    onTap: () => Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => const SettingsScreen())),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      color: Colors.orange.withValues(alpha: 0.15),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.warning_amber, color: Colors.orange, size: 18),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Slack notifications disabled — tap to configure',
-                              style: TextStyle(fontSize: 12, color: Colors.orange),
-                            ),
-                          ),
-                          Icon(Icons.chevron_right, color: Colors.orange, size: 18),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-                return const SizedBox.shrink();
-              },
-            ),
+            // Warning-banner slot. Stacks: failed-jobs banner (US7 T065),
+            // HandBrake-missing banner (Polish T108), Slack-misconfigured
+            // banner (existing — kept). Banners render in priority order;
+            // only those whose conditions are met are shown.
+            const _WarningBannerSlot(),
             // Start/Stop + batch buttons.
             Padding(
               padding: const EdgeInsets.all(8),
@@ -178,7 +202,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: const TextStyle(fontSize: 13)),
                       style: isProcessing
                           ? FilledButton.styleFrom(
-                              backgroundColor: Colors.red.shade700)
+                              backgroundColor: Theme.of(context).extension<StatusColors>()!.error)
                           : null,
                     ),
                   ),
@@ -220,6 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         index: index,
                         child: JobCard(
                           job: job,
+                          isNextUp: index == nextUpIndex,
                           onTap: () => _onJobTap(job),
                           onDelete: () => _deleteJob(job),
                           onRetry: job.status == JobStatus.failed
@@ -319,7 +344,7 @@ class _HomeScreenState extends State<HomeScreen> {
       message: 'Remove this job from the queue?\n\n'
           '${job.sourcePath} → ${job.destinationPath}',
       confirmLabel: 'Remove',
-      confirmColor: Colors.red,
+      confirmColor: Theme.of(context).extension<StatusColors>()!.error,
     );
 
     if (confirmed) {
@@ -385,117 +410,55 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _batchCopyAllCards() async {
-    final drives = await driveService.getRemovableDrives();
-    if (drives.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No removable drives detected')),
-        );
-      }
-      return;
-    }
+    await CopyAllCardsDialog.show(context);
+  }
+}
 
-    // Ask for verification mode.
-    var verificationMode = VerificationMode.size;
-    if (mounted) {
-      final selected = await showDialog<VerificationMode>(
-        context: context,
-        builder: (context) {
-          var mode = VerificationMode.size;
-          return StatefulBuilder(
-            builder: (context, setDialogState) => AlertDialog(
-              title: const Text('Copy All Cards'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Verification mode:'),
-                  const SizedBox(height: 8),
-                  SegmentedButton<VerificationMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: VerificationMode.size,
-                        label: Text('Quick'),
-                        icon: Icon(Icons.speed),
-                      ),
-                      ButtonSegment(
-                        value: VerificationMode.sha256,
-                        label: Text('SHA-256'),
-                        icon: Icon(Icons.verified_user),
-                      ),
-                    ],
-                    selected: {mode},
-                    onSelectionChanged: (s) =>
-                        setDialogState(() => mode = s.first),
+/// Vertical column rendering all warning banners stacked on top of the queue
+/// content. Owns the banner-slot region introduced for FR-050 / US7 / US1.
+///
+/// Phase 3 (US1) ships only the Slack-misconfigured banner. Failed-jobs
+/// banner (T065) and HandBrake-missing banner (T108) plug into this slot
+/// in later phases without further structural changes.
+class _WarningBannerSlot extends StatelessWidget {
+  const _WarningBannerSlot();
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    return StreamBuilder<AppSetting?>(
+      stream: settingsDao.watchSettings(),
+      builder: (context, settingsSnapshot) {
+        final settings = settingsSnapshot.data;
+        final slackMissing =
+            settings == null || settings.slackWebhookUrl.isEmpty;
+        if (!slackMissing) return const SizedBox.shrink();
+        return GestureDetector(
+          onTap: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            color: statusColors.warning.withValues(alpha: 0.15),
+            child: Row(
+              children: [
+                Icon(Icons.warning_amber,
+                    color: statusColors.warning, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Slack notifications disabled — tap to configure',
+                    style:
+                        TextStyle(fontSize: 12, color: statusColors.warning),
                   ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
                 ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, mode),
-                  child: const Text('Continue'),
-                ),
+                Icon(Icons.chevron_right,
+                    color: statusColors.warning, size: 18),
               ],
             ),
-          );
-        },
-      );
-      if (selected == null) return;
-      verificationMode = selected;
-    }
-
-    var destination = await FilePicker.platform.getDirectoryPath();
-    if (destination == null) return;
-
-    // Loop until the operator either lets a non-empty batch through, picks
-    // a fresh folder, or cancels via the conflict dialog.
-    while (true) {
-      ConflictResolution? lastChoice;
-      final result = await jobQueueService.createBatchTransferJobs(
-        drives,
-        destination!,
-        verificationMode: verificationMode,
-        onConflict: (conflicts) async {
-          if (!mounted) return ConflictResolution.cancel;
-          final choice =
-              await ConflictResolutionDialog.show(context, conflicts);
-          lastChoice = choice ?? ConflictResolution.cancel;
-          return lastChoice!;
-        },
-      );
-
-      if (lastChoice == ConflictResolution.newFolder) {
-        final newDest = await FilePicker.platform.getDirectoryPath();
-        if (newDest == null) return;
-        destination = newDest;
-        continue; // re-attempt with the new folder
-      }
-
-      if (lastChoice == ConflictResolution.cancel) {
-        return; // operator aborted
-      }
-
-      if (result.created > 0) {
-        settingsDao.setFirstRunCompleted(true);
-      }
-
-      if (mounted) {
-        final String msg;
-        if (result.created == 0 && result.conflicts.isNotEmpty) {
-          msg = 'All files already exist at destination — no jobs created.';
-        } else if (result.skipped > 0) {
-          msg =
-              'Created ${result.created} jobs — ${result.skipped} cards had no new files';
-        } else {
-          msg = 'Created ${result.created} jobs';
-        }
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      }
-      break;
-    }
+          ),
+        );
+      },
+    );
   }
 }

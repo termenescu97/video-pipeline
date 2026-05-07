@@ -6,6 +6,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
+import '../widgets/status_bar.dart';
 import 'create_job_screen.dart';
 import 'job_detail_screen.dart';
 import 'home_screen.dart';
@@ -155,17 +156,12 @@ class _ShellScreenState extends State<ShellScreen>
         child: Focus(
           autofocus: true,
           child: Scaffold(
-            appBar: AppBar(
-              title: const Text('Copiatorul3000'),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.settings),
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                  ),
-                ),
-              ],
+            appBar: StatusBar(
+              onSettings: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              ),
+              // Cheat sheet wired in US11 (T091).
             ),
             body: Row(
               children: [
