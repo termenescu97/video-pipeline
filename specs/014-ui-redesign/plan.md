@@ -136,6 +136,7 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 - New file: `lib/ui/widgets/status_bar.dart`
 - Renders: app icon, app name, state dot (animated pulse on blue/orange/red), queue summary text with time-of-day completion when available, operator name (read live from `settingsDao.watchSettings()`), settings IconButton, `?` IconButton.
 - Subscribes to `jobQueueService.progressNotifier` + `jobDao.watchAllJobs()` to compute the state dot color and summary.
+- **State dot precedence** (when multiple conditions are true, worst wins): `red` (any failed job in queue) > `orange` (Slack misconfigured OR HandBrake missing) > `blue` (a job is running) > `green` (queue just cleared, within 5min) > `grey` (idle). Summary text describes the highest-priority condition.
 - Tray tooltip mirror: pushes the same summary text to `trayManager.setToolTip()` whenever it changes (throttled to 1Hz).
 - "Recent done" timer: a single `Timer(Duration(minutes: 5))` started when the queue empties; cancelled on next user action (job created, queue started). Drives the green→grey transition.
 
@@ -150,11 +151,11 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 
 **C1. SourcesPanel widget** (FR-020, FR-021, FR-022, FR-023)
 - New file: `lib/ui/widgets/sources_panel.dart`
-- Polls `driveService.getRemovableDrives()` every 3 seconds (existing pattern is on-demand; here we add a periodic poll via a `Timer.periodic`).
+- Polls `driveService.getRemovableDrives()` every 3 seconds via `Timer.periodic` started in `initState`. Cancelled in `dispose()`. Transient errors (drive unplugged mid-poll) are swallowed silently — the next tick recovers.
 - Shows: each detected drive as a tappable row (drive letter, label, capacity used/total, free-space pill).
 - Tapping a row calls `widget.onSourceSelected(drive)` which the shell turns into showing Create Job pre-filled.
-- Empty state: pulsing "Listening for SD cards…" using a slow `AnimationController`.
-- Loading state: 3 skeleton rows.
+- Empty state: pulsing "Listening for SD cards…" using a slow `AnimationController` (also disposed in `dispose()`).
+- Loading state: 3 skeleton rows (only on the very first poll before any result has arrived).
 
 **C2. Wire SourcesPanel into ShellScreen**
 - Pass an `onSourceSelected` callback that updates shell state to show Create Job pre-filled.
@@ -176,20 +177,24 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 - New files: `job_card_active.dart`, `job_card_next_up.dart`, `job_card_queued.dart`, `job_card_done.dart`.
 - `job_card.dart` becomes a router: builds the right variant based on `job.status` and queue context.
 - All four variants share: state dot at left edge (12px), left-border color from `StatusColors`, type glyph (monochrome icon), `⋯` overflow with all context-menu actions.
-- Active variant: large card; embedded `PipelineProgressBar`; current filename on its own line (middle-ellipsis); stats line; phase indicator strip; Pause / Cancel / `⋯` action buttons; expandable into `DetailTabs` inline.
+- Active variant: large card; embedded `PipelineProgressBar`; current filename on its own line (middle-ellipsis); stats line including **verification badge** (`SHA-256 ✓` / `Size-only`); phase indicator strip; Pause / Cancel / `⋯` action buttons; expandable into `DetailTabs` inline.
 - Next-up variant: same height as Active, no progress bar; "Press Start to begin" hint replacing stats line; `Start` and `Cancel` action buttons.
 - Queued variant: 64px slim row; drag handle `☰` on right; click body to expand inline.
 - Done variant: dimmed 48px row, no actions other than `⋯`.
 
 **E2. Drag handle wiring** (FR-006)
 - Move `ReorderableDragStartListener` from the whole `JobCard` to a small wrapper around the `☰` icon in `JobCardQueued`.
-- `JobCardActive` and `JobCardNextUp` are not reorderable (the active job and next-up are positionally fixed).
+- `JobCardActive` is positionally fixed and not reorderable.
+- `JobCardNextUp` IS reorderable — it's just the styled first-queued job. Dragging another card above it promotes that card to next-up; dragging Next-up below another card demotes it. The "next-up" styling is purely positional (always renders for `queue.first`).
 
 **E3. Failure grouping** (FR-011)
-- Inside the queue list, sort: failed jobs first (with banner "N failed — review"), then active, then next-up, then queued in sortOrder.
+- A "N failed — review" banner pins to the top of the queue panel when failed jobs exist, with [Retry all] [Dismiss] actions.
+- Failed jobs themselves remain in their normal queue position with red dots — they are NOT re-sorted to the top. The Active/Next-up hero card stays the visual anchor (FR-005a).
+- The banner is the surfacing mechanism; sort order is preserved so the operator's mental model of queue position holds.
 
 **E4. Completion celebration** (FR-012)
 - When the queue transitions from "running" to "all done" state, show a `JobCardCompleted` ephemeral card in the active slot for the duration of the green dot (5min or until next operator action). Two CTAs: `Erase Cards` and `New Job`.
+- **Erase Cards CTA semantics** (Constitution Principle I): launches a sequential per-card flow — for each detected card from the just-completed batch, the existing typed-confirmation dialog (`_showEraseConfirmDialog`, serial-number identity check, typed drive-path field) fires once. The CTA never bulk-erases multiple drives behind a single confirmation. Operator can cancel mid-sequence; already-erased cards stay erased.
 
 ### Phase F: Detail tabs (inline)
 
@@ -200,8 +205,8 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 
 **F2. FilesTab** (FR-015, FR-016, FR-017)
 - New file: `lib/ui/widgets/files_tab.dart`.
-- Top: filter chip row (All / Pending / In progress / Completed / Failed). Selected filter is component-local state.
-- Body: virtualized `ListView.builder` (no `shrinkWrap: true`, lives inside a fixed-height scrollable container so the parent can be `SingleChildScrollView` without nesting horror).
+- Single `ListView.builder` for the whole tab — no nested scrollers. Item index 0 is the filter chip row (sticky via `SliverPersistentHeader` if needed, otherwise pinned at top of the list); subsequent indices are file rows. This avoids the `shrinkWrap` + `SingleChildScrollView` nesting trap entirely.
+- Filter chip row: All / Pending / In progress / Completed / Failed. Selected filter is component-local state; changing filters triggers a rebuild that re-filters the file list backing the builder.
 - Per-row: status icon, filename (middle-ellipsis), size, "✓ matches" badge for verified files.
 - Hash popover: `showMenu` or `showDialog` opening a small panel with both hashes in `JetBrainsMono` and a "Copy both" button using `Clipboard.setData`.
 
@@ -222,7 +227,7 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 
 **G1. Form restructuring** (FR-024, FR-025, FR-026, FR-027, FR-028)
 - Source row: radio-style chips of detected drives + "Folder…" button.
-- Destination picker with free-space sentence rendered live below.
+- Destination picker with free-space sentence rendered live below. **Favorite chips** below the destination picker remain (unchanged from v2.3.0) — the FavoritesService and chip UI carry over verbatim into the redesigned form.
 - Verification mode (kept as today).
 - Compression options: collapsed `ExpansionPanel` (or `ExpansionTile`); only enables "Copy & Compress" job type when expanded.
 - Plan summary panel docked at the bottom of the form.
@@ -245,7 +250,7 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 
 **I1. Settings reorganization** (FR-033 through FR-036)
 - Rewrite `settings_screen.dart` to use a `Row` with a left navigation rail (5 items: Notifications / Operator / Behavior / Diagnostics / About) and a right detail pane.
-- Notifications: Slack URL field with explicit "Test now" button. Persistent test result line: "Last test: OK 11:42" / "Last test: failed at 11:42". State pill: green Connected / red Failed / grey Untested. Last-test result needs persistence — store in AppSettings (no schema change required if we reuse an existing column or add a setting via the existing settings DAO; alternatively store in-memory and persist on next migration).
+- Notifications: Slack URL field with explicit "Test now" button. Test result line "Last test: OK 11:42" / "Last test: failed at 11:42" lives in widget state only (in-memory, resets on app restart — see data-model.md). On launch the line reads "Untested". State pill: green Connected / red Failed / grey Untested. No schema change.
 - Operator: name field with "Saved ✓" indicator that flashes after debounced save.
 - Behavior: default verification mode, default conflict resolution preference (currently always-prompt).
 - Diagnostics: Prep Test Cards button (moved here); log file path with "Reveal in Explorer" button (calls `Process.run('explorer', ['/select,', logPath])`); instance lock state (read from a new `instanceLock.diagnostic()` getter); HandBrake detection status.
@@ -266,7 +271,18 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 
 **K1. Expand shortcuts in ShellScreen** (FR-052)
 - Map all shortcuts in the `Shortcuts(shortcuts: {...})` block.
-- Wire each via `Actions(actions: {...})` to existing methods or new ones.
+- Wire each via `Actions(actions: {...})` to existing methods or new ones:
+  - `Ctrl+N` → existing CreateJobIntent
+  - `Ctrl+Shift+C` → opens `CopyAllCardsDialog`
+  - `Ctrl+Enter` → existing PauseResumeIntent
+  - `Ctrl+,` → navigates to settings
+  - `Ctrl+E` → triggers existing CSV export from Activity panel
+  - `Ctrl+L` → opens log file in Explorer with the file selected: `Process.run('explorer', ['/select,', logService.logPath])`
+  - `↑/↓` → moves `selectedQueueJobId` up/down in the queue list
+  - `Space` → toggles inclusion in `expandedJobIds` for the selected card
+  - `Delete` → deletes selected job (after standard ConfirmationDialog)
+  - `Ctrl+R` → retries selected job if status is failed
+  - `?` / `F1` → opens KeyboardCheatSheet modal
 - Make sure `Shortcuts` is wrapped above any `Focus` / `TextField` so typing in inputs doesn't trigger them. (Flutter's `Shortcuts` widget has built-in scoping — the inputs already capture key events.)
 
 **K2. KeyboardCheatSheet modal** (FR-053)
@@ -289,7 +305,8 @@ These are isolated edits to the theme layer; nothing visual changes yet, but eve
 - The HandBrake-not-installed banner currently in `create_job_screen.dart:109-133` becomes a shared widget `lib/ui/widgets/handbrake_banner.dart` and renders on the home queue panel as well, alongside the existing Slack-unconfigured banner.
 
 **L4. "Recovered after restart" indicator** (FR-051)
-- Add a small chip on `JobCardQueued` and `JobCardNextUp` for jobs whose recovery happened on the most recent app launch — drives this off a per-process flag set in `JobDao.recoverStaleJobs()` (e.g., the dao caches the IDs of recovered jobs in memory; the card reads from this list).
+- Add a small chip on `JobCardQueued` and `JobCardNextUp` for jobs whose recovery happened on the most recent app launch — drives this off a per-process flag set in `JobDao.recoverStaleJobs()` (the dao caches the IDs of recovered jobs in memory; the card reads from this list).
+- **Clearing semantics**: an ID is removed from `recoveredJobIds` only when the operator acts on *that specific recovered job* (resume / cancel / delete / retry). Creating an unrelated new job does NOT clear other jobs' recovery chips — operators may queue work without first reviewing every recovered item, and we don't want the warning to vanish silently.
 
 ### Phase M: Polish and verification
 

@@ -5,7 +5,7 @@
 
 ## What this feature changes
 
-UI-layer redesign of v2.3.0. No schema changes, no service-layer changes. All transfer/compress/recovery logic stays exactly as it shipped in 013.
+UI-layer redesign of v2.3.0. No schema changes. No changes to transfer/compress/recovery logic — all that stays exactly as it shipped in 013. Minor read-only additions are made to surface diagnostics in Settings: a new `instanceLock.diagnostic()` getter exposes the current lock state, and the existing HandBrake detection result is read from a getter rather than re-detected.
 
 ## Files modified
 

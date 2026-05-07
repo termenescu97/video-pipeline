@@ -230,19 +230,20 @@ Today only two shortcuts are wired (`Ctrl+N`, `Ctrl+Enter`) and they're advertis
 - **FR-001**: The application MUST present three persistent columns at all times: Sources (left, fixed width), Queue + Detail (center, flex), Activity (right, fixed width).
 - **FR-002**: The application MUST enforce a minimum window size of 1280×720 to ensure the three-column layout always fits.
 - **FR-003**: The application MUST replace the current AppBar with a status bar containing: app icon and name, a single state dot (grey/blue/green/red/orange), queue summary text including time-of-day completion estimate (when a job is running), operator name, settings entry, and a help icon for the keyboard cheat sheet. The green "recent done" state MUST persist until the operator starts the next batch (creates a job or starts the queue) or 5 minutes elapse, whichever comes first; after that the dot reverts to grey (idle).
+- **FR-003a**: When multiple state-dot conditions are simultaneously true, the dot MUST display the worst (highest-attention) state. Precedence (highest first): **red** (any failed job in queue) > **orange** (Slack misconfigured OR HandBrake missing) > **blue** (a job is running) > **green** (queue cleared within last 5 minutes) > **grey** (idle). The summary text MUST describe the highest-priority condition.
 - **FR-004**: The system tray icon tooltip MUST mirror the status bar's queue-summary text rather than displaying a static "Idle" string.
 
 **Job Card & Queue**
 
 - **FR-005**: Job cards MUST render in four variants: **Active** (large hero with prominent progress, animated bar, stats line, current filename, action buttons — used when the job is currently running), **Next up** (large hero, ready-to-run framing without a progress bar, used for the first queued job when nothing is currently running), **Queued** (slim two-line row with a visible `☰` drag handle — used for queued jobs that are not next up), and **Done** (compact dimmed row).
 - **FR-005a**: The queue panel MUST always anchor on a hero card when at least one job is present: an Active hero when something is running, otherwise a Next-up hero on the first queued job. Pressing Start while a Next-up hero is shown MUST activate it in place (transitions to Active variant on the same card without re-layout).
-- **FR-006**: The drag-to-reorder listener MUST be attached to the `☰` handle, not the entire card body, so click-to-expand and drag-to-reorder do not conflict.
+- **FR-006**: The drag-to-reorder listener MUST be attached to the `☰` handle, not the entire card body, so click-to-expand and drag-to-reorder do not conflict. Both **Next up** and **Queued** variants MUST be reorderable (Next-up is positionally the first queued job; promoting another card above it makes that card the new Next-up). Only the **Active** card is positionally fixed.
 - **FR-007**: Each job card MUST expose a visible `⋯` overflow button mirroring every action available via right-click.
 - **FR-008**: Job state MUST be communicated by a 12px colored dot at the card's left edge plus the card's left-border color; the redundant status chip on the right is removed.
 - **FR-009**: Job type MUST be encoded as a monochrome glyph (color reserved for state).
 - **FR-010**: For Transfer & Compress jobs, the active hero card MUST display a phase indicator: `✓ Transfer · ●●●●●●●● Compress · ○ Verify`.
-- **FR-011**: The queue MUST visually group failed jobs at the top with a "1 failed — review" banner when failures exist.
-- **FR-012**: When a job completes successfully and is the last job in the queue, the active-job slot MUST briefly show "All cards copied & verified" with [Erase Cards] and [New Job] CTAs before reverting to an empty state.
+- **FR-011**: When failures exist, the queue panel MUST surface a "N failed — review" banner pinned to the top of the queue, with [Retry all] [Dismiss] actions. Failed jobs themselves remain in their normal queue position (not re-sorted) so the Active/Next-up hero card stays the visual anchor (FR-005a).
+- **FR-012**: When a job completes successfully and is the last job in the queue, the active-job slot MUST briefly show "All cards copied & verified" with [Erase Cards] and [New Job] CTAs before reverting to an empty state. The [Erase Cards] CTA MUST launch a sequential per-card flow: for each detected card from the just-completed batch, the existing typed-confirmation dialog (FR-019) fires once. The CTA MUST NEVER bulk-erase multiple drives behind a single confirmation (Constitution Principle I).
 
 **Detail View & Tabs**
 

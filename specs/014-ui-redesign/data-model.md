@@ -31,7 +31,7 @@ The Settings → Notifications panel will display "Last test: OK 11:42" persiste
 
 To render a "Recovered after restart" chip, we need to know which jobs were touched by `recoverStaleJobs()` on the most recent launch.
 
-**Decision**: Track in memory only — `JobDao` exposes a `Set<int> recoveredJobIdsThisSession` populated when `recoverStaleJobs()` runs; cards read from it. Cleared on the next operator-initiated job creation, or when the queue starts.
+**Decision**: Track in memory only — `JobDao` exposes a `Set<int> recoveredJobIdsThisSession` populated when `recoverStaleJobs()` runs; cards read from it. An ID is removed from the set only when the operator acts on *that specific recovered job* (resume / cancel / delete / retry). Creating an unrelated new job does NOT clear chips on other jobs.
 
 **Rationale**: Persisting a "was recovered" flag would require a column update on every recovery and a column read on every card render. The in-memory set is simpler and matches the lifetime of the indicator (single session, until new operator action).
 
@@ -42,7 +42,7 @@ These are not database entities — just UI state that lives in widgets or share
 | State | Owner | Purpose |
 |-------|-------|---------|
 | `recentlyDoneStartedAt: DateTime?` | StatusBar | Drives the 5-minute green-dot timer. Set when queue empties; cleared on next user action. |
-| `recoveredJobIds: Set<int>` | JobDao (in-memory) | Drives the "Recovered after restart" indicator. Set in `recoverStaleJobs()`; reset on first operator-initiated job creation in the session. |
+| `recoveredJobIds: Set<int>` | JobDao (in-memory) | Drives the "Recovered after restart" indicator. Set in `recoverStaleJobs()`; an ID is removed only when the operator acts on that specific job (resume/cancel/delete/retry). |
 | `lastSlackTestResult: ({DateTime at, bool success})?` | SettingsScreen | Drives the persistent "Last test: …" line. Lives only in widget state. |
 | `selectedQueueJobId: int?` | ShellScreen | Drives keyboard navigation (`↑/↓` selection) and `Space`/`Enter` actions on the queue. |
 | `expandedJobIds: Set<int>` | HomeScreen | Tracks which job cards are expanded inline. Multiple cards may be expanded simultaneously. |
