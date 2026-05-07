@@ -1,14 +1,10 @@
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
-import '../../database/extensions.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
-import '../../utils/format_utils.dart';
 import '../../services/drive_service.dart';
+import '../../utils/history_export.dart';
 import '../theme/app_theme.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
@@ -372,51 +368,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _exportHistory() async {
-    final jobs = await jobDao.getCompletedJobsList();
-    if (jobs.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No history to export')),
-        );
-      }
-      return;
-    }
-
-    // Generate CSV content.
-    final buffer = StringBuffer();
-    buffer.writeln('Date,Type,Source,Destination,Files,Size,Status,Duration,Operator');
-    for (final job in jobs) {
-      final date = job.completedAt?.toIso8601String().split('T').first ?? '';
-      final duration = (job.startedAt != null && job.completedAt != null)
-          ? formatDuration(job.completedAt!.difference(job.startedAt!))
-          : '';
-      final size = formatBytes(job.totalBytes);
-      final operator = job.operatorName ?? '';
-      buffer.writeln(
-        '"$date","${job.type.label}","${job.sourcePath}","${job.destinationPath}",'
-        '${job.totalFiles},"$size","${job.status.label}","$duration","$operator"',
-      );
-    }
-
-    final now = DateTime.now();
-    final defaultName = 'copiatorul3000-history-${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}.csv';
-
-    final savePath = await FilePicker.platform.saveFile(
-      dialogTitle: 'Export History',
-      fileName: defaultName,
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-    );
-
-    if (savePath == null) return;
-
-    await File(savePath).writeAsString(buffer.toString());
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('History exported to $savePath')),
-      );
-    }
+    // Shared with the Activity panel (US4) and Ctrl+E shortcut (US11)
+    // via lib/utils/history_export.dart.
+    await exportHistoryToCsv(context);
   }
 
   Future<void> _batchCopyAllCards() async {

@@ -132,14 +132,14 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 4
 
-- [ ] T042 [US4] Create `lib/ui/widgets/activity_panel.dart` (300px right column) subscribing to `jobDao.watchCompletedJobs()`. Expose a public `exportCsv()` instance method (or accept an `exportTrigger: Listenable` in the constructor) so a parent like ShellScreen can invoke export from a keyboard shortcut (used by T097 for `Ctrl+E`).
-- [ ] T043 [US4] Implement day grouping in ActivityPanel: Today / Yesterday / This week (≤7 days) / Older; day boundary uses local time
-- [ ] T044 [US4] Render each completed job as `JobCardDone` inside the appropriate group in ActivityPanel
-- [ ] T045 [US4] Add prominent `FilledButton.tonalIcon` "Export CSV" at bottom of ActivityPanel invoking the existing CSV export logic via the same path as the public `exportCsv()` method
-- [ ] T046 [US4] Rewrite `lib/ui/screens/shell_screen.dart` body to three columns: `Row(children: [SourcesPanel(width: 240, onSourceSelected: ...), Expanded(child: HomeScreen()), ActivityPanel(width: 300)])`. **Preserve the StatusBar `appBar:` slot from T019**. Wire `onSourceSelected` to push a CreateJobScreen route (or set state) pre-filled with the selected drive.
-- [ ] T047 [US4] Preserve existing `WindowListener` graceful-shutdown logic (from 013) in the rewritten ShellScreen
-- [ ] T048 [US4] Stop routing `JobDetailScreen` as the right pane default; keep its route registration for backwards compat (deep-link / programmatic navigation only)
-- [ ] T049 [US4] Empty state in ActivityPanel: "Completed jobs will appear here."
+- [X] T042 [US4] Create `lib/ui/widgets/activity_panel.dart` (300px right column) subscribing to `jobDao.watchCompletedJobs()`. **Implemented as**: free-function `exportHistoryToCsv(BuildContext)` in `lib/utils/history_export.dart` shared by both the panel button and the Ctrl+E shortcut (US11 T097). No controller pattern needed — the helper is the single export entry point.
+- [X] T043 [US4] Implement day grouping in ActivityPanel: Today / Yesterday / This week (≤7 days) / Older; day boundary uses local time
+- [X] T044 [US4] Render each completed job as `JobCardDone` inside the appropriate group in ActivityPanel
+- [X] T045 [US4] Add prominent `FilledButton.tonalIcon` "Export CSV" at bottom of ActivityPanel invoking `exportHistoryToCsv` helper
+- [X] T046 [US4] Rewrite `lib/ui/screens/shell_screen.dart` body to three columns: Sources(240) / Expanded(Row[HomeScreen(360) | _buildRightPanel]) / ActivityPanel(300). StatusBar `appBar:` slot preserved.
+- [X] T047 [US4] Preserved existing `WindowListener` graceful-shutdown logic (from 013) in the rewritten ShellScreen
+- [ ] T048 [US4] Stop routing `JobDetailScreen` as the right pane default — **deferred to US5 T054/T055**. Until inline DetailTabs ships, JobDetailScreen remains the right-pane fallback so the operator can still see job detail; FilesTab is already mounted inside it (mid-impl fix commit) so verification UX is reachable today.
+- [X] T049 [US4] Empty state in ActivityPanel: "Completed jobs will appear here."
 
 **Checkpoint**: Three-column layout always on; no responsive collapse; min window enforced.
 

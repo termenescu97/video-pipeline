@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../widgets/activity_panel.dart';
 import '../widgets/sources_panel.dart';
 import '../widgets/status_bar.dart';
 import 'create_job_screen.dart';
@@ -169,12 +170,15 @@ class _ShellScreenState extends State<ShellScreen>
               ),
               // Cheat sheet wired in US11 (T091).
             ),
+            // Three-column layout (FR-001). Sources column at 240px on
+            // the left, Queue+Detail in the flexible center, Activity
+            // column at 300px on the right. Min window 1280×720 ensures
+            // there's always enough space for the center to host both
+            // the queue list and an inline detail/create pane side by
+            // side without responsive collapse (R1 / FR-002).
             body: Row(
               children: [
-                // Left panel: live SD card list (FR-020). Tapping a row
-                // opens Create Job pre-filled with that drive (FR-022).
-                // Full three-column layout (Sources / Queue / Activity)
-                // lands in US4 T046; this is the interim mount.
+                // Left column — Sources (FR-020/021/022/023).
                 SizedBox(
                   width: 240,
                   child: SourcesPanel(
@@ -188,29 +192,49 @@ class _ShellScreenState extends State<ShellScreen>
                   ),
                 ),
                 const VerticalDivider(width: 1),
-                // Center panel: queue list.
+                // Center column — Queue + Detail. The queue list stays
+                // visible at all times; selecting a job or opening Create
+                // Job replaces only the right side of the flexible
+                // center, never the queue. Phase F (US5 T055) replaces
+                // _buildRightPanel with inline DetailTabs expansion.
+                Expanded(
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 360,
+                        child: HomeScreen(
+                          onJobSelected: (jobId) {
+                            setState(() {
+                              _selectedJobId = jobId;
+                              _showCreateJob = false;
+                            });
+                          },
+                          onCreateJob: () {
+                            setState(() {
+                              _selectedJobId = null;
+                              _showCreateJob = true;
+                              _preSelectedDrive = null;
+                            });
+                          },
+                        ),
+                      ),
+                      const VerticalDivider(width: 1),
+                      Expanded(child: _buildRightPanel()),
+                    ],
+                  ),
+                ),
+                const VerticalDivider(width: 1),
+                // Right column — Activity (FR-031/032).
                 SizedBox(
-                  width: 360,
-                  child: HomeScreen(
+                  width: 300,
+                  child: ActivityPanel(
                     onJobSelected: (jobId) {
                       setState(() {
                         _selectedJobId = jobId;
                         _showCreateJob = false;
                       });
                     },
-                    onCreateJob: () {
-                      setState(() {
-                        _selectedJobId = null;
-                        _showCreateJob = true;
-                        _preSelectedDrive = null;
-                      });
-                    },
                   ),
-                ),
-                const VerticalDivider(width: 1),
-                // Right panel: detail or create.
-                Expanded(
-                  child: _buildRightPanel(),
                 ),
               ],
             ),
