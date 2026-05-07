@@ -191,11 +191,11 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 7
 
-- [ ] T062 [US7] Move `ReorderableDragStartListener` from the whole `JobCard` to a small wrapper around the `☰` icon in `JobCardQueued`
-- [ ] T063 [US7] Make `JobCardNextUp` reorderable (only `JobCardActive` is positionally fixed); dragging another card above Next-up promotes that card to Next-up
-- [ ] T064 [US7] Add `⋯` overflow button to all four card variants; menu mirrors every right-click action (retry, delete, view details, etc.)
-- [ ] T065 [US7] Implement failed-banner widget rendered in HomeScreen's warning-banner slot (created in T027): "N failed — review" with [Retry all] [Dismiss] actions. Failed jobs stay in their normal queue position (banner is the surfacing mechanism, not a re-sort) — preserves Active/Next-up anchor (FR-005a, FR-011).
-- [ ] T066 [US7] Failed-banner dismiss persistence: dismissing hides the banner until **a new failure occurs** (i.e., a job transitions into failed state that was not previously failed). Dismiss state lives in HomeScreen state (in-memory; resets on app restart). The `dismissedFailureSet: Set<int>` tracks which failed job IDs have been dismissed; the banner shows only when `failedJobs - dismissedFailureSet` is non-empty.
+- [X] T062 [US7] Move `ReorderableDragStartListener` from the whole `JobCard` to a small wrapper around the `☰` icon in `JobCardQueued`
+- [X] T063 [US7] Make `JobCardNextUp` reorderable (only `JobCardActive` is positionally fixed); dragging another card above Next-up promotes that card to Next-up
+- [X] T064 [US7] Add `⋯` overflow button to all four card variants; menu mirrors every right-click action (retry, delete, view details, etc.)
+- [X] T065 [US7] Implement failed-banner widget rendered in HomeScreen's warning-banner slot (created in T027): "N failed — review" with [Retry all] [Dismiss] actions. Failed jobs stay in their normal queue position (banner is the surfacing mechanism, not a re-sort) — preserves Active/Next-up anchor (FR-005a, FR-011).
+- [X] T066 [US7] Failed-banner dismiss persistence: dismissing hides the banner until **a new failure occurs** (i.e., a job transitions into failed state that was not previously failed). Dismiss state lives in HomeScreen state (in-memory; resets on app restart). The `dismissedFailureSet: Set<int>` tracks which failed job IDs have been dismissed; the banner shows only when `failedJobs - dismissedFailureSet` is non-empty.
 
 **Checkpoint**: Drag is visible; overflow mirrors right-click; failed banner doesn't break visual hierarchy and doesn't nag after dismissal.
 

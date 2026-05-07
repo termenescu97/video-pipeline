@@ -12,15 +12,26 @@ import 'detail_tabs.dart';
 /// Slim row variant for queued/paused jobs that are not next-up.
 ///
 /// 64 px tall. State dot at the left edge, monochrome type glyph, source →
-/// destination basenames, ⋯ overflow on the right. The visible ☰ drag
-/// handle is added in US7 (T062) when [ReorderableDragStartListener] is
-/// moved off the whole card body. When [isExpanded] is true, an inline
-/// [DetailTabs] panel renders below the row.
+/// destination basenames, ⋯ overflow + visible ☰ drag handle on the right.
+/// When [isExpanded] is true, an inline [DetailTabs] panel renders below.
+///
+/// US7 (T062): the [ReorderableDragStartListener] now wraps ONLY the ☰
+/// icon — not the whole card body. This way clicking the card text
+/// expands the row inline (FR-007), while the drag affordance is visible
+/// and scoped to the handle (FR-005). The host (home_screen) supplies
+/// [reorderIndex]; pass `null` to render a static (non-draggable) row,
+/// e.g. for cards rendered outside a [SliverReorderableList].
 class JobCardQueued extends StatelessWidget {
   final Job job;
   final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
+
+  /// Index in the parent [SliverReorderableList]. When non-null, the ☰
+  /// handle is wrapped in a [ReorderableDragStartListener]; when null,
+  /// the row stays draggable-by-no-one (used for non-reorderable
+  /// surfaces or in tests).
+  final int? reorderIndex;
 
   const JobCardQueued({
     super.key,
@@ -28,6 +39,7 @@ class JobCardQueued extends StatelessWidget {
     this.isExpanded = false,
     this.onTap,
     this.onDelete,
+    this.reorderIndex,
   });
 
   @override
@@ -106,8 +118,10 @@ class JobCardQueued extends StatelessWidget {
                     },
                   ),
                 ),
-                Icon(Icons.drag_handle,
-                    size: 20, color: scheme.onSurfaceVariant),
+                _DragHandle(
+                  reorderIndex: reorderIndex,
+                  color: scheme.onSurfaceVariant,
+                ),
                 const SizedBox(width: Insets.xs),
               ],
             ),
@@ -153,5 +167,39 @@ class JobCardQueued extends StatelessWidget {
       case JobType.transferAndCompress:
         return Icons.sync;
     }
+  }
+}
+
+/// ☰ drag affordance scoped to itself (T062, FR-005). When [reorderIndex]
+/// is non-null, taps on this widget start a reorder drag inside the
+/// nearest [SliverReorderableList]; otherwise the icon is purely
+/// decorative (rare — used when a card variant renders outside a
+/// reorderable list).
+///
+/// Cursor is `grab` so operators see the affordance even before they
+/// press. Tooltip exists so the discovery isn't purely visual.
+class _DragHandle extends StatelessWidget {
+  final int? reorderIndex;
+  final Color color;
+
+  const _DragHandle({required this.reorderIndex, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(Icons.drag_handle, size: 20, color: color);
+    if (reorderIndex == null) return icon;
+    return MouseRegion(
+      cursor: SystemMouseCursors.grab,
+      child: ReorderableDragStartListener(
+        index: reorderIndex!,
+        child: Tooltip(
+          message: 'Drag to reorder',
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: icon,
+          ),
+        ),
+      ),
+    );
   }
 }

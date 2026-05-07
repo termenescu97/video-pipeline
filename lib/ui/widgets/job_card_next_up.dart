@@ -16,11 +16,20 @@ import 'detail_tabs.dart';
 /// in-place transition to Active variant happens when the queue starts and
 /// the job's status flips to inProgress; the router upgrades the variant).
 /// When [isExpanded] is true, an inline [DetailTabs] panel renders below.
+///
+/// US7 (T063): Next-up is reorderable. Only [JobCardActive] is positionally
+/// fixed (FR-006); dragging another card above this one promotes it to the
+/// new Next-up. The drag handle (☰) renders in the title row when the host
+/// supplies [reorderIndex]; pass `null` to render a static row.
 class JobCardNextUp extends StatelessWidget {
   final Job job;
   final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
+
+  /// Index in the parent [SliverReorderableList]. When non-null, the ☰
+  /// handle is wrapped in a [ReorderableDragStartListener].
+  final int? reorderIndex;
 
   const JobCardNextUp({
     super.key,
@@ -28,6 +37,7 @@ class JobCardNextUp extends StatelessWidget {
     this.isExpanded = false,
     this.onTap,
     this.onDelete,
+    this.reorderIndex,
   });
 
   @override
@@ -97,6 +107,11 @@ class JobCardNextUp extends StatelessWidget {
                           color: scheme.onPrimaryContainer,
                         ),
                       ),
+                    ),
+                    const SizedBox(width: Insets.s),
+                    _DragHandle(
+                      reorderIndex: reorderIndex,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ],
                 ),
@@ -180,5 +195,34 @@ class JobCardNextUp extends StatelessWidget {
       case JobType.transferAndCompress:
         return Icons.sync;
     }
+  }
+}
+
+/// ☰ drag affordance scoped to itself (T063, FR-005). See JobCardQueued's
+/// _DragHandle for rationale; duplicated here to avoid a cross-widget
+/// import cycle and keep each card variant self-contained.
+class _DragHandle extends StatelessWidget {
+  final int? reorderIndex;
+  final Color color;
+
+  const _DragHandle({required this.reorderIndex, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(Icons.drag_handle, size: 20, color: color);
+    if (reorderIndex == null) return icon;
+    return MouseRegion(
+      cursor: SystemMouseCursors.grab,
+      child: ReorderableDragStartListener(
+        index: reorderIndex!,
+        child: Tooltip(
+          message: 'Drag to reorder',
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: icon,
+          ),
+        ),
+      ),
+    );
   }
 }

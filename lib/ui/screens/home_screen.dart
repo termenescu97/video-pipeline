@@ -69,6 +69,15 @@ class _HomeScreenState extends State<HomeScreen> {
   /// "New Job" (Codex Phase 8 review).
   int _celebrationGen = 0;
 
+  /// Failed-job IDs the operator has dismissed in the current session
+  /// (T066). Resets on app restart — short-lived enough that a fresh
+  /// failure is always surfaced. The banner shows iff
+  /// `currentFailedIds - _dismissedFailureIds` is non-empty: a NEW
+  /// failure (an ID the set has never seen) un-dismisses naturally.
+  /// We also prune IDs that no longer correspond to failed jobs so
+  /// the set doesn't grow unbounded across retry/delete cycles.
+  Set<int> _dismissedFailureIds = const <int>{};
+
   @override
   void initState() {
     super.initState();
@@ -146,7 +155,34 @@ class _HomeScreenState extends State<HomeScreen> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final jobs = snapshot.data ?? [];
+        final jobs = snapshot.data ?? const <Job>[];
+        final failedJobs =
+            jobs.where((j) => j.status == JobStatus.failed).toList();
+        // T066: prune dismissed IDs that are no longer failing. A job
+        // that was dismissed and then retried (or deleted) should not
+        // keep its slot in the set — otherwise a future re-failure of
+        // the same ID would be pre-suppressed. The pruning happens at
+        // render time; the set we hand to the banner is what matters.
+        final activeFailedIds = failedJobs.map((j) => j.id).toSet();
+        if (_dismissedFailureIds.isNotEmpty) {
+          final pruned =
+              _dismissedFailureIds.intersection(activeFailedIds);
+          if (pruned.length != _dismissedFailureIds.length) {
+            // Schedule the state update for the next frame to avoid
+            // setState-during-build; the banner read below uses the
+            // local `pruned` set so this frame is correct.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                setState(() => _dismissedFailureIds = pruned);
+              }
+            });
+          }
+          _dismissedFailureIds = pruned;
+        }
+        final visibleFailures = failedJobs
+            .where((j) => !_dismissedFailureIds.contains(j.id))
+            .toList();
+
         // Warning banners (Slack misconfigured, HandBrake missing,
         // failed-jobs banner) MUST render above both empty and
         // populated queue states. Wrap the whole body in a Column
@@ -154,7 +190,11 @@ class _HomeScreenState extends State<HomeScreen> {
         // return.
         return Column(
           children: [
-            const _WarningBannerSlot(),
+            _WarningBannerSlot(
+              visibleFailures: visibleFailures,
+              onRetryAllFailed: () => _retryAllFailed(failedJobs),
+              onDismissFailed: () => _dismissFailedBanner(failedJobs),
+            ),
             Expanded(child: _buildBody(context, jobs)),
           ],
         );
@@ -162,16 +202,51 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// T066 dismiss: snapshot the current failed-job IDs into the
+  /// dismissed set. The banner stays hidden until a NEW failure ID
+  /// appears (one not in the set), at which point it returns.
+  void _dismissFailedBanner(List<Job> currentFailures) {
+    if (currentFailures.isEmpty) return;
+    setState(() {
+      _dismissedFailureIds = {
+        ..._dismissedFailureIds,
+        for (final j in currentFailures) j.id,
+      };
+    });
+  }
+
+  /// T065 retry-all: reset every failed job for retry. Clears the
+  /// dismiss set as a side-effect — once we've actively addressed the
+  /// failures, there's nothing left to "stay dismissed" against.
+  Future<void> _retryAllFailed(List<Job> failures) async {
+    if (failures.isEmpty) return;
+    for (final j in failures) {
+      await jobDao.resetJobForRetry(j.id);
+    }
+    if (!mounted) return;
+    setState(() => _dismissedFailureIds = const <int>{});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failures.length == 1
+            ? '1 job re-queued for retry'
+            : '${failures.length} jobs re-queued for retry'),
+      ),
+    );
+  }
+
   Widget _buildBody(BuildContext context, List<Job> jobs) {
-    // Active jobs only — completed/failed jobs render in the
+    // Active queue: everything except `completed`. Failed jobs stay in
+    // their natural position (T065, FR-005a — banner is the surfacing
+    // mechanism, not a re-sort). Completed jobs render in the
     // right-column ActivityPanel (US4).
     final activeJobs = jobs
-        .where((j) =>
-            j.status != JobStatus.completed && j.status != JobStatus.failed)
+        .where((j) => j.status != JobStatus.completed)
         .toList();
 
         // Compute the next-up index: first queued/paused job's index in
-        // activeJobs when no job is in progress. -1 if no next-up exists.
+        // activeJobs when no job is in progress. Failed jobs are skipped
+        // when picking next-up — they're surfaced by the banner, not as
+        // the job to start next. -1 if no next-up exists.
         final hasInProgress =
             activeJobs.any((j) => j.status == JobStatus.inProgress);
         final nextUpIndex = hasInProgress
@@ -368,7 +443,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (newIndex > oldIndex) newIndex--;
                       // FR-006: refuse moves that try to insert anything
                       // into the active job's slot. The active job is
-                      // positionally fixed; queued/next-up may shuffle
+                      // positionally fixed; queued/next-up/failed shuffle
                       // among themselves below it.
                       final activeIdx = activeJobs.indexWhere(
                           (j) => j.status == JobStatus.inProgress);
@@ -382,32 +457,29 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     itemBuilder: (context, index) {
                       final job = activeJobs[index];
-                      final card = JobCard(
-                        job: job,
-                        isNextUp: index == nextUpIndex,
-                        isExpanded: _expandedJobIds.contains(job.id),
-                        onTap: () => widget.onToggleExpanded?.call(job.id),
-                        onDelete: () => _deleteJob(job),
-                        onRetry: job.status == JobStatus.failed
-                            ? () => _retryJob(job)
-                            : null,
-                      );
-                      // FR-006: only Active is positionally fixed.
-                      // Wrap others in ReorderableDragStartListener so they
-                      // can be dragged; leave inProgress as a plain keyed
-                      // child so it cannot be moved. Reorder targets that
-                      // would land at index 0 (the active slot) are
-                      // additionally rejected in onReorder above.
-                      if (job.status == JobStatus.inProgress) {
-                        return KeyedSubtree(
-                          key: ValueKey(job.id),
-                          child: card,
-                        );
-                      }
-                      return ReorderableDragStartListener(
+                      // T062/T063: drag affordance lives ONLY on the ☰
+                      // handle inside the card variants. Active is the
+                      // sole positionally-fixed variant — pass null
+                      // reorderIndex so it never picks up a handle. Failed
+                      // routes to JobCardDone which doesn't render a
+                      // handle either; we still pass a valid index so a
+                      // drag onto a failed row's slot lands cleanly.
+                      return KeyedSubtree(
                         key: ValueKey(job.id),
-                        index: index,
-                        child: card,
+                        child: JobCard(
+                          job: job,
+                          isNextUp: index == nextUpIndex,
+                          isExpanded: _expandedJobIds.contains(job.id),
+                          onTap: () =>
+                              widget.onToggleExpanded?.call(job.id),
+                          onDelete: () => _deleteJob(job),
+                          onRetry: job.status == JobStatus.failed
+                              ? () => _retryJob(job)
+                              : null,
+                          reorderIndex: job.status == JobStatus.inProgress
+                              ? null
+                              : index,
+                        ),
                       );
                     },
                   ),
@@ -483,11 +555,123 @@ class _HomeScreenState extends State<HomeScreen> {
 /// Vertical column rendering all warning banners stacked on top of the queue
 /// content. Owns the banner-slot region introduced for FR-050 / US7 / US1.
 ///
-/// Phase 3 (US1) ships only the Slack-misconfigured banner. Failed-jobs
-/// banner (T065) and HandBrake-missing banner (T108) plug into this slot
-/// in later phases without further structural changes.
+/// Banners ship in phases:
+///  - Slack-misconfigured (US1, T037): orange settings prompt.
+///  - Failed-jobs (US7, T065): red [Retry all] [Dismiss] banner anchored
+///    above the queue while there are non-dismissed failures (FR-011).
+///  - HandBrake-missing (Polish, T108): plugs in here too.
+///
+/// Each banner is independent — they stack in this column in priority
+/// order (most-actionable first; failed > Slack > HandBrake).
 class _WarningBannerSlot extends StatelessWidget {
-  const _WarningBannerSlot();
+  final List<Job> visibleFailures;
+  final VoidCallback onRetryAllFailed;
+  final VoidCallback onDismissFailed;
+
+  const _WarningBannerSlot({
+    required this.visibleFailures,
+    required this.onRetryAllFailed,
+    required this.onDismissFailed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (visibleFailures.isNotEmpty)
+          _FailedJobsBanner(
+            count: visibleFailures.length,
+            onRetryAll: onRetryAllFailed,
+            onDismiss: onDismissFailed,
+          ),
+        const _SlackUnconfiguredBanner(),
+      ],
+    );
+  }
+}
+
+/// "N failed — review" banner pinned at the top of the queue panel
+/// while there are non-dismissed failed jobs (T065, FR-011).
+///
+/// Two actions:
+///   [Retry all] — re-queues every failed job and clears the dismiss set.
+///   [Dismiss]   — snapshots the current failed IDs so the banner hides
+///                 until a NEW failure occurs (T066).
+///
+/// The banner is the surfacing mechanism — it does NOT re-sort failed
+/// jobs to the top of the queue. They keep their natural position
+/// (FR-005a, FR-011) so the operator's mental model of "this card was
+/// after that one" survives a failure.
+class _FailedJobsBanner extends StatelessWidget {
+  final int count;
+  final VoidCallback onRetryAll;
+  final VoidCallback onDismiss;
+
+  const _FailedJobsBanner({
+    required this.count,
+    required this.onRetryAll,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: statusColors.error.withValues(alpha: 0.12),
+        border: Border(
+          bottom:
+              BorderSide(color: statusColors.error.withValues(alpha: 0.4)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, color: statusColors.error, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              count == 1
+                  ? '1 job failed — review'
+                  : '$count jobs failed — review',
+              style: TextStyle(
+                fontSize: 12,
+                color: statusColors.error,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetryAll,
+            style: TextButton.styleFrom(
+              foregroundColor: statusColors.error,
+              minimumSize: const Size(0, 28),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: const Text('Retry all', style: TextStyle(fontSize: 12)),
+          ),
+          TextButton(
+            onPressed: onDismiss,
+            style: TextButton.styleFrom(
+              foregroundColor: scheme.onSurfaceVariant,
+              minimumSize: const Size(0, 28),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: const Text('Dismiss', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Slack webhook unconfigured banner (US1, T037). Tap navigates to
+/// Settings so the operator can paste a webhook URL.
+class _SlackUnconfiguredBanner extends StatelessWidget {
+  const _SlackUnconfiguredBanner();
 
   @override
   Widget build(BuildContext context) {

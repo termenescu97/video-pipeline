@@ -25,6 +25,13 @@ class JobCard extends StatelessWidget {
   final VoidCallback? onDelete;
   final VoidCallback? onRetry;
 
+  /// Threaded down to draggable variants ([JobCardQueued], [JobCardNextUp])
+  /// — the index in the host [SliverReorderableList]. When null, those
+  /// variants render a non-draggable handle (used for static surfaces).
+  /// Active and Done variants ignore this — Active is positionally fixed
+  /// (FR-006); Done is rendered outside the queue's reorderable list.
+  final int? reorderIndex;
+
   const JobCard({
     super.key,
     required this.job,
@@ -33,6 +40,7 @@ class JobCard extends StatelessWidget {
     this.onTap,
     this.onDelete,
     this.onRetry,
+    this.reorderIndex,
   });
 
   @override
@@ -62,6 +70,7 @@ class JobCard extends StatelessWidget {
             isExpanded: isExpanded,
             onTap: onTap,
             onDelete: onDelete,
+            reorderIndex: reorderIndex,
           );
         }
         return JobCardQueued(
@@ -69,6 +78,7 @@ class JobCard extends StatelessWidget {
           isExpanded: isExpanded,
           onTap: onTap,
           onDelete: onDelete,
+          reorderIndex: reorderIndex,
         );
     }
   }
