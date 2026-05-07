@@ -229,13 +229,13 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 9
 
-- [ ] T074 [US9] Add `instanceLock.diagnostic()` getter in `lib/utils/instance_lock.dart` exposing current lock state (held/free, lock file path, PID if known) for Settings → Diagnostics. **MUST precede T078** since Diagnostics reads it.
-- [ ] T075 [US9] Rewrite `lib/ui/screens/settings_screen.dart` as `Row` with `NavigationRail` (5 items: Notifications / Operator / Behavior / Diagnostics / About) and a right detail pane
-- [ ] T076 [US9] Notifications section: Slack URL TextField with debounced save, explicit "Test now" button, in-memory last-test result line ("Last test: OK 11:42" / "failed at 11:42"), connection-state pill (green Connected / red Failed / grey Untested) — last-test result lives in widget state only (resets on app restart, no schema change)
-- [ ] T077 [US9] Operator section: name TextField with brief "Saved ✓" indicator after debounced save
-- [ ] T078 [US9] Diagnostics section: "Prep Test Cards" button (moved here from Notifications-adjacent space); log file path with "Reveal in Explorer" button calling `Process.run('explorer', ['/select,', logService.logPath])`; instance lock state (read via `instanceLock.diagnostic()` from T074); HandBrake detection status
-- [ ] T079 [US9] Behavior section: default verification mode dropdown, default conflict-resolution dropdown
-- [ ] T080 [US9] About section: app version (already from `package_info_plus`), "Check for updates" button (existing logic), link to GitHub releases page
+- [X] T074 [US9] Add `instanceLock.diagnostic()` getter in `lib/utils/instance_lock.dart` exposing current lock state (held/free, lock file path, PID if known) for Settings → Diagnostics. **MUST precede T078** since Diagnostics reads it.
+- [X] T075 [US9] Rewrite `lib/ui/screens/settings_screen.dart` as `Row` with `NavigationRail` (5 items: Notifications / Operator / Behavior / Diagnostics / About) and a right detail pane
+- [X] T076 [US9] Notifications section: Slack URL TextField with debounced save, explicit "Test now" button, in-memory last-test result line ("Last test: OK 11:42" / "failed at 11:42"), connection-state pill (green Connected / red Failed / grey Untested) — last-test result lives in widget state only (resets on app restart, no schema change)
+- [X] T077 [US9] Operator section: name TextField with brief "Saved ✓" indicator after debounced save
+- [X] T078 [US9] Diagnostics section: "Prep Test Cards" button (moved here from Notifications-adjacent space); log file path with "Reveal in Explorer" button calling `Process.run('explorer', ['/select,', logService.logPath])`; instance lock state (read via `instanceLock.diagnostic()` from T074); HandBrake detection status
+- [X] T079 [US9] Behavior section: default verification mode dropdown, default conflict-resolution dropdown
+- [X] T080 [US9] About section: app version (already from `package_info_plus`), "Check for updates" button (existing logic), link to GitHub releases page
 
 **Checkpoint**: Settings scales gracefully; future preferences slot into existing sections.
 

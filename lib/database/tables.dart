@@ -84,6 +84,15 @@ class AppSettings extends Table {
   TextColumn get operatorName =>
       text().withDefault(const Constant(''))();
 
+  // US9 (T079): operator-level defaults that persist across sessions.
+  // Schema v6 — added in feature 014. Defaults match the v2.3.0
+  // hardcoded behavior so an upgrade is invisible until the operator
+  // changes them in Settings → Behavior.
+  TextColumn get defaultVerificationMode =>
+      text().withDefault(const Constant('size'))();
+  TextColumn get defaultConflictResolution =>
+      text().withDefault(const Constant('ask'))();
+
   @override
   Set<Column> get primaryKey => {id};
 }

@@ -11,6 +11,17 @@ class LogService {
   static const _maxSizeBytes = 10 * 1024 * 1024; // 10 MB
   static const _truncateToBytes = 5 * 1024 * 1024; // Keep last 5 MB
 
+  /// Resolved log file path. Surfaced to the Settings → Diagnostics
+  /// panel so operators can copy it / open it in Explorer (T078).
+  /// Reading before [init] returns the empty string.
+  String get logPath {
+    try {
+      return _logFile.path;
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// Initialize the logger. Call once at app startup.
   Future<void> init() async {
     final exeDir = p.dirname(Platform.resolvedExecutable);

@@ -21,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration {
@@ -50,6 +50,13 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(jobs, jobs.verificationMode);
           await m.addColumn(jobFiles, jobFiles.sourceHash);
           await m.addColumn(jobFiles, jobFiles.destinationHash);
+        }
+        if (from < 6) {
+          // US9 (T079): operator-level Behavior defaults.
+          await m.addColumn(
+              appSettings, appSettings.defaultVerificationMode);
+          await m.addColumn(
+              appSettings, appSettings.defaultConflictResolution);
         }
       },
     );

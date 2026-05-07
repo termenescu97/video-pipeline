@@ -61,4 +61,26 @@ class SettingsDao extends DatabaseAccessor<AppDatabase>
     return (update(appSettings)..where((t) => t.id.equals(1)))
         .write(AppSettingsCompanion(lastUpdateCheck: Value(timestamp)));
   }
+
+  /// US9 (T079): default verification mode for new jobs. Stored as a
+  /// short string (`'size'` / `'sha256'`) to keep the schema enum-free
+  /// — the create-job form translates it back into [VerificationMode].
+  Future<void> setDefaultVerificationMode(String mode) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(defaultVerificationMode: Value(mode)));
+  }
+
+  /// US9 (T079): default conflict-resolution behavior. Values:
+  ///   `'ask'`        — show the resolution dialog (current v2.3.0 default)
+  ///   `'skip'`       — silently skip pre-existing files
+  ///   `'rename'`     — auto-suffix _1, _2, …
+  ///   `'newFolder'`  — prompt only for a new destination
+  ///   `'overwrite'`  — overwrite without prompt (RESERVED — never the
+  ///                    default; should still require a typed confirm
+  ///                    when saving this value, per Constitution
+  ///                    Principle I)
+  Future<void> setDefaultConflictResolution(String resolution) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(defaultConflictResolution: Value(resolution)));
+  }
 }

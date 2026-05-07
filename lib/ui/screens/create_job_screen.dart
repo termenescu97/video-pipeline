@@ -309,6 +309,14 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         if (settings.lastUsedOutput.isNotEmpty) {
           _compressionOutputPath = settings.lastUsedOutput;
         }
+        // US9 (T079): pick up operator's default verification mode.
+        // The per-job SegmentedButton still allows override; this only
+        // controls the initial selection.
+        if (settings.defaultVerificationMode == 'sha256') {
+          _verificationMode = VerificationMode.sha256;
+        } else {
+          _verificationMode = VerificationMode.size;
+        }
       });
     }
   }

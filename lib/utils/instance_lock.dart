@@ -65,6 +65,37 @@ class InstanceLock {
     }
   }
 
+  /// Diagnostic snapshot for the Settings → Diagnostics panel (T074).
+  ///
+  /// Reports whether THIS process currently holds the lock, the resolved
+  /// lock-file path (when available), and the PID written to the file
+  /// (best-effort: read fails silently if the file is missing or another
+  /// process is mid-write). The PID is the holder's claim; absent an
+  /// explicit "lock held by us" flag the operator can compare against
+  /// `Process.pid` themselves.
+  Future<InstanceLockDiagnostic> diagnostic() async {
+    final held = _handle != null;
+    final path = _lockFile?.path;
+    int? recordedPid;
+    if (path != null) {
+      try {
+        final f = File(path);
+        if (await f.exists()) {
+          final content = (await f.readAsString()).trim();
+          recordedPid = int.tryParse(content);
+        }
+      } catch (_) {
+        // Best-effort read; ignore I/O failures.
+      }
+    }
+    return InstanceLockDiagnostic(
+      heldByThisProcess: held,
+      lockFilePath: path,
+      recordedPid: recordedPid,
+      currentPid: pid,
+    );
+  }
+
   /// Release the lock. Safe to call even if [acquire] never succeeded.
   Future<void> release() async {
     final handle = _handle;
@@ -94,4 +125,30 @@ class InstanceLock {
       // between our close() and delete() — that's fine, leave it alone.
     }
   }
+}
+
+/// Snapshot of single-instance-lock state, for the Settings →
+/// Diagnostics panel (T074, T078).
+class InstanceLockDiagnostic {
+  /// True iff this process currently holds the lock.
+  final bool heldByThisProcess;
+
+  /// Resolved path to the lock file (null only if [acquire] never ran
+  /// or path resolution failed during acquire).
+  final String? lockFilePath;
+
+  /// PID written into the lock file by the current holder. Diagnostic
+  /// only — not load-bearing for safety (the OS lock is what gates
+  /// startup, not this PID).
+  final int? recordedPid;
+
+  /// PID of THIS process (always available; useful for comparison).
+  final int currentPid;
+
+  const InstanceLockDiagnostic({
+    required this.heldByThisProcess,
+    required this.lockFilePath,
+    required this.recordedPid,
+    required this.currentPid,
+  });
 }
