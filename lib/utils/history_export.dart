@@ -13,14 +13,14 @@ import 'format_utils.dart';
 /// `Ctrl+E` keyboard shortcut (US11 T097) — sharing the same flow keeps
 /// behavior consistent and avoids duplicating the buffer/save logic.
 ///
-/// Shows a snackbar on the given [context] for empty-history and
-/// success cases. Caller is responsible for ensuring [context] is still
-/// mounted at call time.
+/// CSV escaping follows RFC 4180: fields containing quotes have those
+/// quotes doubled. The temp+rename write pattern means an interrupted
+/// export does not leave a truncated file at the operator's chosen path.
 Future<void> exportHistoryToCsv(BuildContext context) async {
-  final messenger = ScaffoldMessenger.of(context);
   final jobs = await jobDao.getCompletedJobsList();
+  if (!context.mounted) return;
   if (jobs.isEmpty) {
-    messenger.showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('No history to export')),
     );
     return;
@@ -37,8 +37,17 @@ Future<void> exportHistoryToCsv(BuildContext context) async {
     final size = formatBytes(job.totalBytes);
     final operator = job.operatorName ?? '';
     buffer.writeln(
-      '"$date","${job.type.label}","${job.sourcePath}","${job.destinationPath}",'
-      '${job.totalFiles},"$size","${job.status.label}","$duration","$operator"',
+      [
+        _csv(date),
+        _csv(job.type.label),
+        _csv(job.sourcePath),
+        _csv(job.destinationPath),
+        '${job.totalFiles}',
+        _csv(size),
+        _csv(job.status.label),
+        _csv(duration),
+        _csv(operator),
+      ].join(','),
     );
   }
 
@@ -54,8 +63,35 @@ Future<void> exportHistoryToCsv(BuildContext context) async {
   );
   if (savePath == null) return;
 
-  await File(savePath).writeAsString(buffer.toString());
-  messenger.showSnackBar(
+  // Atomic write: stage to a sibling temp file, then rename over the
+  // destination. An interrupted run leaves the temp file (cleaned up
+  // on the next successful export) without ever truncating the
+  // operator's chosen path.
+  final tmpPath = '$savePath.tmp';
+  try {
+    await File(tmpPath).writeAsString(buffer.toString(), flush: true);
+    await File(tmpPath).rename(savePath);
+  } catch (e) {
+    // Best-effort cleanup of the temp file before surfacing the error.
+    try {
+      await File(tmpPath).delete();
+    } catch (_) {}
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Export failed: $e')),
+    );
+    return;
+  }
+
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(content: Text('History exported to $savePath')),
   );
+}
+
+/// RFC 4180 CSV field encoder. Wraps the value in double-quotes and
+/// doubles any embedded double-quote.
+String _csv(String value) {
+  final escaped = value.replaceAll('"', '""');
+  return '"$escaped"';
 }

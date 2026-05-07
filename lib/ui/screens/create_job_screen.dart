@@ -173,7 +173,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 ),
                 ButtonSegment(
                   value: JobType.transferAndCompress,
-                  label: Text('Copy & Compress'),
+                  label: Text('Copy + Compress'),
                   icon: Icon(Icons.sync),
                 ),
               ],
@@ -318,12 +318,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 segments: const [
                   ButtonSegment(
                     value: VerificationMode.size,
-                    label: Text('Quick (size)'),
+                    label: Text('Quick'),
                     icon: Icon(Icons.speed),
                   ),
                   ButtonSegment(
                     value: VerificationMode.sha256,
-                    label: Text('Full (SHA-256)'),
+                    label: Text('SHA-256'),
                     icon: Icon(Icons.verified_user),
                   ),
                 ],

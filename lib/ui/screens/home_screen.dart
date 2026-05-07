@@ -4,7 +4,6 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
-import '../../utils/history_export.dart';
 import '../theme/app_theme.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
@@ -52,14 +51,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildBody(BuildContext context, List<Job> jobs) {
-    // Split into active and completed/failed.
+    // Active jobs only — completed/failed jobs render in the
+    // right-column ActivityPanel (US4).
     final activeJobs = jobs
         .where((j) =>
             j.status != JobStatus.completed && j.status != JobStatus.failed)
-        .toList();
-    final historyJobs = jobs
-        .where((j) =>
-            j.status == JobStatus.completed || j.status == JobStatus.failed)
         .toList();
 
         // Compute the next-up index: first queued/paused job's index in
@@ -262,46 +258,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                     },
                   ),
-                  // History section.
-                  if (historyJobs.isNotEmpty) ...[
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                        child: Row(
-                          children: [
-                            const Text('History',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.grey)),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.download, size: 18,
-                                  color: Colors.grey),
-                              tooltip: 'Export CSV',
-                              onPressed: _exportHistory,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final job = historyJobs[index];
-                          return JobCard(
-                            job: job,
-                            onTap: () => _onJobTap(job),
-                            onDelete: () => _deleteJob(job),
-                            onRetry: job.status == JobStatus.failed
-                                ? () => _retryJob(job)
-                                : null,
-                          );
-                        },
-                        childCount: historyJobs.length,
-                      ),
-                    ),
-                  ],
+                  // History rendered by the right-column ActivityPanel
+                  // (US4); no longer duplicated here.
                 ],
               ),
             ),
@@ -365,12 +323,6 @@ class _HomeScreenState extends State<HomeScreen> {
         const SnackBar(content: Text('Job re-queued for retry')),
       );
     }
-  }
-
-  Future<void> _exportHistory() async {
-    // Shared with the Activity panel (US4) and Ctrl+E shortcut (US11)
-    // via lib/utils/history_export.dart.
-    await exportHistoryToCsv(context);
   }
 
   Future<void> _batchCopyAllCards() async {

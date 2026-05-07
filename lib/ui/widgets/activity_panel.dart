@@ -4,8 +4,10 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../utils/history_export.dart';
+import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'confirmation_dialog.dart';
 import 'job_card_done.dart';
 
 /// Right-column activity panel (FR-031, FR-032). Subscribes to
@@ -124,7 +126,7 @@ class _GroupedHistoryList extends StatelessWidget {
           onTap: onJobSelected != null
               ? () => onJobSelected!(job.id)
               : null,
-          onDelete: () => jobDao.deleteJob(job.id),
+          onDelete: () => _confirmAndDelete(context, job),
           onRetry:
               job.status == JobStatus.failed ? () => _retry(job.id) : null,
         );
@@ -134,6 +136,24 @@ class _GroupedHistoryList extends StatelessWidget {
 
   Future<void> _retry(int jobId) async {
     await jobDao.resetJobForRetry(jobId);
+  }
+
+  /// Constitution Principle I: deletion is destructive and MUST require
+  /// explicit confirmation. Mirrors the legacy queue-delete path
+  /// (`HomeScreen._deleteJob`) so both surfaces share the same safety gate.
+  Future<void> _confirmAndDelete(BuildContext context, Job job) async {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    final confirmed = await ConfirmationDialog.show(
+      context: context,
+      title: 'Delete from history',
+      message:
+          'Permanently remove this job from history?\n\n${job.sourcePath} → ${job.destinationPath}',
+      confirmLabel: 'Delete',
+      confirmColor: statusColors.error,
+    );
+    if (confirmed) {
+      await jobDao.deleteJob(job.id);
+    }
   }
 
   static const _kGroupOrder = [
