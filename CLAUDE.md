@@ -225,5 +225,5 @@ git push origin vX.Y.Z
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/012-test-card-prep/plan.md
+specs/013-data-safety-hardening/plan.md
 <!-- SPECKIT END -->
