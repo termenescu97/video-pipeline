@@ -14,9 +14,11 @@ typedef TransferProgressCallback = void Function(FileProgressEvent event);
 class TransferService {
   TransferProgressCallback? onProgress;
   final _processRunner = ProcessRunner();
-  // Separate runner for SHA-256 hashing so the hash subprocess can be
-  // cancelled independently (or together with) the transfer subprocess.
-  final _hashRunner = ProcessRunner();
+  // Active SHA-256 hash subprocesses. We track every concurrent hash so
+  // [cancel] can kill all of them — source/destination hashes commonly
+  // run in parallel (different physical drives) and a single shared
+  // runner would race the second call over the first's process handle.
+  final Set<ProcessRunner> _activeHashRunners = <ProcessRunner>{};
   DateTime? _fileStartTime;
   int _fileTotalBytes = 0;
 
@@ -58,25 +60,30 @@ class TransferService {
   /// Kill any currently running transfer or hash subprocess.
   void cancel() {
     _processRunner.kill();
-    _hashRunner.kill();
+    // Snapshot to avoid concurrent-modification while runners self-remove.
+    for (final runner in _activeHashRunners.toList()) {
+      runner.kill();
+    }
     _fileStartTime = null;
   }
 
   /// Compute SHA-256 hash of a file using PowerShell Get-FileHash.
   ///
-  /// Routed through [ProcessRunner] (rather than raw [Process.run]) so the
-  /// hash subprocess is killable via [cancel] — important for large files
-  /// where hashing can take minutes and a stop request must take effect
-  /// promptly.
+  /// Each invocation owns a dedicated [ProcessRunner] so parallel hashing
+  /// of source and destination is safe — see [_activeHashRunners]. The
+  /// runner is registered while the subprocess is alive so [cancel] can
+  /// kill it; deregistered on completion or error.
   ///
   /// Returns the hex hash string, or null on non-Windows / cancellation /
   /// failure.
   Future<String?> computeFileHash(String filePath) async {
     if (!Platform.isWindows) return null;
 
+    final runner = ProcessRunner();
+    _activeHashRunners.add(runner);
     final captured = StringBuffer();
     try {
-      final exitCode = await _hashRunner.run(
+      final exitCode = await runner.run(
         executable: 'powershell',
         arguments: [
           '-NoProfile',
@@ -96,6 +103,8 @@ class TransferService {
       return hash;
     } catch (_) {
       return null;
+    } finally {
+      _activeHashRunners.remove(runner);
     }
   }
 

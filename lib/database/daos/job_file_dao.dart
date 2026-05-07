@@ -76,6 +76,21 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     );
   }
 
+  /// Reset a file back to pending state — used when an in-flight transfer
+  /// or hash is cancelled (operator stop, app shutdown). The file should
+  /// resume cleanly via robocopy `/Z` on next start, NOT be reported as
+  /// a permanent failure.
+  Future<void> resetFileToPending(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      const JobFilesCompanion(
+        status: Value(FileStatus.pending),
+        startedAt: Value(null),
+        completedAt: Value(null),
+        errorMessage: Value(null),
+      ),
+    );
+  }
+
   /// Store SHA-256 hashes on a file record.
   Future<void> updateFileHashes(int fileId, {String? sourceHash, String? destinationHash}) {
     return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(

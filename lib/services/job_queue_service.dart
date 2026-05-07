@@ -123,15 +123,22 @@ class JobQueueService {
   /// hash cancellation), so the caller can safely close the database
   /// once awaited.
   Future<void> stopProcessing() {
+    // Reentrant: a second call (e.g., tray quit fired right after the UI
+    // stop button) must observe the SAME pending completer until the
+    // loop actually exits. Returning `Future.value()` here once the flag
+    // is flipped would let shutdown close the database mid-write.
+    final pending = _stopCompleter;
+    if (pending != null) return pending.future;
     if (!_isProcessing) {
-      // Either never started, or already stopped — nothing to wait for.
+      // Either never started, or already finished cleanly — nothing to await.
       return Future<void>.value();
     }
-    _stopCompleter ??= Completer<void>();
+    final completer = Completer<void>();
+    _stopCompleter = completer;
     _isProcessing = false;
     _transferService.cancel();
     _compressionService.cancel();
-    return _stopCompleter!.future;
+    return completer.future;
   }
 
   Future<void> _processJob(Job job) async {
@@ -227,6 +234,15 @@ class JobQueueService {
       _transferService.onProgress = null;
       progressNotifier.value = null;
 
+      // If the transfer was cancelled by stopProcessing, the subprocess
+      // was killed and `success` is false — but this is NOT a real
+      // failure. Reset the file to pending so robocopy /Z resumes
+      // cleanly when the operator restarts the queue.
+      if (!_isProcessing) {
+        await _jobFileDao.resetFileToPending(file.id);
+        break;
+      }
+
       if (success) {
         if (job.verificationMode == VerificationMode.sha256) {
           // SHA-256 hash verification — parallel since source and dest are on different drives.
@@ -241,6 +257,14 @@ class JobQueueService {
           final destHash = results[1];
           progressNotifier.value = null;
 
+          // Same cancellation guard for the hashing subprocesses: if the
+          // operator stopped during hashing, the hash runners were
+          // killed. Reset the file to pending; recovery will re-verify.
+          if (!_isProcessing) {
+            await _jobFileDao.resetFileToPending(file.id);
+            break;
+          }
+
           await _jobFileDao.updateFileHashes(
             file.id,
             sourceHash: sourceHash,
@@ -248,7 +272,8 @@ class JobQueueService {
           );
 
           if (sourceHash == null || destHash == null) {
-            // Hash computation failed — not a mismatch, hashing itself broke.
+            // Hash computation failed (not cancelled — that case is
+            // handled above). Real failure path.
             await _jobFileDao.markFileFailed(
               file.id,
               'SHA-256 verification failed: could not compute hash',
@@ -371,6 +396,14 @@ class JobQueueService {
 
       _compressionService.onProgress = null;
       progressNotifier.value = null;
+
+      // Cancellation guard: if HandBrake was killed by stopProcessing,
+      // `success` is false but this is not a real failure — reset to
+      // pending so the file can be re-processed on resume.
+      if (!_isProcessing) {
+        await _jobFileDao.resetFileToPending(file.id);
+        break;
+      }
 
       if (success) {
         await _jobFileDao.markFileCompleted(file.id, verified: true);

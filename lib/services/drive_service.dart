@@ -176,12 +176,18 @@ $disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Wi
   Future<bool> eraseDrive(String drivePath) async {
     if (!Platform.isWindows) return false;
 
-    // Validate drive path to prevent command injection.
+    // Validate drive path even though we now pass it via $args[0] —
+    // belt-and-suspenders against accidentally erasing a non-drive path.
     if (!RegExp(r'^[A-Za-z]:\\$').hasMatch(drivePath)) return false;
 
+    // Pass the drive path as $args[0] (PowerShell positional arg) and use
+    // -LiteralPath so the value is treated as a literal string, never as
+    // a glob pattern. Enumerate children with -Force (include hidden /
+    // system files like volume metadata) and delete recursively.
     final result = await _runPowerShell([
       '-Command',
-      'Remove-Item -Path "$drivePath*" -Recurse -Force',
+      r'Get-ChildItem -LiteralPath $args[0] -Force | Remove-Item -Recurse -Force',
+      drivePath,
     ]);
 
     return result != null;

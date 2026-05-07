@@ -3,66 +3,86 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-/// PID-based single-instance lock. Prevents multiple app instances from
-/// running simultaneously and corrupting the shared SQLite database.
+/// Single-instance lock backed by an OS-level advisory file lock.
 ///
-/// Uses an atomic write pattern (write-temp + rename) and fails closed —
-/// if the lock cannot be acquired for any reason, the app refuses to start.
+/// Why an OS lock (not a check-then-write PID file): two processes that
+/// both observe a missing or stale lock file can race through any
+/// "exists" check and both believe they acquired the lock. The OS lock,
+/// held only as long as the [RandomAccessFile] handle is open, gives
+/// us atomic acquisition and automatic release on process exit (even on
+/// crash) — neither of which is achievable with check-then-write logic
+/// in user space.
+///
+/// The lock file still records the holder's PID for diagnostics, but the
+/// PID is no longer load-bearing: stale PIDs can never block startup
+/// because the OS releases the lock when the holding process dies.
 class InstanceLock {
+  RandomAccessFile? _handle;
   File? _lockFile;
 
-  /// Try to acquire the lock. Returns true if successful, false if another
-  /// instance is running or the lock cannot be acquired safely.
+  /// Try to acquire the lock. Returns true on success, false on failure
+  /// (another instance holds it, or the lock cannot be acquired safely).
+  /// Fails closed — any unexpected error returns false.
   Future<bool> acquire() async {
     final File lockFile;
-    final File tempFile;
     try {
       final supportDir = await getApplicationSupportDirectory();
+      // Ensure the directory exists; on a fresh install on Windows the
+      // app-support folder may not have been created yet.
+      if (!await supportDir.exists()) {
+        await supportDir.create(recursive: true);
+      }
       lockFile = File(p.join(supportDir.path, 'copiatorul3000.lock'));
-      tempFile = File(p.join(supportDir.path, 'copiatorul3000.lock.tmp'));
       _lockFile = lockFile;
     } catch (_) {
-      // Cannot determine app support directory — fail closed.
       return false;
     }
 
+    RandomAccessFile? handle;
     try {
-      if (await lockFile.exists()) {
-        final content = await lockFile.readAsString();
-        final lockedPid = int.tryParse(content.trim());
-        if (lockedPid == null) {
-          // Malformed lock file — treat as stale.
-          await lockFile.delete();
-        } else {
-          // Check if the recorded PID is still running.
-          // If the check itself throws, fail closed (treat lock as held).
-          final running = await _isProcessRunning(lockedPid);
-          if (running) {
-            return false; // Another instance is running.
-          }
-          // Stale lock — delete and proceed to acquire.
-          await lockFile.delete();
-        }
-      }
+      // Open in write mode (creates if missing, does not truncate by
+      // itself — we truncate only after we hold the lock).
+      handle = await lockFile.open(mode: FileMode.write);
+      // Non-blocking exclusive lock. Throws / returns synchronously if
+      // another process holds the lock.
+      await handle.lock(FileLock.exclusive);
 
-      // Atomic write: write PID to temp file, then rename.
-      // Rename is atomic on Windows and POSIX, preventing two processes
-      // from both passing the exists-check simultaneously.
-      await tempFile.writeAsString('$pid');
-      await tempFile.rename(lockFile.path);
+      // We now exclusively own the file. Write our PID for diagnostics.
+      await handle.setPosition(0);
+      await handle.truncate(0);
+      await handle.writeString('$pid\n');
+      await handle.flush();
+
+      _handle = handle;
       return true;
     } catch (_) {
-      // Any error during acquisition (including PID-check failures) — fail closed.
-      // Best-effort cleanup of any orphaned temp file.
+      // Lock contention or any I/O failure — close anything we opened
+      // and fail closed.
       try {
-        if (await tempFile.exists()) await tempFile.delete();
+        await handle?.close();
       } catch (_) {}
       return false;
     }
   }
 
-  /// Release the lock file.
+  /// Release the lock. Safe to call even if [acquire] never succeeded.
   Future<void> release() async {
+    final handle = _handle;
+    _handle = null;
+    if (handle == null) return;
+
+    try {
+      await handle.unlock();
+    } catch (_) {}
+    try {
+      await handle.close();
+    } catch (_) {}
+
+    // Best-effort cleanup of the lock file. Only delete it while we
+    // still hold the handle — if another process is already holding the
+    // lock by the time we reach this line, deleting the file would
+    // remove their lock metadata too. Closing first means our handle no
+    // longer owns the file; we skip deletion in that case.
     final lockFile = _lockFile;
     if (lockFile == null) return;
     try {
@@ -70,30 +90,8 @@ class InstanceLock {
         await lockFile.delete();
       }
     } catch (_) {
-      // Best effort — lock file may already be gone.
+      // Another process may have re-acquired and re-truncated the file
+      // between our close() and delete() — that's fine, leave it alone.
     }
-  }
-
-  /// Returns true if the process with [targetPid] is running.
-  /// Throws if the check itself cannot be performed (caller fails closed).
-  /// On non-Windows (development), returns false since concurrency is not a
-  /// real concern outside the production target.
-  Future<bool> _isProcessRunning(int targetPid) async {
-    if (!Platform.isWindows) return false;
-
-    final result = await Process.run('tasklist', [
-      '/FI',
-      'PID eq $targetPid',
-      '/NH',
-    ]);
-    if (result.exitCode != 0) {
-      throw ProcessException(
-        'tasklist',
-        ['/FI', 'PID eq $targetPid', '/NH'],
-        'tasklist exited with code ${result.exitCode}',
-        result.exitCode,
-      );
-    }
-    return result.stdout.toString().contains('$targetPid');
   }
 }

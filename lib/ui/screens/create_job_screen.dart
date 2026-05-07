@@ -643,6 +643,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
             ? p.join(newPath,
                 await jobQueueService.buildCardSubfolder(_selectedDrive!))
             : newPath;
+        // Keep the job-row destination in sync with the file paths.
+        // Without this, the persisted job points at the OLD folder
+        // while its files point at the NEW one, breaking chained
+        // compression's relative-path computation.
+        effectiveDestination = newDest;
         resolved = [
           for (final f in planned)
             f.copyWith(
