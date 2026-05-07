@@ -209,13 +209,13 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 8
 
-- [ ] T067 [US8] Create `lib/ui/widgets/plan_summary_panel.dart`: inputs are file count, total bytes, free-space verdict, conflict count, long-path count
-- [ ] T068 [US8] Wire PlanSummaryPanel to live source-scan results in CreateJobScreen — fed by existing scan logic
-- [ ] T069 [US8] Compute free-space verdict in PlanSummaryPanel based on destination picker selection: "plenty of room" / "cutting it close" / "won't fit" sentences (FR-027)
-- [ ] T070 [US8] Compute conflict count from existing conflict-detection logic and surface inline in PlanSummaryPanel
-- [ ] T071 [US8] Compute long-path count and surface as yellow inline note in PlanSummaryPanel ("9 files have paths > 260 chars — Windows may reject these")
-- [ ] T072 [US8] Replace blocking long-path `AlertDialog` in `lib/ui/screens/create_job_screen.dart` with the inline yellow note from T071. **Sequencing constraint**: T071 must be implemented before this task so the replacement exists when the dialog is removed; otherwise FR-028 has a temporary regression.
-- [ ] T073 [US8] Confirm ETA is intentionally OMITTED from PlanSummaryPanel (per FR-026 / clarification — ETA appears only on running cards)
+- [X] T067 [US8] Create `lib/ui/widgets/plan_summary_panel.dart`: inputs are file count, total bytes, free-space verdict, conflict count, long-path count
+- [X] T068 [US8] Wire PlanSummaryPanel to live source-scan results in CreateJobScreen — fed by existing scan logic
+- [X] T069 [US8] Compute free-space verdict in PlanSummaryPanel based on destination picker selection: "plenty of room" / "cutting it close" / "won't fit" sentences (FR-027)
+- [X] T070 [US8] Compute conflict count from existing conflict-detection logic and surface inline in PlanSummaryPanel
+- [X] T071 [US8] Compute long-path count and surface as yellow inline note in PlanSummaryPanel ("9 files have paths > 260 chars — Windows may reject these")
+- [X] T072 [US8] Replace blocking long-path `AlertDialog` in `lib/ui/screens/create_job_screen.dart` with the inline yellow note from T071. **Sequencing constraint**: T071 must be implemented before this task so the replacement exists when the dialog is removed; otherwise FR-028 has a temporary regression.
+- [X] T073 [US8] Confirm ETA is intentionally OMITTED from PlanSummaryPanel (per FR-026 / clarification — ETA appears only on running cards)
 
 **Checkpoint**: Plan summary updates live; no surprises post-commit.
 

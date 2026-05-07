@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart' hide Column;
@@ -13,6 +14,7 @@ import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../widgets/conflict_dialog.dart';
+import '../widgets/plan_summary_panel.dart';
 
 /// Screen for creating a new job with source, destination, and options.
 class CreateJobScreen extends StatefulWidget {
@@ -44,6 +46,23 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   int? _destinationFreeSpace;
   bool _handbrakeInstalled = true;
 
+  // ── US8 plan-summary state ────────────────────────────────────────
+  // The panel surfaces file count, total bytes, free-space verdict,
+  // conflict count, and long-path count — all computed from a debounced
+  // background scan triggered by source/destination changes (T067-T071).
+  // Source-scan results are CACHED so flipping the destination doesn't
+  // re-walk the source folder; only conflict + long-path passes re-run.
+  Timer? _planDebounce;
+  int _planScanGen = 0;
+  String? _scannedSourcePath;
+  List<_PlannedFile> _scannedFiles = const <_PlannedFile>[];
+  int _scannedTotalBytes = 0;
+  bool _planScanInProgress = false;
+  int? _planFileCount;
+  int? _planTotalBytes;
+  int? _planConflictCount;
+  int? _planLongPathCount;
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +74,137 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     _loadPresets();
     _checkHandbrake();
     _loadLastUsedPaths();
+    _schedulePlanRecompute();
+  }
+
+  @override
+  void dispose() {
+    _planDebounce?.cancel();
+    super.dispose();
+  }
+
+  /// Schedule a debounced plan recompute. Called from every state change
+  /// that could affect the plan (source pick, destination pick, job-type
+  /// flip). 250ms debounce so a fast keyboard-driven sequence doesn't
+  /// kick off N redundant scans.
+  void _schedulePlanRecompute() {
+    _planDebounce?.cancel();
+    _planDebounce = Timer(
+      const Duration(milliseconds: 250),
+      _recomputePlan,
+    );
+  }
+
+  /// Live plan recompute (T067-T071). Two passes:
+  ///   1. Source scan — listVideoFiles + per-file size. Cached on
+  ///      [_scannedSourcePath] so destination flips skip this pass.
+  ///   2. Destination pass — conflict count (File.exists) + long-path
+  ///      count (path.length > 260) over the cached file list.
+  ///
+  /// Each scan increments [_planScanGen]; results are discarded when
+  /// the generation changes mid-flight (operator typed a new path
+  /// before the previous scan finished — Codex Phase 8 pattern).
+  Future<void> _recomputePlan() async {
+    if (!mounted) return;
+    final gen = ++_planScanGen;
+
+    final isCompression = _jobType == JobType.compression;
+    final sourcePath =
+        isCompression ? _sourcePath : _selectedDrive?.path;
+
+    if (sourcePath == null) {
+      setState(() {
+        _planScanInProgress = false;
+        _planFileCount = null;
+        _planTotalBytes = null;
+        _planConflictCount = null;
+        _planLongPathCount = null;
+        _scannedSourcePath = null;
+        _scannedFiles = const <_PlannedFile>[];
+        _scannedTotalBytes = 0;
+      });
+      return;
+    }
+
+    // Source-scan pass (cached by source path).
+    if (_scannedSourcePath != sourcePath) {
+      setState(() {
+        _planScanInProgress = true;
+        _planFileCount = null;
+        _planTotalBytes = null;
+        _planConflictCount = null;
+        _planLongPathCount = null;
+      });
+      final scan = await driveService.listVideoFiles(sourcePath);
+      if (gen != _planScanGen || !mounted) return;
+      var totalBytes = 0;
+      final files = <_PlannedFile>[];
+      for (final entity in scan.files) {
+        try {
+          final size = await File(entity.path).length();
+          totalBytes += size;
+          files.add(_PlannedFile(
+            sourcePath: entity.path,
+            destinationPath: '', // populated in destination pass
+            fileName: p.basename(entity.path),
+            fileSize: size,
+          ));
+        } catch (_) {
+          // Ignore individual stat errors; the file just doesn't
+          // contribute to the count. Aborting the whole panel for one
+          // permission glitch would over-react.
+        }
+      }
+      if (gen != _planScanGen || !mounted) return;
+      _scannedSourcePath = sourcePath;
+      _scannedFiles = files;
+      _scannedTotalBytes = totalBytes;
+    }
+
+    // Destination pass: build planned destinations, count conflicts +
+    // long paths. Skipped when the destination isn't picked yet.
+    final destinationPath = _destinationPath;
+    if (destinationPath == null || _scannedFiles.isEmpty) {
+      setState(() {
+        _planScanInProgress = false;
+        _planFileCount = _scannedFiles.length;
+        _planTotalBytes = _scannedTotalBytes;
+        _planConflictCount = null;
+        _planLongPathCount = null;
+      });
+      return;
+    }
+
+    String effectiveDestination = destinationPath;
+    if (!isCompression && _selectedDrive != null) {
+      try {
+        final subfolder =
+            await jobQueueService.buildCardSubfolder(_selectedDrive!);
+        effectiveDestination = p.join(destinationPath, subfolder);
+      } catch (_) {
+        // Use bare destination if subfolder computation fails — not
+        // worth blocking the panel for a transient drive glitch.
+      }
+    }
+    if (gen != _planScanGen || !mounted) return;
+
+    var conflicts = 0;
+    var longPaths = 0;
+    for (final f in _scannedFiles) {
+      final relativePath = p.relative(f.sourcePath, from: sourcePath);
+      final destFullPath = p.join(effectiveDestination, relativePath);
+      if (destFullPath.length > 260) longPaths++;
+      if (await File(destFullPath).exists()) conflicts++;
+      if (gen != _planScanGen || !mounted) return;
+    }
+
+    setState(() {
+      _planScanInProgress = false;
+      _planFileCount = _scannedFiles.length;
+      _planTotalBytes = _scannedTotalBytes;
+      _planConflictCount = conflicts;
+      _planLongPathCount = longPaths;
+    });
   }
 
   Future<void> _refreshDrives() async {
@@ -180,6 +330,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               selected: {_jobType},
               onSelectionChanged: (selection) {
                 setState(() => _jobType = selection.first);
+                _schedulePlanRecompute();
               },
             ),
 
@@ -217,6 +368,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 favoriteType: FavoritePathType.source,
                 onPathSelected: (path) {
                   setState(() => _sourcePath = path);
+                  _schedulePlanRecompute();
                 },
               ),
               const SizedBox(height: 24),
@@ -236,20 +388,14 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               onPathSelected: (path) {
                 setState(() => _destinationPath = path);
                 _updateFreeSpace(path);
+                _schedulePlanRecompute();
               },
             ),
-            if (_destinationFreeSpace != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: _FreeSpaceSentence(
-                  freeBytes: _destinationFreeSpace!,
-                  // Plan summary panel (US8) feeds back the planned-bytes;
-                  // for now we only have free-space without plan totals, so
-                  // we render a simple "plenty/cutting close" verdict
-                  // without the won't-fit case.
-                  plannedBytes: null,
-                ),
-              ),
+            // T067-T069: free-space verdict moved into PlanSummaryPanel
+            // below so all plan facts (file count, bytes, free space,
+            // conflicts, long paths) live in one bordered panel above
+            // the Add to Queue button. Per-section _FreeSpaceSentence
+            // retired to avoid two free-space sentences on the page.
 
             const SizedBox(height: 24),
 
@@ -274,6 +420,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                       favoriteType: FavoritePathType.output,
                       onPathSelected: (path) {
                         setState(() => _compressionOutputPath = path);
+                        // Compression output folder doesn't change the
+                        // transfer-side plan, but recompute is cheap when
+                        // the source-scan cache is warm — keeps the
+                        // "Add to Queue" enabling logic in sync.
+                        _schedulePlanRecompute();
                       },
                     ),
                     const SizedBox(height: 16),
@@ -343,6 +494,20 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               const SizedBox(height: 24),
             ],
 
+            // US8 plan summary — live preview of what will happen if
+            // the operator clicks "Add to Queue". File count, total
+            // bytes, free-space verdict, conflict count, long-path
+            // warning all in one panel (T067-T071).
+            PlanSummaryPanel(
+              scanInProgress: _planScanInProgress,
+              fileCount: _planFileCount,
+              totalBytes: _planTotalBytes,
+              freeBytes: _destinationFreeSpace,
+              conflictCount: _planConflictCount,
+              longPathCount: _planLongPathCount,
+            ),
+            const SizedBox(height: 16),
+
             // Create button.
             SizedBox(
               width: double.infinity,
@@ -394,6 +559,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                     usedBytes: 0,
                   );
                 });
+                _schedulePlanRecompute();
               }),
             ),
           ],
@@ -410,7 +576,10 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
             avatar: const Icon(Icons.sd_storage, size: 16),
             label: Text('${drive.path}  ${drive.label}'),
             selected: _selectedDrive?.path == drive.path,
-            onSelected: (_) => setState(() => _selectedDrive = drive),
+            onSelected: (_) {
+              setState(() => _selectedDrive = drive);
+              _schedulePlanRecompute();
+            },
           ),
         ActionChip(
           avatar: const Icon(Icons.folder_open, size: 16),
@@ -634,48 +803,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       effectiveDestination = p.join(_destinationPath!, subfolder);
     }
 
-    // Check for paths exceeding Windows MAX_PATH (260 chars).
-    final longPaths = <String>[];
-    for (final entity in videoFiles) {
-      final relativePath = p.relative(entity.path, from: sourcePath);
-      final destFullPath = p.join(effectiveDestination, relativePath);
-      if (destFullPath.length > 260) {
-        longPaths.add(destFullPath);
-      }
-    }
-    if (longPaths.isNotEmpty && mounted) {
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Long file paths detected'),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('${longPaths.length} file(s) have destination paths exceeding 260 characters, '
-                    'which may cause failures on Windows:'),
-                const SizedBox(height: 8),
-                ...longPaths.take(10).map((path) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text('• $path',
-                          style: const TextStyle(fontSize: 11)),
-                    )),
-                if (longPaths.length > 10)
-                  Text('... and ${longPaths.length - 10} more',
-                      style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              ],
-            ),
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
+    // T072: long-path detection moved to PlanSummaryPanel as an inline
+    // yellow note BEFORE submit — the blocking AlertDialog interrupted
+    // the flow with information the operator already saw in the panel.
+    // FR-028: "9 files have paths > 260 chars — Windows may reject
+    // these" is surfaced upfront; the operator chooses whether to
+    // proceed. No mid-flow modal.
 
     // Build planned file list with sizes.
     final planned = <_PlannedFile>[];
@@ -899,41 +1032,7 @@ class _PlannedFile {
       );
 }
 
-/// Verdict-style free-space sentence (FR-027). Composes the right phrasing
-/// based on absolute free bytes and (when available) planned-bytes total.
-class _FreeSpaceSentence extends StatelessWidget {
-  final int freeBytes;
-  final int? plannedBytes;
-
-  const _FreeSpaceSentence({required this.freeBytes, this.plannedBytes});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final statusColors = Theme.of(context).extension<StatusColors>()!;
-    final freeText = formatBytes(freeBytes);
-
-    String sentence;
-    Color color = scheme.onSurfaceVariant;
-
-    if (plannedBytes != null && plannedBytes! > freeBytes) {
-      final shortBy = plannedBytes! - freeBytes;
-      sentence =
-          "$freeText free — won't fit, you have ${formatBytes(plannedBytes!)} to copy (${formatBytes(shortBy)} short)";
-      color = statusColors.error;
-    } else if (plannedBytes != null && plannedBytes! > freeBytes * 0.9) {
-      sentence =
-          '$freeText free — cutting it close (planned ${formatBytes(plannedBytes!)})';
-      color = statusColors.warning;
-    } else if (freeBytes > 1024 * 1024 * 1024 * 1024) {
-      sentence = '$freeText free — plenty of room';
-    } else {
-      sentence = '$freeText free';
-    }
-
-    return Text(
-      sentence,
-      style: TextStyle(color: color, fontSize: 12),
-    );
-  }
-}
+// _FreeSpaceSentence retired in US8 (T067-T069). The verdict sentence
+// now lives inside lib/ui/widgets/plan_summary_panel.dart (private
+// _FreeSpaceLine), composed alongside file count, conflict count, and
+// long-path note. This file no longer renders free-space inline.
