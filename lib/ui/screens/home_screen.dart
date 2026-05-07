@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../../services/queue_state_notifier.dart';
 import '../theme/app_theme.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
 import '../widgets/job_card.dart';
+import '../widgets/job_card_completed.dart';
 import 'settings_screen.dart';
 
 /// Queue list panel — can be used standalone or as left panel in ShellScreen.
@@ -40,6 +44,66 @@ class _HomeScreenState extends State<HomeScreen> {
   bool get _isEmbedded => widget.onCreateJob != null;
 
   Set<int> get _expandedJobIds => widget.expandedJobIds ?? const <int>{};
+
+  /// Snapshot of the just-completed jobs that drove the most recent
+  /// queue → all-done transition. Populated when the queue service
+  /// fires `notifyQueueAllDone`; cleared on `notifyDismissedByUser`
+  /// (operator created a job, started the queue, or dismissed the
+  /// celebration card explicitly). Drives the JobCardCompleted hero
+  /// (T060, FR-012).
+  List<Job>? _celebrationBatch;
+  StreamSubscription<QueueStateEvent>? _queueStateSub;
+  Timer? _celebrationDismissTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _queueStateSub = queueStateNotifier.events.listen(_handleQueueStateEvent);
+  }
+
+  @override
+  void dispose() {
+    _queueStateSub?.cancel();
+    _celebrationDismissTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _handleQueueStateEvent(QueueStateEvent event) async {
+    if (!mounted) return;
+    switch (event) {
+      case QueueStateEvent.allDone:
+        // Snapshot the most recent completed jobs to drive the
+        // celebration's per-card erase sequence (T061). Use a small
+        // window (last 60s) so we capture only this batch.
+        final cutoff =
+            DateTime.now().subtract(const Duration(seconds: 60));
+        final allCompleted = await jobDao.getCompletedJobsList();
+        if (!mounted) return;
+        final batch = allCompleted
+            .where((j) =>
+                j.status == JobStatus.completed &&
+                j.completedAt != null &&
+                j.completedAt!.isAfter(cutoff))
+            .toList();
+        setState(() => _celebrationBatch = batch);
+        // Auto-dismiss alongside the StatusBar green dot (5 minutes).
+        _celebrationDismissTimer?.cancel();
+        _celebrationDismissTimer = Timer(
+          const Duration(minutes: 5),
+          () {
+            if (mounted) setState(() => _celebrationBatch = null);
+          },
+        );
+        break;
+      case QueueStateEvent.runningStarted:
+      case QueueStateEvent.dismissedByUser:
+        _celebrationDismissTimer?.cancel();
+        if (_celebrationBatch != null) {
+          setState(() => _celebrationBatch = null);
+        }
+        break;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -248,6 +312,24 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: CustomScrollView(
                 slivers: [
+                  // Completion celebration (FR-012, T060). Pinned above
+                  // the active jobs sliver while present so the operator
+                  // sees it whether or not the queue scrolls.
+                  if (_celebrationBatch != null)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        child: JobCardCompleted(
+                          recentJobs: _celebrationBatch!,
+                          onNewJob: _onCreateJob,
+                          onDismiss: () {
+                            queueStateNotifier
+                                .notifyDismissedByUser();
+                          },
+                        ),
+                      ),
+                    ),
                   SliverReorderableList(
                     itemCount: activeJobs.length,
                     onReorder: (oldIndex, newIndex) {
@@ -308,6 +390,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
   void _onCreateJob() {
+    // Operator action — dismiss any active "all done" celebration so
+    // the green dot + JobCardCompleted clear in sync (T060).
+    queueStateNotifier.notifyDismissedByUser();
     if (_isEmbedded) {
       widget.onCreateJob!();
     }

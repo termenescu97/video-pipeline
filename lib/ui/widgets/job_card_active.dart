@@ -11,6 +11,7 @@ import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
 import 'detail_tabs.dart';
+import 'erase_drive_action.dart';
 import 'progress_bar.dart';
 
 /// Hero variant for the currently-running job.
@@ -172,7 +173,9 @@ class _Header extends StatelessWidget {
             ),
           ),
         ),
-        // Reserved Erase header slot — wired in US6 (T057).
+        // Header action slot (FR-018): Erase SD Card always visible
+        // for transfer-type jobs, disabled-with-reason until eligible.
+        EraseDriveActionButton(job: job),
         Builder(
           builder: (btnContext) => IconButton(
             tooltip: 'More actions',
