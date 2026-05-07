@@ -5,6 +5,14 @@
 **Status**: Draft
 **Input**: Synthesis of two parallel UI/UX review proposals (Opus subagent + Codex subagent), with operator preferences applied
 
+## Clarifications
+
+### Session 2026-05-07
+
+- Q: How should ETA be computed in Create Job plan summary, and how does it update during a running job? → A: Skip ETA in Create Job plan summary entirely. ETA only appears once the job is running, computed from the rolling speed average of the active transfer.
+- Q: How long does the green "recent done" status dot persist after the queue empties before reverting to grey? → A: Until the operator starts the next batch (creates a job, starts the queue) OR 5 minutes elapse, whichever comes first.
+- Q: When jobs are queued but nothing is running (queue paused or not yet started), does the queue panel still feature a hero card? → A: Yes — the first queued job is promoted to a "Next up" hero variant (distinct from the active "Running" hero — no progress bar, ready-to-run framing). Pressing Start activates it in place.
+
 ## User Scenarios & Testing
 
 ### User Story 1 — Trust at a Glance (Priority: P1)
@@ -38,7 +46,7 @@ The 80% workflow is "insert SD cards, click Copy All Cards, walk away." Today th
 1. **Given** SD cards are inserted, **When** the operator opens the app, **Then** the left Sources column already shows the detected cards without any user action.
 2. **Given** the Sources column shows detected cards, **When** the operator clicks Copy All Cards, **Then** the first thing they see is the list of detected cards with checkboxes (allowing per-card selection), followed by destination, verification mode, and a plan summary line ("Plan: 3 jobs · 290 GB · OK").
 3. **Given** the operator clicks an SD card in the Sources column, **When** Create Job opens, **Then** the source field is pre-filled with that card.
-4. **Given** Create Job is open, **When** the operator picks a destination, **Then** the plan summary at the bottom updates live with files, bytes, ETA, and time-of-day completion (`47 files · 118 GB · est. 11 min · done by 17:48`).
+4. **Given** Create Job is open, **When** the operator picks a destination, **Then** the plan summary at the bottom updates live with files, bytes, and validity verdict (e.g., `47 files · 118 GB`). ETA is not shown pre-flight; it appears on the active card once the job is running.
 5. **Given** the operator is creating a transfer-only job (90% case), **When** they look at the form, **Then** compression options are collapsed by default and not visually competing for attention.
 
 ---
@@ -135,16 +143,16 @@ Drag-to-reorder works today but has no visible affordance — the entire card is
 
 ### User Story 8 — Plan Summary Before Commit (Priority: P2)
 
-Today the operator clicks "Add to Queue" without seeing what they're committing to. Path-length warnings, disk-space warnings, and conflict counts surface as separate AlertDialogs after submit. The redesign adds a live plan summary panel at the bottom of Create Job: file count, total bytes, ETA, time-of-day completion, free-space verdict, conflict count, long-path count — all inline, all updating as the operator changes inputs.
+Today the operator clicks "Add to Queue" without seeing what they're committing to. Path-length warnings, disk-space warnings, and conflict counts surface as separate AlertDialogs after submit. The redesign adds a live plan summary panel at the bottom of Create Job: file count, total bytes, free-space verdict, conflict count, long-path count — all inline, all updating as the operator changes inputs. ETA is intentionally not shown pre-flight (no reliable throughput estimate before transfer starts) and appears only on the active hero card once the job is running.
 
 **Why this priority**: Operators are about to commit hours of transfer. They want to see "I am about to copy 47 files (118 GB) to D:\Project — done by 17:48" before clicking. Today they see a toast after.
 
-**Independent Test**: Open Create Job, pick a source and destination. Confirm the plan summary at the bottom shows file count, bytes, ETA, and time-of-day completion. Change destination to a folder with conflicts; confirm the conflict count appears in the plan summary inline (not as a separate dialog).
+**Independent Test**: Open Create Job, pick a source and destination. Confirm the plan summary at the bottom shows file count, bytes, and free-space verdict. Change destination to a folder with conflicts; confirm the conflict count appears in the plan summary inline (not as a separate dialog). Confirm ETA is NOT shown in the plan summary.
 
 **Acceptance Scenarios**:
 
 1. **Given** the operator picks a source in Create Job, **When** the file scan completes, **Then** the plan summary shows files and bytes.
-2. **Given** the operator picks a destination, **When** the path is valid, **Then** the plan summary shows ETA and time-of-day completion.
+2. **Given** the operator picks a destination, **When** the path is valid, **Then** the plan summary shows the free-space verdict (e.g., "4.2 TB free — plenty of room"). No ETA is shown at this stage.
 3. **Given** the destination has insufficient free space, **When** the plan summary updates, **Then** the free-space verdict reads "60 GB free — won't fit, you have 118 GB to copy" inline.
 4. **Given** some destination paths exceed 260 characters, **When** the plan summary updates, **Then** a yellow inline note appears: "9 files have paths > 260 chars — Windows may reject these" (no separate dialog).
 5. **Given** existing files are detected at the destination, **When** the plan summary updates, **Then** the conflict count is shown inline; the conflict-resolution dialog only appears when the operator clicks "Add to Queue."
@@ -208,6 +216,7 @@ Today only two shortcuts are wired (`Ctrl+N`, `Ctrl+Enter`) and they're advertis
 - What happens when no SD cards are detected? The Sources column shows a pulsing "Listening for SD cards…" banner that updates live as cards are inserted.
 - What happens when the Activity column has no completed jobs yet? The column shows an empty-state message with a brief explanation of what will appear there.
 - What happens when the active job card is large (a long file list expanded inline) and a new active job appears? The expanded card collapses; the new active job becomes the hero. State is preserved if the operator reopens the previous job from the Activity column.
+- What happens when the queue is paused or hasn't been started yet but contains jobs? The first queued job is rendered as a "Next up" hero (large, ready-to-run framing, no progress bar). Pressing Start activates it in place — the same card transitions from Next-up to Active without re-layout.
 - What happens to drag-to-reorder when only one job is queued? The drag handle remains visible but dragging has no effect.
 - What happens when the operator presses a keyboard shortcut while a modal dialog is open? Shortcuts are scoped to the main shell; modal-open state pauses them so typing in a TextField doesn't trigger queue actions.
 - What happens to crash-recovered jobs in the queue? They appear as paused with a clear "Recovered after restart" indicator on the card so the operator knows why the job is paused.
@@ -220,12 +229,13 @@ Today only two shortcuts are wired (`Ctrl+N`, `Ctrl+Enter`) and they're advertis
 
 - **FR-001**: The application MUST present three persistent columns at all times: Sources (left, fixed width), Queue + Detail (center, flex), Activity (right, fixed width).
 - **FR-002**: The application MUST enforce a minimum window size of 1280×720 to ensure the three-column layout always fits.
-- **FR-003**: The application MUST replace the current AppBar with a status bar containing: app icon and name, a single state dot (grey/blue/green/red/orange), queue summary text including time-of-day completion estimate, operator name, settings entry, and a help icon for the keyboard cheat sheet.
+- **FR-003**: The application MUST replace the current AppBar with a status bar containing: app icon and name, a single state dot (grey/blue/green/red/orange), queue summary text including time-of-day completion estimate (when a job is running), operator name, settings entry, and a help icon for the keyboard cheat sheet. The green "recent done" state MUST persist until the operator starts the next batch (creates a job or starts the queue) or 5 minutes elapse, whichever comes first; after that the dot reverts to grey (idle).
 - **FR-004**: The system tray icon tooltip MUST mirror the status bar's queue-summary text rather than displaying a static "Idle" string.
 
 **Job Card & Queue**
 
-- **FR-005**: Job cards MUST render in three variants: Active (large hero with prominent progress, animated bar, stats line, current filename, action buttons), Queued (slim two-line row with a visible `☰` drag handle), and Done (compact dimmed row).
+- **FR-005**: Job cards MUST render in four variants: **Active** (large hero with prominent progress, animated bar, stats line, current filename, action buttons — used when the job is currently running), **Next up** (large hero, ready-to-run framing without a progress bar, used for the first queued job when nothing is currently running), **Queued** (slim two-line row with a visible `☰` drag handle — used for queued jobs that are not next up), and **Done** (compact dimmed row).
+- **FR-005a**: The queue panel MUST always anchor on a hero card when at least one job is present: an Active hero when something is running, otherwise a Next-up hero on the first queued job. Pressing Start while a Next-up hero is shown MUST activate it in place (transitions to Active variant on the same card without re-layout).
 - **FR-006**: The drag-to-reorder listener MUST be attached to the `☰` handle, not the entire card body, so click-to-expand and drag-to-reorder do not conflict.
 - **FR-007**: Each job card MUST expose a visible `⋯` overflow button mirroring every action available via right-click.
 - **FR-008**: Job state MUST be communicated by a 12px colored dot at the card's left edge plus the card's left-border color; the redundant status chip on the right is removed.
@@ -255,7 +265,7 @@ Today only two shortcuts are wired (`Ctrl+N`, `Ctrl+Enter`) and they're advertis
 
 - **FR-024**: Create Job MUST present source selection as an inline radio row of detected drives plus a "Folder…" option (replacing the separate DriveList widget).
 - **FR-025**: Compression options MUST be collapsed by default and expand only when the operator chooses Copy & Compress (or expands the section).
-- **FR-026**: Create Job MUST display a live plan summary panel at the bottom containing: file count, total bytes, estimated duration, time-of-day completion, free-space verdict, conflict count, and long-path count.
+- **FR-026**: Create Job MUST display a live plan summary panel at the bottom containing: file count, total bytes, free-space verdict, conflict count, and long-path count. The plan summary MUST NOT include estimated duration or time-of-day completion (no reliable pre-flight throughput estimate exists); ETA appears only on the active hero card once the job is running.
 - **FR-027**: The destination free-space indicator MUST read as a sentence ("4.2 TB free — plenty of room" / "180 GB free — cutting it close" / "60 GB free — won't fit, you have 118 GB to copy") rather than a numeric label.
 - **FR-028**: Long destination paths exceeding 260 characters MUST be flagged inline in the plan summary as a yellow note ("9 files have paths > 260 chars — Windows may reject these"), not as a blocking AlertDialog.
 
