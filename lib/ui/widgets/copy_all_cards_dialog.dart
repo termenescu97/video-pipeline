@@ -145,18 +145,33 @@ class _CopyAllCardsDialogState extends State<CopyAllCardsDialog> {
     var destination = _destination!;
     while (true) {
       ConflictResolution? lastChoice;
-      final result = await jobQueueService.createBatchTransferJobs(
-        selectedDrives,
-        destination,
-        verificationMode: _verificationMode,
-        onConflict: (conflicts) async {
-          if (!mounted) return ConflictResolution.cancel;
-          final choice =
-              await ConflictResolutionDialog.show(context, conflicts);
-          lastChoice = choice ?? ConflictResolution.cancel;
-          return lastChoice!;
-        },
-      );
+      final ({int created, int skipped, List<String> conflicts}) result;
+      try {
+        result = await jobQueueService.createBatchTransferJobs(
+          selectedDrives,
+          destination,
+          verificationMode: _verificationMode,
+          onConflict: (conflicts) async {
+            if (!mounted) return ConflictResolution.cancel;
+            final choice =
+                await ConflictResolutionDialog.show(context, conflicts);
+            lastChoice = choice ?? ConflictResolution.cancel;
+            return lastChoice!;
+          },
+        );
+      } catch (e) {
+        // A drive vanished after validation but during enumeration
+        // (Directory.list throws on a removed device) — surface to the
+        // operator instead of crashing the dialog.
+        if (mounted) {
+          setState(() {
+            _creating = false;
+            _vanishedDriveError =
+                'A drive disappeared while creating jobs: $e. Re-insert and try again.';
+          });
+        }
+        return;
+      }
 
       if (lastChoice == ConflictResolution.newFolder) {
         final newDest = await FilePicker.platform.getDirectoryPath();

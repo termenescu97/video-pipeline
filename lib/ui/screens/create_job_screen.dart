@@ -60,6 +60,10 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   Future<void> _refreshDrives() async {
     setState(() => _loading = true);
     final drives = await driveService.getRemovableDrives();
+    if (!mounted) return;
+    final preSelectedVanished = _selectedDrive != null &&
+        widget.preSelectedDrive?.path == _selectedDrive!.path &&
+        !drives.any((d) => d.path == _selectedDrive!.path);
     setState(() {
       _drives = drives;
       _loading = false;
@@ -70,20 +74,31 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         _selectedDrive = null;
       }
     });
+    if (preSelectedVanished) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'Pre-selected drive is no longer detected. Pick a source manually.'),
+            duration: Duration(seconds: 4)),
+      );
+    }
   }
 
   Future<void> _loadPresets() async {
     final presets = await compressionService.getAvailablePresets();
+    if (!mounted) return;
     setState(() => _presets = presets);
   }
 
   Future<void> _checkHandbrake() async {
     final installed = await compressionService.isHandbrakeInstalled();
+    if (!mounted) return;
     setState(() => _handbrakeInstalled = installed);
   }
 
   Future<void> _loadLastUsedPaths() async {
     final settings = await settingsDao.getSettings();
+    if (!mounted) return;
     if (settings != null) {
       setState(() {
         if (settings.lastUsedDestination.isNotEmpty) {
@@ -98,6 +113,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
   Future<void> _updateFreeSpace(String path) async {
     final free = await driveService.getDiskFreeSpace(path);
+    if (!mounted) return;
     setState(() => _destinationFreeSpace = free > 0 ? free : null);
   }
 

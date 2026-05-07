@@ -6,6 +6,8 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
+import '../../services/drive_service.dart';
+import '../widgets/sources_panel.dart';
 import '../widgets/status_bar.dart';
 import 'create_job_screen.dart';
 import 'job_detail_screen.dart';
@@ -26,6 +28,10 @@ class _ShellScreenState extends State<ShellScreen>
   int? _selectedJobId;
   bool _showCreateJob = false;
   bool _shuttingDown = false;
+  // When the operator picks a drive from SourcesPanel, hand it to
+  // CreateJobScreen via this transient. Cleared when CreateJobScreen
+  // dismisses or another panel state takes over.
+  DetectedDrive? _preSelectedDrive;
 
   @override
   void initState() {
@@ -165,7 +171,24 @@ class _ShellScreenState extends State<ShellScreen>
             ),
             body: Row(
               children: [
-                // Left panel: queue list.
+                // Left panel: live SD card list (FR-020). Tapping a row
+                // opens Create Job pre-filled with that drive (FR-022).
+                // Full three-column layout (Sources / Queue / Activity)
+                // lands in US4 T046; this is the interim mount.
+                SizedBox(
+                  width: 240,
+                  child: SourcesPanel(
+                    onSourceSelected: (drive) {
+                      setState(() {
+                        _selectedJobId = null;
+                        _showCreateJob = true;
+                        _preSelectedDrive = drive;
+                      });
+                    },
+                  ),
+                ),
+                const VerticalDivider(width: 1),
+                // Center panel: queue list.
                 SizedBox(
                   width: 360,
                   child: HomeScreen(
@@ -179,6 +202,7 @@ class _ShellScreenState extends State<ShellScreen>
                       setState(() {
                         _selectedJobId = null;
                         _showCreateJob = true;
+                        _preSelectedDrive = null;
                       });
                     },
                   ),
@@ -199,8 +223,12 @@ class _ShellScreenState extends State<ShellScreen>
   Widget _buildRightPanel() {
     if (_showCreateJob) {
       return CreateJobScreen(
+        preSelectedDrive: _preSelectedDrive,
         onJobCreated: () {
-          setState(() => _showCreateJob = false);
+          setState(() {
+            _showCreateJob = false;
+            _preSelectedDrive = null;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content:

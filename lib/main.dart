@@ -83,6 +83,7 @@ void main() async {
   transferService = TransferService();
   compressionService = CompressionService();
   slackService = SlackService(settingsDao: settingsDao);
+  queueStateNotifier = QueueStateNotifier();
   jobQueueService = JobQueueService(
     jobDao: jobDao,
     jobFileDao: jobFileDao,
@@ -91,8 +92,8 @@ void main() async {
     compressionService: compressionService,
     driveService: driveService,
     logService: logService,
+    queueStateNotifier: queueStateNotifier,
   );
-  queueStateNotifier = QueueStateNotifier();
 
   runApp(const VideoPipelineApp());
 }

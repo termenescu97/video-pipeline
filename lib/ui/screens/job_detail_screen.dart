@@ -8,6 +8,7 @@ import '../../services/job_queue_service.dart';
 import '../../utils/error_mapper.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
+import '../widgets/files_tab.dart';
 import '../widgets/progress_bar.dart';
 
 /// Per-job detail view showing file list and progress.
@@ -148,73 +149,17 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
                 const SizedBox(height: 24),
 
-                // File list.
+                // File list — uses the new FilesTab widget so the
+                // "✓ matches" badge + JetBrains Mono hash popover (US3)
+                // are reachable today. Inline DetailTabs container lands
+                // in US5 T055; until then JobDetailScreen hosts FilesTab
+                // directly, giving it a bounded height for virtualization.
                 Text('Files',
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                StreamBuilder<List<JobFile>>(
-                  stream: jobFileDao.watchFilesForJob(widget.jobId),
-                  builder: (context, filesSnapshot) {
-                    final files = filesSnapshot.data ?? [];
-                    if (files.isEmpty) {
-                      return const Text('No files recorded yet');
-                    }
-
-                    return ListView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: files.length,
-                      itemBuilder: (context, index) {
-                        final file = files[index];
-                        final hasHash = file.sourceHash != null;
-                        if (hasHash) {
-                          return ExpansionTile(
-                            leading: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                _fileStatusIcon(file.status),
-                                const SizedBox(width: 4),
-                                const Icon(Icons.verified_user,
-                                    size: 16, color: Colors.blue),
-                              ],
-                            ),
-                            title: Text(file.fileName),
-                            subtitle: Text(formatBytes(file.fileSize)),
-                            dense: true,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text('Source SHA-256:',
-                                        style: TextStyle(
-                                            fontSize: 11, fontWeight: FontWeight.bold)),
-                                    Text(file.sourceHash ?? '—',
-                                        style: const TextStyle(
-                                            fontSize: 10, fontFamily: 'monospace')),
-                                    const SizedBox(height: 4),
-                                    const Text('Destination SHA-256:',
-                                        style: TextStyle(
-                                            fontSize: 11, fontWeight: FontWeight.bold)),
-                                    Text(file.destinationHash ?? '—',
-                                        style: const TextStyle(
-                                            fontSize: 10, fontFamily: 'monospace')),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-                        return ListTile(
-                          leading: _fileStatusIcon(file.status),
-                          title: Text(file.fileName),
-                          subtitle: Text(formatBytes(file.fileSize)),
-                          dense: true,
-                        );
-                      },
-                    );
-                  },
+                SizedBox(
+                  height: 360,
+                  child: FilesTab(jobId: widget.jobId),
                 ),
 
                 const SizedBox(height: 24),
@@ -277,10 +222,6 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
         ],
       ),
     );
-  }
-
-  Widget _fileStatusIcon(FileStatus status) {
-    return Icon(status.icon, color: status.color);
   }
 
   Future<void> _retryJob(int jobId) async {

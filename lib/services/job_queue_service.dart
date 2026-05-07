@@ -12,6 +12,7 @@ import '../database/tables.dart';
 import '../utils/constants.dart';
 import 'drive_service.dart';
 import 'log_service.dart';
+import 'queue_state_notifier.dart';
 import 'slack_service.dart';
 import 'transfer_service.dart';
 import 'compression_service.dart';
@@ -43,6 +44,7 @@ class JobQueueService {
   final CompressionService _compressionService;
   final DriveService _driveService;
   final LogService? _logService;
+  final QueueStateNotifier? _queueStateNotifier;
 
   bool _isProcessing = false;
   int? _currentJobId;
@@ -50,6 +52,10 @@ class JobQueueService {
   // writes have completed. Used by graceful shutdown so the database is
   // never closed while the queue may still be writing.
   Completer<void>? _stopCompleter;
+  // Tracks whether the current processing run was halted by an explicit
+  // Stop (operator action, tray quit, window close) versus draining
+  // naturally. Used to decide whether to emit the queue-all-done event.
+  bool _stoppedByUser = false;
 
   /// Real-time progress data for UI consumption.
   final ValueNotifier<ProgressData?> progressNotifier = ValueNotifier(null);
@@ -62,13 +68,15 @@ class JobQueueService {
     required CompressionService compressionService,
     required DriveService driveService,
     LogService? logService,
+    QueueStateNotifier? queueStateNotifier,
   })  : _jobDao = jobDao,
         _jobFileDao = jobFileDao,
         _slackService = slackService,
         _transferService = transferService,
         _compressionService = compressionService,
         _driveService = driveService,
-        _logService = logService;
+        _logService = logService,
+        _queueStateNotifier = queueStateNotifier;
 
   /// Sanitize a drive label for safe use as a folder name.
   /// Replaces non-alphanumeric characters with underscore. Empty labels
@@ -95,7 +103,11 @@ class JobQueueService {
   Future<void> startProcessing() async {
     if (_isProcessing) return;
     _isProcessing = true;
+    _stoppedByUser = false;
+    _queueStateNotifier?.notifyQueueRunningStarted();
 
+    var hadFailures = false;
+    var processedAny = false;
     try {
       while (_isProcessing) {
         final job = await _jobDao.getNextQueuedJob();
@@ -104,8 +116,12 @@ class JobQueueService {
           break;
         }
 
+        processedAny = true;
         _currentJobId = job.id;
         await _processJob(job);
+        // Re-read the just-processed job to detect failure outcome.
+        final after = await _jobDao.watchJob(job.id).first;
+        if (after?.status == JobStatus.failed) hadFailures = true;
         _currentJobId = null;
       }
     } finally {
@@ -114,6 +130,12 @@ class JobQueueService {
       final completer = _stopCompleter;
       _stopCompleter = null;
       completer?.complete();
+      // Emit allDone only when the queue drained naturally with no
+      // failures AND we actually processed something. A pure Stop
+      // (no work happened) MUST NOT trigger the celebration.
+      if (processedAny && !hadFailures && !_stoppedByUser) {
+        _queueStateNotifier?.notifyQueueAllDone();
+      }
     }
   }
 
@@ -136,6 +158,7 @@ class JobQueueService {
     final completer = Completer<void>();
     _stopCompleter = completer;
     _isProcessing = false;
+    _stoppedByUser = true;
     _transferService.cancel();
     _compressionService.cancel();
     return completer.future;

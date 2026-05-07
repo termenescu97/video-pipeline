@@ -40,15 +40,31 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         final jobs = snapshot.data ?? [];
-        // Split into active and completed/failed.
-        final activeJobs = jobs
-            .where((j) =>
-                j.status != JobStatus.completed && j.status != JobStatus.failed)
-            .toList();
-        final historyJobs = jobs
-            .where((j) =>
-                j.status == JobStatus.completed || j.status == JobStatus.failed)
-            .toList();
+        // Warning banners (Slack misconfigured, HandBrake missing,
+        // failed-jobs banner) MUST render above both empty and
+        // populated queue states. Wrap the whole body in a Column
+        // so the banner slot is never hidden by an empty-state early
+        // return.
+        return Column(
+          children: [
+            const _WarningBannerSlot(),
+            Expanded(child: _buildBody(context, jobs)),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(BuildContext context, List<Job> jobs) {
+    // Split into active and completed/failed.
+    final activeJobs = jobs
+        .where((j) =>
+            j.status != JobStatus.completed && j.status != JobStatus.failed)
+        .toList();
+    final historyJobs = jobs
+        .where((j) =>
+            j.status == JobStatus.completed || j.status == JobStatus.failed)
+        .toList();
 
         // Compute the next-up index: first queued/paused job's index in
         // activeJobs when no job is in progress. -1 if no next-up exists.
@@ -181,12 +197,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Column(
           children: [
-            // Warning-banner slot. Stacks: failed-jobs banner (US7 T065),
-            // HandBrake-missing banner (Polish T108), Slack-misconfigured
-            // banner (existing — kept). Banners render in priority order;
-            // only those whose conditions are met are shown.
-            const _WarningBannerSlot(),
-            // Start/Stop + batch buttons.
+            // Banner slot is rendered by the outer build() wrapper; this
+            // inner column starts directly with the queue controls.
             Padding(
               padding: const EdgeInsets.all(8),
               child: Row(
@@ -299,8 +311,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         );
-      },
-    );
   }
 
   void _onJobTap(Job job) {

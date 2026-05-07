@@ -24,20 +24,23 @@ class QueueSummaryComposer {
     final queued = jobs.where((j) => j.status == JobStatus.queued).length;
     final failed = jobs.where((j) => j.status == JobStatus.failed).length;
 
-    // Worst-condition-wins, mirroring the dot precedence (FR-003a).
+    // Worst-condition-wins, mirroring dot precedence (FR-003a):
+    // attention > warning > active > recentDone > idle. Warnings
+    // (Slack/HandBrake) MUST beat running so the summary line and dot
+    // never disagree.
     if (failed > 0) {
       return failed == 1 ? '1 failed — review' : '$failed failed — review';
-    }
-    if (running > 0) {
-      final total = running + queued;
-      final etaText = completionEta != null ? ', done by ${_formatTime(completionEta)}' : '';
-      return 'RUNNING — $running of $total$etaText';
     }
     if (!slackConfigured) {
       return 'Slack notifications disabled';
     }
     if (!handbrakeInstalled) {
       return 'HandBrake missing — compression disabled';
+    }
+    if (running > 0) {
+      final total = running + queued;
+      final etaText = completionEta != null ? ', done by ${_formatTime(completionEta)}' : '';
+      return 'RUNNING — $running of $total$etaText';
     }
     if (recentlyDone) {
       return 'All cards copied & verified';

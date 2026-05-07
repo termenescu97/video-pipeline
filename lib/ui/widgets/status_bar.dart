@@ -39,7 +39,6 @@ class _StatusBarState extends State<StatusBar>
   late final AnimationController _pulseController;
   Timer? _greenDotTimer;
   bool _recentlyDone = false;
-  bool _wasRunning = false;
   bool _handbrakeInstalled = true;
   StreamSubscription<QueueStateEvent>? _notifierSub;
 
@@ -103,29 +102,23 @@ class _StatusBarState extends State<StatusBar>
     super.dispose();
   }
 
-  void _maybePushTrayTooltip(String summary) {
+  /// Schedule a tray tooltip update. Caches the last summary string so
+  /// rebuilds with no new content do not enqueue redundant post-frame
+  /// callbacks. Throttled to 1 Hz.
+  void _scheduleTrayTooltipPush(String summary) {
     if (!Platform.isWindows) return;
-    final now = DateTime.now();
     if (summary == _lastTooltip) return;
-    if (now.difference(_lastTooltipPushAt) < const Duration(seconds: 1)) return;
     _lastTooltip = summary;
-    _lastTooltipPushAt = now;
-    // Fire-and-forget; tray failures must not propagate.
-    trayManager.setToolTip('Copiatorul3000 — $summary').catchError((_) {});
-  }
-
-  /// Derive the queue-all-done event from our own state transitions, since
-  /// no other component fires `notifyQueueAllDone` yet (HomeScreen wires its
-  /// celebration in US6). When transitioning running → idle with no failures,
-  /// emit on the notifier so future subscribers see the same event.
-  void _maybeEmitAllDone({required bool isRunning, required int failedCount}) {
-    if (_wasRunning && !isRunning && failedCount == 0) {
-      // Schedule outside build to avoid emitting during a frame.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) queueStateNotifier.notifyQueueAllDone();
-      });
-    }
-    _wasRunning = isRunning;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      if (now.difference(_lastTooltipPushAt) <
+          const Duration(seconds: 1)) {
+        return;
+      }
+      _lastTooltipPushAt = now;
+      trayManager.setToolTip('Copiatorul3000 — $summary').catchError((_) {});
+    });
   }
 
   @override
@@ -168,12 +161,6 @@ class _StatusBarState extends State<StatusBar>
                     final isRunning = jobs
                         .any((j) => j.status == JobStatus.inProgress);
 
-                    // Run derivation side-effects (post-frame).
-                    _maybeEmitAllDone(
-                      isRunning: isRunning,
-                      failedCount: failedCount,
-                    );
-
                     final completionEta = progress?.eta != null
                         ? DateTime.now().add(progress!.eta!)
                         : null;
@@ -194,10 +181,10 @@ class _StatusBarState extends State<StatusBar>
                       recentlyDone: _recentlyDone,
                     );
 
-                    // Throttled tray tooltip mirror (FR-004).
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      _maybePushTrayTooltip(summary);
-                    });
+                    // Throttled tray tooltip mirror (FR-004). Dedup at
+                    // scheduling time so rebuilds with the same summary
+                    // don't enqueue redundant callbacks.
+                    _scheduleTrayTooltipPush(summary);
 
                     return Row(
                       children: [
