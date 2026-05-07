@@ -50,16 +50,17 @@ lib/
 ├── main.dart                    # Entry point, singleton services
 ├── app.dart                     # MaterialApp, update check on launch
 ├── database/
-│   ├── database.dart            # Drift database class (schema v2)
+│   ├── database.dart            # Drift database class (schema v5)
 │   ├── tables.dart              # Job, JobFile, FavoritePath, AppSettings
 │   ├── extensions.dart          # Extension methods on JobType, JobStatus, FileStatus
 │   └── daos/                    # Data access objects (JobDao, JobFileDao, etc.)
 ├── services/
-│   ├── job_queue_service.dart   # Queue processing, auto-chain, batch creation
-│   ├── transfer_service.dart    # Robocopy subprocess via ProcessRunner
+│   ├── job_queue_service.dart   # Queue processing, auto-chain, batch creation, progress notifier
+│   ├── transfer_service.dart    # Robocopy subprocess via ProcessRunner, SHA-256 hashing
 │   ├── compression_service.dart # HandBrakeCLI subprocess via ProcessRunner
-│   ├── slack_service.dart       # Webhook notifications
-│   ├── drive_service.dart       # SD card detection, disk space, erase
+│   ├── slack_service.dart       # Webhook notifications (with operator name + verification method)
+│   ├── drive_service.dart       # SD card detection, disk space, erase, test card prep
+│   ├── log_service.dart         # Persistent file logger (copiatorul3000.log)
 │   └── update_service.dart      # GitHub Releases API check
 ├── ui/
 │   ├── screens/
@@ -67,21 +68,22 @@ lib/
 │   │   ├── home_screen.dart     # Left panel: job queue, batch copy, start/stop, history
 │   │   ├── create_job_screen.dart # Right panel: job creation form
 │   │   ├── job_detail_screen.dart # Right panel: job progress, retry, erase
-│   │   └── settings_screen.dart   # Slack webhook, update toggle
+│   │   └── settings_screen.dart   # Slack webhook, operator name, update toggle, test card prep
 │   ├── widgets/                 # JobCard, DriveList, ProgressBar, ConfirmationDialog
 │   └── theme/app_theme.dart     # StatusColors theme extension
 └── utils/
     ├── constants.dart           # Video extensions, robocopy flags, regex patterns
-    ├── format_utils.dart        # formatBytes, formatDuration, formatSpeed
+    ├── format_utils.dart        # formatBytes, formatDuration, formatSpeed, formatRelativeTime
     ├── error_mapper.dart        # Raw errors → human-friendly messages
     ├── process_runner.dart      # Shared subprocess stdout/stderr streaming
     ├── robocopy_parser.dart     # Parse robocopy output and exit codes
-    └── handbrake_parser.dart    # Parse HandBrakeCLI progress output
+    ├── handbrake_parser.dart    # Parse HandBrakeCLI progress output
+    └── instance_lock.dart       # PID-based single-instance lock
 ```
 
 ## Current State (as of 2026-05-06)
 
-### Completed Features (6 spec-kit features)
+### Completed Features (12 spec-kit features)
 
 | Feature | Branch | Tasks | Status |
 |---------|--------|-------|--------|
@@ -97,7 +99,7 @@ lib/
 | 011 - SHA-256 Verification | `011-sha256-verification` | 19/19 | ✅ Complete |
 | 012 - Test Card Prep | `012-test-card-prep` | 4/4 | ✅ Complete |
 
-**Latest release**: v2.1.0 (tagged, built via GitHub Actions)
+**Latest release**: v2.2.0 (tagged, built via GitHub Actions)
 **Total tasks implemented**: 231
 
 ### What Works
@@ -121,9 +123,20 @@ lib/
 - Auto-update check from GitHub Releases (prompted, never silent)
 - Native folder picker (file_picker)
 - Favorites system for frequently used paths
+- Last-used destination auto-fill across sessions
 - Debounced settings save
+- Operator name tracking (in settings, jobs, Slack messages)
+- CSV history export via file save dialog
+- Relative timestamps on history cards
+- Real-time progress bar with speed (MB/s), ETA, current filename
+- Persistent local log file (copiatorul3000.log next to executable)
+- Single-instance lock (PID-based, prevents database corruption)
+- Slack webhook unconfigured banner on home screen
+- First-run welcome/onboarding state
+- Path length warning for Windows 260-char limit
 - Optional SHA-256 hash verification per job (toggle in creation form + batch copy)
 - Hash audit trail — source and destination hashes stored per file, viewable in UI
+- Test card prep utility (one-click SD card setup for QA testing)
 
 ### Known Issues (from review-report-v2.md)
 
@@ -168,6 +181,19 @@ Full report: `specs/006-review-findings/review-report-v2.md`
 
 **All 30 review issues resolved** (28 fixed, 2 false positives, 1 deferred to v3.0 by design).
 
+### Open Bugs (fix before next release)
+
+**CRITICAL: Cross-card collision in batch copy** (found by GPT 5.5 adversarial review)
+- `lib/services/job_queue_service.dart:405,412` — batch copy creates jobs with the same destination for all cards. Cards with identical DCIM structure (e.g., `DCIM/100CANON/C0001.MP4` on two Canon cameras) overwrite each other.
+- Fix: create a per-card subfolder in destination using drive label or letter.
+- Track as feature 013 through spec-kit flow.
+
+### Review & Quality Process
+
+- **Codex plugin installed** (`openai/codex-plugin-cc`) — enables `/codex:adversarial-review` and `/codex:rescue` for GPT-powered code reviews
+- **Adversarial review pattern**: after implementing a feature, run a review before merging. Has caught command injection, data loss bugs, and Constitution violations.
+- **Known false positives**: QA-5 (dropdown param correct in Flutter 3.41.9), QA-7 (Dart event loop makes race guard correct)
+
 ### v3.0 Roadmap (from PM review)
 
 **Tier 1**: NAS upload automation, auto-detect SD cards, dashboard stats, ~~SHA-256 verification~~ (done in 011)
@@ -183,8 +209,8 @@ dart run build_runner build
 flutter analyze
 
 # Release (triggers GitHub Actions Windows build)
-git tag v2.1.0
-git push origin v2.1.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 # → GitHub Actions builds .exe → creates Release with zip
 # → App checks GitHub Releases on launch and prompts to update
 ```
