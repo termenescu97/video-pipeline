@@ -70,16 +70,26 @@ class SettingsDao extends DatabaseAccessor<AppDatabase>
         .write(AppSettingsCompanion(defaultVerificationMode: Value(mode)));
   }
 
-  /// US9 (T079): default conflict-resolution behavior. Values:
+  /// US9 (T079): default conflict-resolution behavior. Allowed values:
   ///   `'ask'`        — show the resolution dialog (current v2.3.0 default)
   ///   `'skip'`       — silently skip pre-existing files
   ///   `'rename'`     — auto-suffix _1, _2, …
-  ///   `'newFolder'`  — prompt only for a new destination
-  ///   `'overwrite'`  — overwrite without prompt (RESERVED — never the
-  ///                    default; should still require a typed confirm
-  ///                    when saving this value, per Constitution
-  ///                    Principle I)
+  ///
+  /// `'overwrite'` is REJECTED at this boundary. Constitution Principle I:
+  /// silent overwrite must always require typed confirm at point of use,
+  /// never as a stored default. The UI omits 'overwrite' from the
+  /// dropdown; the assertion below ensures a stray DB write — or a
+  /// future code path — can't smuggle it in either.
+  ///
+  /// `'newFolder'` is also rejected as a stored default — it requires
+  /// interactive folder picking and degrades to 'ask' at runtime, so
+  /// storing it would be a silently-wrong UX promise (Codex Phase 11
+  /// review WARN). Operator picks newFolder per-job, never as default.
   Future<void> setDefaultConflictResolution(String resolution) {
+    assert(
+      const {'ask', 'skip', 'rename'}.contains(resolution),
+      'Invalid defaultConflictResolution: "$resolution". Allowed: ask, skip, rename.',
+    );
     return (update(appSettings)..where((t) => t.id.equals(1)))
         .write(AppSettingsCompanion(defaultConflictResolution: Value(resolution)));
   }

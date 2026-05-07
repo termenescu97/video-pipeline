@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../database/database.dart';
 import '../../main.dart';
+import '../../services/drive_service.dart';
 import '../../services/update_service.dart';
 import '../../utils/instance_lock.dart';
 import '../theme/app_theme.dart';
@@ -37,6 +38,20 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   int _selectedIndex = 0;
+
+  /// Lifted from _NotificationsSection (Codex Phase 11 review WARN —
+  /// state was lost on every nav between sections; spec says it
+  /// persists "until app launch"). Owned here, passed down so the
+  /// connection pill survives section switches.
+  bool? _slackLastTestOk;
+  DateTime? _slackLastTestAt;
+
+  void _setSlackTestResult(bool ok, DateTime at) {
+    setState(() {
+      _slackLastTestOk = ok;
+      _slackLastTestAt = at;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -94,7 +109,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildSection() {
     switch (_selectedIndex) {
       case 0:
-        return const _NotificationsSection();
+        return _NotificationsSection(
+          lastTestOk: _slackLastTestOk,
+          lastTestAt: _slackLastTestAt,
+          onTestResult: _setSlackTestResult,
+        );
       case 1:
         return const _OperatorSection();
       case 2:
@@ -117,7 +136,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 /// app restart by design (no schema change, no false confidence
 /// from a stale persisted "OK" if the webhook has since been revoked).
 class _NotificationsSection extends StatefulWidget {
-  const _NotificationsSection();
+  /// Last-test state owned by [_SettingsScreenState] so it survives
+  /// nav between sections (Codex Phase 11 review WARN). null = never
+  /// tested this session.
+  final bool? lastTestOk;
+  final DateTime? lastTestAt;
+  final void Function(bool ok, DateTime at) onTestResult;
+
+  const _NotificationsSection({
+    required this.lastTestOk,
+    required this.lastTestAt,
+    required this.onTestResult,
+  });
 
   @override
   State<_NotificationsSection> createState() => _NotificationsSectionState();
@@ -129,10 +159,6 @@ class _NotificationsSectionState extends State<_NotificationsSection> {
   bool _testingWebhook = false;
   bool _saved = false;
   Timer? _savedHideTimer;
-
-  /// In-memory last-test result. null = never tested this session.
-  bool? _lastTestOk;
-  DateTime? _lastTestAt;
 
   @override
   void initState() {
@@ -175,11 +201,10 @@ class _NotificationsSectionState extends State<_NotificationsSection> {
     setState(() => _testingWebhook = true);
     final ok = await slackService.sendTestNotification();
     if (!mounted) return;
-    setState(() {
-      _testingWebhook = false;
-      _lastTestOk = ok;
-      _lastTestAt = DateTime.now();
-    });
+    setState(() => _testingWebhook = false);
+    // Persist via the parent so the result survives nav between
+    // settings sections (Codex Phase 11 review WARN).
+    widget.onTestResult(ok, DateTime.now());
   }
 
   @override
@@ -232,10 +257,10 @@ class _NotificationsSectionState extends State<_NotificationsSection> {
                 label: const Text('Test now'),
               ),
               const SizedBox(width: Insets.m),
-              if (_lastTestAt != null)
+              if (widget.lastTestAt != null)
                 Text(_lastTestText(),
                     style: AppTextStyles.caption.copyWith(
-                      color: _lastTestOk == true
+                      color: widget.lastTestOk == true
                           ? Theme.of(context)
                               .extension<StatusColors>()!
                               .success
@@ -251,10 +276,11 @@ class _NotificationsSectionState extends State<_NotificationsSection> {
   }
 
   String _lastTestText() {
-    if (_lastTestAt == null) return '';
-    final hh = _lastTestAt!.hour.toString().padLeft(2, '0');
-    final mm = _lastTestAt!.minute.toString().padLeft(2, '0');
-    return _lastTestOk == true
+    final at = widget.lastTestAt;
+    if (at == null) return '';
+    final hh = at.hour.toString().padLeft(2, '0');
+    final mm = at.minute.toString().padLeft(2, '0');
+    return widget.lastTestOk == true
         ? 'Last test: OK $hh:$mm'
         : 'Last test: failed at $hh:$mm';
   }
@@ -262,7 +288,7 @@ class _NotificationsSectionState extends State<_NotificationsSection> {
   Widget _connectionPill() {
     final statusColors = Theme.of(context).extension<StatusColors>()!;
     final scheme = Theme.of(context).colorScheme;
-    final (label, color) = switch (_lastTestOk) {
+    final (label, color) = switch (widget.lastTestOk) {
       true => ('Connected', statusColors.success),
       false => ('Failed', statusColors.error),
       null => ('Untested', scheme.onSurfaceVariant),
@@ -429,14 +455,21 @@ class _BehaviorSection extends StatelessWidget {
               ),
               const SizedBox(height: Insets.l),
               _LabeledDropdown<String>(
+                // 'newFolder' is intentionally NOT here — it requires
+                // interactive folder picking and degrades to 'ask' at
+                // runtime, so storing it would be a silently-wrong UX
+                // promise (Codex Phase 11 review WARN). 'overwrite' is
+                // omitted under Principle I — silent overwrite must
+                // require typed confirm at point of use.
                 label: 'Default conflict handling',
-                value: settings.defaultConflictResolution,
+                value: const {'ask', 'skip', 'rename'}
+                        .contains(settings.defaultConflictResolution)
+                    ? settings.defaultConflictResolution
+                    : 'ask',
                 items: const [
                   ('ask', 'Ask each time (recommended)'),
                   ('skip', 'Skip files that already exist'),
                   ('rename', 'Rename new files (_1, _2, …)'),
-                  ('newFolder', 'Prompt for a different folder'),
-                  // 'overwrite' deliberately omitted — Principle I.
                 ],
                 onChanged: (v) {
                   if (v != null) {
@@ -469,6 +502,11 @@ class _DiagnosticsSection extends StatefulWidget {
 class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
   bool? _handbrakeInstalled;
   InstanceLockDiagnostic? _lockDiagnostic;
+
+  /// In-flight Prep Test Cards run. Disables the button and surfaces
+  /// a progress indicator so multi-card copies don't appear frozen
+  /// (Codex Phase 11 review CRITICAL — Principle V).
+  bool _preppingCards = false;
 
   @override
   void initState() {
@@ -511,14 +549,13 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
 
           const Divider(height: Insets.xl),
 
-          // Instance lock
+          // Instance lock — when not held, surface the recorded PID
+          // so the operator knows which process is holding it (Codex
+          // Phase 11 review WARN — "Not held" alone gave no actionable
+          // signal).
           _DiagRow(
             label: 'Single-instance lock',
-            value: _lockDiagnostic == null
-                ? 'Loading…'
-                : _lockDiagnostic!.heldByThisProcess
-                    ? 'Held by this process (PID ${_lockDiagnostic!.currentPid})'
-                    : 'Not held — startup would fail',
+            value: _instanceLockValue(_lockDiagnostic),
             mutedNote: _lockDiagnostic?.lockFilePath,
           ),
 
@@ -552,14 +589,36 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
               ),
             ),
             const SizedBox(height: Insets.m),
-            FilledButton.tonal(
-              onPressed: _prepTestCards,
-              child: const Text('Prep Test Cards'),
+            FilledButton.tonalIcon(
+              onPressed: _preppingCards ? null : _prepTestCards,
+              icon: _preppingCards
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child:
+                          CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.science_outlined, size: 16),
+              label: Text(_preppingCards
+                  ? 'Prepping cards…'
+                  : 'Prep Test Cards'),
             ),
           ],
         ],
       ),
     );
+  }
+
+  String _instanceLockValue(InstanceLockDiagnostic? d) {
+    if (d == null) return 'Loading…';
+    if (d.heldByThisProcess) {
+      return 'Held by this process (PID ${d.currentPid})';
+    }
+    final other = d.recordedPid;
+    if (other != null) {
+      return 'Held by another process (PID $other) — startup would fail';
+    }
+    return 'Not held by this process — startup would fail';
   }
 
   Future<void> _revealLogFile() async {
@@ -611,7 +670,22 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
     );
     if (sourceFolder == null) return;
 
-    final result = await driveService.prepTestCards(sourceFolder, drives);
+    if (!mounted) return;
+    setState(() => _preppingCards = true);
+    try {
+      final result =
+          await driveService.prepTestCards(sourceFolder, drives);
+      if (!mounted) return;
+      await _showPrepResult(result, drives);
+    } finally {
+      if (mounted) setState(() => _preppingCards = false);
+    }
+  }
+
+  Future<void> _showPrepResult(
+    ({int cardsPrepped, int filesCopied, List<String> errors}) result,
+    List<DetectedDrive> drives,
+  ) async {
     if (!mounted) return;
 
     if (result.filesCopied == 0 && result.errors.isEmpty) {

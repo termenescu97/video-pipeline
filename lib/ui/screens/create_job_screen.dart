@@ -298,6 +298,16 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     setState(() => _handbrakeInstalled = installed);
   }
 
+  /// Read the operator's default conflict-resolution preference from
+  /// settings. Allowed values are validated at the DAO setter, but we
+  /// also gate here defensively — any unexpected stored value falls
+  /// back to 'ask' (the safe v2.3.0 behavior).
+  Future<String> _readDefaultConflictResolution() async {
+    final settings = await settingsDao.getSettings();
+    final v = settings?.defaultConflictResolution ?? 'ask';
+    return const {'ask', 'skip', 'rename'}.contains(v) ? v : 'ask';
+  }
+
   Future<void> _loadLastUsedPaths() async {
     final settings = await settingsDao.getSettings();
     if (!mounted) return;
@@ -920,7 +930,15 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     // exists, and if so let the operator choose how to resolve. Repeats
     // until the operator picks an actionable resolution (skip, rename,
     // overwrite) or aborts.
+    //
+    // US9 (T079, Codex Phase 11 fix): if the operator set a default
+    // conflict-resolution to 'skip' or 'rename' in Settings → Behavior,
+    // auto-apply it ONCE without showing the dialog. 'ask' (default)
+    // and 'newFolder' (requires interaction) both fall through to the
+    // dialog.
+    final defaultConflictRes = await _readDefaultConflictResolution();
     var resolved = planned;
+    var autoApplied = false;
     while (true) {
       final conflicts = <String>[];
       for (final f in resolved) {
@@ -929,6 +947,37 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         }
       }
       if (conflicts.isEmpty) break;
+
+      // Auto-apply path: only on the FIRST conflict pass (avoid loops
+      // if rename produces a new conflict immediately, which it
+      // shouldn't but defense-in-depth).
+      if (!autoApplied &&
+          (defaultConflictRes == 'skip' ||
+              defaultConflictRes == 'rename')) {
+        autoApplied = true;
+        final auto = defaultConflictRes == 'skip'
+            ? ConflictResolution.skip
+            : ConflictResolution.rename;
+        resolved = _applyResolution(resolved, auto);
+        if (resolved.isEmpty) {
+          if (mounted) {
+            final statusColors =
+                Theme.of(context).extension<StatusColors>()!;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'All files already exist at destination — no files to transfer.',
+                ),
+                backgroundColor: statusColors.warning,
+              ),
+            );
+          }
+          return;
+        }
+        // Re-loop in case rename produced any new conflicts (extremely
+        // rare but the suffix scheme is best-effort).
+        continue;
+      }
 
       if (!mounted) return;
       final choice =
