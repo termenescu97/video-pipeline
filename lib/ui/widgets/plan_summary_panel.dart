@@ -52,6 +52,12 @@ class PlanSummaryPanel extends StatelessWidget {
   /// distinction as [conflictCount].
   final int? longPathCount;
 
+  /// First-N long-path samples (capped to 10 by the host) — surfaced
+  /// behind a "View files" affordance so the operator can see *which*
+  /// files are at risk without forcing an acknowledgment dialog.
+  /// When empty/null the affordance hides.
+  final List<String>? longPathSamples;
+
   const PlanSummaryPanel({
     super.key,
     required this.scanInProgress,
@@ -60,6 +66,7 @@ class PlanSummaryPanel extends StatelessWidget {
     this.freeBytes,
     this.conflictCount,
     this.longPathCount,
+    this.longPathSamples,
   });
 
   @override
@@ -136,7 +143,10 @@ class PlanSummaryPanel extends StatelessWidget {
 
           // Long-path inline note — yellow, replaces the v2.3.0 blocking
           // AlertDialog (T072). Surfaces upfront so the operator decides
-          // BEFORE creating the job (FR-028).
+          // BEFORE creating the job (FR-028). The "View files" link
+          // opens the actual filenames in a small modal so the
+          // information loss from removing the AlertDialog is recovered
+          // (Codex Phase 10 WARN).
           if (longPathCount != null && longPathCount! > 0) ...[
             const SizedBox(height: Insets.xs),
             Row(
@@ -147,14 +157,27 @@ class PlanSummaryPanel extends StatelessWidget {
                 Expanded(
                   child: Text(
                     longPathCount == 1
-                        ? '1 file has a path > 260 chars — '
-                            'Windows may reject it'
+                        ? '1 file has a path > 260 chars — HandBrake '
+                            'or Explorer may fail on it'
                         : '${longPathCount!} files have paths > 260 chars — '
-                            'Windows may reject these',
+                            'HandBrake or Explorer may fail on these',
                     style: AppTextStyles.caption
                         .copyWith(color: statusColors.warning),
                   ),
                 ),
+                if (longPathSamples != null && longPathSamples!.isNotEmpty)
+                  TextButton(
+                    onPressed: () =>
+                        _showLongPathDetails(context, longPathSamples!),
+                    style: TextButton.styleFrom(
+                      foregroundColor: statusColors.warning,
+                      minimumSize: const Size(0, 28),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: Insets.s),
+                    ),
+                    child: const Text('View files',
+                        style: TextStyle(fontSize: 12)),
+                  ),
               ],
             ),
           ],
@@ -176,6 +199,50 @@ class PlanSummaryPanel extends StatelessWidget {
     final bytes = totalBytes != null ? formatBytes(totalBytes!) : '—';
     return '$fileCount file${fileCount == 1 ? '' : 's'} · $bytes';
   }
+}
+
+/// "View files" modal listing the long-path destinations the panel is
+/// warning about. Non-blocking, non-acknowledging — the operator can
+/// dismiss and proceed. Long paths cause per-file failures (observable
+/// via the failed-files list post-run), not a destructive outcome
+/// requiring Principle I confirmation.
+void _showLongPathDetails(BuildContext context, List<String> samples) {
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Long file paths'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'These destination paths exceed Windows MAX_PATH (260 chars).\n'
+                'robocopy will copy them via the long-path-aware API, but '
+                'HandBrake and Explorer-level operations may fail per-file.',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              for (final path in samples)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('• $path',
+                      style: const TextStyle(fontSize: 11)),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Inline free-space verdict (FR-027). Three states:

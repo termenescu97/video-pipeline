@@ -62,6 +62,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   int? _planTotalBytes;
   int? _planConflictCount;
   int? _planLongPathCount;
+  // First N long-path destinations — surfaced via the panel's "View
+  // files" affordance so the operator can see *which* files are at
+  // risk, not just the count (Codex Phase 10 WARN — T072 had dropped
+  // this detail when the blocking AlertDialog was removed).
+  List<String> _planLongPathSamples = const <String>[];
 
   @override
   void initState() {
@@ -83,30 +88,57 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     super.dispose();
   }
 
-  /// Schedule a debounced plan recompute. Called from every state change
-  /// that could affect the plan (source pick, destination pick, job-type
-  /// flip). 250ms debounce so a fast keyboard-driven sequence doesn't
-  /// kick off N redundant scans.
+  /// Schedule a debounced plan recompute. Bumps [_planScanGen]
+  /// IMMEDIATELY so any in-flight scan from a previous call self-
+  /// invalidates BEFORE the new debounce window elapses (Codex Phase 10
+  /// CRITICAL — without the immediate bump, a slow scan could publish
+  /// stale results during the 250ms window).
+  ///
+  /// Called from every state change that affects the plan: jobType
+  /// flip, source chip select, source-folder pick, destination pick,
+  /// compression-output pick, drives refresh.
   void _schedulePlanRecompute() {
+    _planScanGen++;
     _planDebounce?.cancel();
     _planDebounce = Timer(
       const Duration(milliseconds: 250),
-      _recomputePlan,
+      () => _recomputePlanGuarded(),
     );
+  }
+
+  /// Outer guard: runs [_recomputePlan] inside a try/finally so an
+  /// exception (permissions glitch, transient I/O failure) can't leave
+  /// `_planScanInProgress = true` forever (Codex Phase 10 WARN). Also
+  /// catches & logs so the panel keeps working through one-off errors.
+  Future<void> _recomputePlanGuarded() async {
+    try {
+      await _recomputePlan();
+    } catch (_) {
+      // Swallow at the boundary — the panel renders best-effort. The
+      // operator's actual submit goes through _createJobInner which
+      // re-scans and surfaces real errors there.
+    } finally {
+      if (mounted && _planScanInProgress) {
+        setState(() => _planScanInProgress = false);
+      }
+    }
   }
 
   /// Live plan recompute (T067-T071). Two passes:
   ///   1. Source scan — listVideoFiles + per-file size. Cached on
   ///      [_scannedSourcePath] so destination flips skip this pass.
+  ///      Cleared on `_refreshDrives` so a card swap at the same drive
+  ///      letter re-scans.
   ///   2. Destination pass — conflict count (File.exists) + long-path
   ///      count (path.length > 260) over the cached file list.
   ///
-  /// Each scan increments [_planScanGen]; results are discarded when
-  /// the generation changes mid-flight (operator typed a new path
-  /// before the previous scan finished — Codex Phase 8 pattern).
+  /// Each scan captures a generation token at start and re-checks it
+  /// after every await. The token is bumped synchronously by
+  /// [_schedulePlanRecompute] so a new schedule call invalidates this
+  /// scan IMMEDIATELY — no 250ms-window leak.
   Future<void> _recomputePlan() async {
     if (!mounted) return;
-    final gen = ++_planScanGen;
+    final gen = _planScanGen;
 
     final isCompression = _jobType == JobType.compression;
     final sourcePath =
@@ -126,14 +158,21 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       return;
     }
 
+    // Always show "scanning…" once we commit to recomputing — covers
+    // both the source pass AND a destination-only pass (Codex WARN —
+    // a destination flip with a warm cache used to do its conflict
+    // sweep silently with no progress signal).
+    setState(() {
+      _planScanInProgress = true;
+      _planConflictCount = null;
+      _planLongPathCount = null;
+    });
+
     // Source-scan pass (cached by source path).
     if (_scannedSourcePath != sourcePath) {
       setState(() {
-        _planScanInProgress = true;
         _planFileCount = null;
         _planTotalBytes = null;
-        _planConflictCount = null;
-        _planLongPathCount = null;
       });
       final scan = await driveService.listVideoFiles(sourcePath);
       if (gen != _planScanGen || !mounted) return;
@@ -151,8 +190,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
           ));
         } catch (_) {
           // Ignore individual stat errors; the file just doesn't
-          // contribute to the count. Aborting the whole panel for one
-          // permission glitch would over-react.
+          // contribute to the count.
         }
       }
       if (gen != _planScanGen || !mounted) return;
@@ -171,6 +209,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         _planTotalBytes = _scannedTotalBytes;
         _planConflictCount = null;
         _planLongPathCount = null;
+        _planLongPathSamples = const <String>[];
       });
       return;
     }
@@ -190,10 +229,14 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 
     var conflicts = 0;
     var longPaths = 0;
+    final longPathSamples = <String>[];
     for (final f in _scannedFiles) {
       final relativePath = p.relative(f.sourcePath, from: sourcePath);
       final destFullPath = p.join(effectiveDestination, relativePath);
-      if (destFullPath.length > 260) longPaths++;
+      if (destFullPath.length > 260) {
+        longPaths++;
+        if (longPathSamples.length < 10) longPathSamples.add(destFullPath);
+      }
       if (await File(destFullPath).exists()) conflicts++;
       if (gen != _planScanGen || !mounted) return;
     }
@@ -204,6 +247,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       _planTotalBytes = _scannedTotalBytes;
       _planConflictCount = conflicts;
       _planLongPathCount = longPaths;
+      _planLongPathSamples = longPathSamples;
     });
   }
 
@@ -223,7 +267,15 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
           !drives.any((d) => d.path == _selectedDrive!.path)) {
         _selectedDrive = null;
       }
+      // Codex Phase 10 CRITICAL: a card swap at the same drive letter
+      // would otherwise keep the previous card's plan summary because
+      // the cache is keyed on path alone. Clear the cache on every
+      // refresh so the next recompute re-walks the source.
+      _scannedSourcePath = null;
+      _scannedFiles = const <_PlannedFile>[];
+      _scannedTotalBytes = 0;
     });
+    _schedulePlanRecompute();
     if (preSelectedVanished) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -505,6 +557,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               freeBytes: _destinationFreeSpace,
               conflictCount: _planConflictCount,
               longPathCount: _planLongPathCount,
+              longPathSamples: _planLongPathSamples,
             ),
             const SizedBox(height: 16),
 
@@ -593,6 +646,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 usedBytes: 0,
               );
             });
+            _schedulePlanRecompute();
           }),
         ),
       ],
