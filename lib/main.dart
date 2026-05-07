@@ -15,6 +15,7 @@ import 'services/compression_service.dart';
 import 'services/drive_service.dart';
 import 'services/job_queue_service.dart';
 import 'services/log_service.dart';
+import 'services/queue_state_notifier.dart';
 import 'services/slack_service.dart';
 import 'services/transfer_service.dart';
 
@@ -35,13 +36,14 @@ late final SlackService slackService;
 late final JobQueueService jobQueueService;
 late final LogService logService;
 late final InstanceLock instanceLock;
+late final QueueStateNotifier queueStateNotifier;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Window manager — set up before any UI runs.
   await windowManager.ensureInitialized();
-  await windowManager.setMinimumSize(const Size(800, 600));
+  await windowManager.setMinimumSize(const Size(1280, 720));
   await windowManager.setTitle('Copiatorul3000');
 
   // Single-instance lock. Fails closed if it cannot be acquired safely.
@@ -90,6 +92,7 @@ void main() async {
     driveService: driveService,
     logService: logService,
   );
+  queueStateNotifier = QueueStateNotifier();
 
   runApp(const VideoPipelineApp());
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/job_queue_service.dart';
+import '../theme/app_theme.dart';
 
 /// Modal dialog presenting destination-conflict resolution options when a
 /// new transfer job's destination already contains some of the files it
@@ -59,6 +60,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
     final count = widget.conflictingPaths.length;
     final preview = widget.conflictingPaths.take(8).toList();
     final more = count - preview.length;
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
 
     return AlertDialog(
       title: Text('$count file${count == 1 ? '' : 's'} already exist'),
@@ -130,7 +132,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                     const SizedBox(width: 8),
                     FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: Colors.red,
+                        backgroundColor: statusColors.error,
                       ),
                       onPressed: _overwriteTyped
                           ? () => Navigator.pop(
@@ -168,7 +170,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                 ),
                 _ResolutionTile(
                   icon: Icons.warning_amber,
-                  iconColor: Colors.red,
+                  iconColor: statusColors.error,
                   label: 'Overwrite',
                   description:
                       'Replace existing files. Requires typing OVERWRITE to '

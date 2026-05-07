@@ -7,6 +7,7 @@ import '../../main.dart';
 import '../../services/job_queue_service.dart';
 import '../../utils/error_mapper.dart';
 import '../../utils/format_utils.dart';
+import '../theme/app_theme.dart';
 import '../widgets/progress_bar.dart';
 
 /// Per-job detail view showing file list and progress.
@@ -29,6 +30,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
           if (job == null) {
             return const Center(child: Text('Job not found'));
           }
+          final statusColors = Theme.of(context).extension<StatusColors>()!;
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -60,7 +62,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Colors.red.withValues(alpha: 0.1),
+                              color: statusColors.error.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Column(
@@ -69,7 +71,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                                 Text(
                                   ErrorMapper.getFriendlyMessage(
                                       job.errorMessage),
-                                  style: const TextStyle(color: Colors.red),
+                                  style: TextStyle(color: statusColors.error),
                                 ),
                                 const SizedBox(height: 4),
                                 ExpansionTile(
@@ -231,9 +233,9 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                               f.status == FileStatus.completed && f.verified);
 
                       if (!allVerified) {
-                        return const Text(
+                        return Text(
                           'Cannot erase — some files not verified',
-                          style: TextStyle(color: Colors.orange, fontSize: 13),
+                          style: TextStyle(color: statusColors.warning, fontSize: 13),
                         );
                       }
 
@@ -241,12 +243,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                         width: double.infinity,
                         child: OutlinedButton.icon(
                           onPressed: () => _eraseSourceDrive(job),
-                          icon: const Icon(Icons.delete_forever,
-                              color: Colors.red),
+                          icon: Icon(Icons.delete_forever,
+                              color: statusColors.error),
                           label: const Text('Erase SD Card'),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.red,
-                            side: const BorderSide(color: Colors.red),
+                            foregroundColor: statusColors.error,
+                            side: BorderSide(color: statusColors.error),
                           ),
                         ),
                       );
@@ -317,13 +319,14 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     final postIdentity = await driveService.getDriveIdentity(drivePath);
     if (!_identityMatches(preIdentity, postIdentity)) {
       if (mounted) {
+        final statusColors = Theme.of(context).extension<StatusColors>()!;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
+          SnackBar(
+            content: const Text(
               'Drive changed during confirmation — erase aborted for safety.',
             ),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
+            backgroundColor: statusColors.warning,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -333,12 +336,13 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     final success = await driveService.eraseDrive(drivePath);
 
     if (mounted) {
+      final statusColors = Theme.of(context).extension<StatusColors>()!;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(success
               ? 'SD card erased successfully'
               : 'Failed to erase SD card'),
-          backgroundColor: success ? Colors.green : Colors.red,
+          backgroundColor: success ? statusColors.success : statusColors.error,
         ),
       );
     }
@@ -374,6 +378,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) {
           final typedMatches = controller.text.trim() == drivePath;
+          final statusColors = Theme.of(ctx).extension<StatusColors>()!;
           return AlertDialog(
             title: const Text('Erase SD Card'),
             content: ConstrainedBox(
@@ -391,25 +396,25 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     Text('Path: $drivePath'),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'This action cannot be undone.',
-                      style: TextStyle(color: Colors.red),
+                      style: TextStyle(color: statusColors.error),
                     ),
                     if (sizeOnlyVerification) ...[
                       const SizedBox(height: 16),
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withValues(alpha: 0.12),
-                          border: Border.all(color: Colors.orange),
+                          color: statusColors.warning.withValues(alpha: 0.12),
+                          border: Border.all(color: statusColors.warning),
                           borderRadius: BorderRadius.circular(6),
                         ),
-                        child: const Row(
+                        child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.warning_amber, color: Colors.orange),
-                            SizedBox(width: 8),
-                            Expanded(
+                            Icon(Icons.warning_amber, color: statusColors.warning),
+                            const SizedBox(width: 8),
+                            const Expanded(
                               child: Text(
                                 'Files were verified by size only, not content '
                                 'hash. A corrupted file with the same byte size '
@@ -447,7 +452,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                 child: const Text('Cancel'),
               ),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                style: FilledButton.styleFrom(backgroundColor: statusColors.error),
                 onPressed:
                     typedMatches ? () => Navigator.pop(ctx, true) : null,
                 child: const Text('Erase'),

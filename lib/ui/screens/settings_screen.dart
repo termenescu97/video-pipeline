@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
+import '../theme/app_theme.dart';
 import '../widgets/confirmation_dialog.dart';
 
 /// App settings screen — Slack webhook URL, update preferences.
@@ -174,10 +175,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
 
     if (result.filesCopied == 0 && result.errors.isEmpty) {
+      final statusColors = Theme.of(context).extension<StatusColors>()!;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No video files (.MOV, .MP4) found in the selected folder'),
-          backgroundColor: Colors.orange,
+        SnackBar(
+          content: const Text('No video files (.MOV, .MP4) found in the selected folder'),
+          backgroundColor: statusColors.warning,
         ),
       );
       return;
@@ -189,7 +191,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : 0;
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) {
+        final statusColors = Theme.of(context).extension<StatusColors>()!;
+        return AlertDialog(
         title: const Text('Test Cards Prepped'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -199,9 +203,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Text('Total files copied: ${result.filesCopied}'),
             if (result.errors.isNotEmpty) ...[
               const SizedBox(height: 8),
-              const Text('Errors:', style: TextStyle(color: Colors.red)),
+              Text('Errors:', style: TextStyle(color: statusColors.error)),
               ...result.errors.map((e) => Text('• $e',
-                  style: const TextStyle(fontSize: 12, color: Colors.red))),
+                  style: TextStyle(fontSize: 12, color: statusColors.error))),
             ],
           ],
         ),
@@ -211,7 +215,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: const Text('OK'),
           ),
         ],
-      ),
+      );
+      },
     );
   }
 
@@ -221,12 +226,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _testingWebhook = false);
 
     if (mounted) {
+      final statusColors = Theme.of(context).extension<StatusColors>()!;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(success
               ? 'Test notification sent!'
               : 'Failed — check webhook URL'),
-          backgroundColor: success ? Colors.green : Colors.red,
+          backgroundColor: success ? statusColors.success : statusColors.error,
         ),
       );
     }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/drive_service.dart';
+import '../theme/app_theme.dart';
 
 /// Displays a list of detected removable drives with selection support.
 class DriveList extends StatelessWidget {
@@ -49,7 +50,8 @@ class DriveList extends StatelessWidget {
             title: Text(drive.label),
             subtitle: Text('${drive.path} — ${drive.displaySize}'),
             trailing: isSelected
-                ? const Icon(Icons.check_circle, color: Colors.green)
+                ? Icon(Icons.check_circle,
+                    color: Theme.of(context).extension<StatusColors>()!.success)
                 : null,
             onTap: () => onDriveSelected?.call(drive),
           ),
