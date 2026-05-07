@@ -14,21 +14,26 @@ class ProcessRunner {
     _process = await Process.start(executable, arguments);
     final process = _process!;
 
-    final stdoutDone = onStdoutLine != null
-        ? process.stdout.transform(const SystemEncoding().decoder).forEach((data) {
-            for (final line in data.split('\n')) {
-              if (line.trim().isNotEmpty) onStdoutLine(line);
-            }
-          })
-        : Future<void>.value();
+    // Always drain both streams to prevent OS pipe buffer overflow (~64KB on
+    // Windows). When no callback is provided, drain into a sink that discards
+    // the data — keeping the stream consumed without invoking a callback.
+    final stdoutDone = process.stdout
+        .transform(const SystemEncoding().decoder)
+        .forEach((data) {
+      if (onStdoutLine == null) return;
+      for (final line in data.split('\n')) {
+        if (line.trim().isNotEmpty) onStdoutLine(line);
+      }
+    });
 
-    final stderrDone = onStderrLine != null
-        ? process.stderr.transform(const SystemEncoding().decoder).forEach((data) {
-            for (final line in data.split('\n')) {
-              if (line.trim().isNotEmpty) onStderrLine(line);
-            }
-          })
-        : Future<void>.value();
+    final stderrDone = process.stderr
+        .transform(const SystemEncoding().decoder)
+        .forEach((data) {
+      if (onStderrLine == null) return;
+      for (final line in data.split('\n')) {
+        if (line.trim().isNotEmpty) onStderrLine(line);
+      }
+    });
 
     await Future.wait([stdoutDone, stderrDone]);
     final exitCode = await process.exitCode;

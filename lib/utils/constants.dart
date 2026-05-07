@@ -1,10 +1,8 @@
 /// Supported video file extensions for transfer and compression.
 const videoExtensions = ['.mov', '.mp4'];
 
-/// App version — used for update checking against GitHub Releases.
-const appVersion = '1.0.0';
-
 /// GitHub repository for update checking.
+/// App version is single-sourced from pubspec.yaml via package_info_plus.
 const githubRepo = 'termenescu97/video-pipeline';
 
 /// Default robocopy flags for resumable transfer.

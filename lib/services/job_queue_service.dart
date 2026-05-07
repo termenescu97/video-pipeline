@@ -41,10 +41,15 @@ class JobQueueService {
   final SlackService _slackService;
   final TransferService _transferService;
   final CompressionService _compressionService;
+  final DriveService _driveService;
   final LogService? _logService;
 
   bool _isProcessing = false;
   int? _currentJobId;
+  // Resolves when the processing loop has exited and all in-flight state
+  // writes have completed. Used by graceful shutdown so the database is
+  // never closed while the queue may still be writing.
+  Completer<void>? _stopCompleter;
 
   /// Real-time progress data for UI consumption.
   final ValueNotifier<ProgressData?> progressNotifier = ValueNotifier(null);
@@ -55,13 +60,33 @@ class JobQueueService {
     required SlackService slackService,
     required TransferService transferService,
     required CompressionService compressionService,
+    required DriveService driveService,
     LogService? logService,
   })  : _jobDao = jobDao,
         _jobFileDao = jobFileDao,
         _slackService = slackService,
         _transferService = transferService,
         _compressionService = compressionService,
+        _driveService = driveService,
         _logService = logService;
+
+  /// Sanitize a drive label for safe use as a folder name.
+  /// Replaces non-alphanumeric characters with underscore. Empty labels
+  /// fall back to the placeholder "Drive".
+  static String sanitizeDriveLabel(String label) {
+    final cleaned = label.replaceAll(RegExp(r'[^A-Za-z0-9]'), '_');
+    return cleaned.isEmpty ? 'Drive' : cleaned;
+  }
+
+  /// Build a per-card destination subfolder name in `label_driveletter`
+  /// format (e.g., `EOS_DIGITAL_E`). Always combines both label and letter
+  /// so two cards with identical labels still get distinct subfolders.
+  Future<String> buildCardSubfolder(DetectedDrive drive) async {
+    final identity = await _driveService.getDriveIdentity(drive.path);
+    final rawLabel = identity?.label ?? drive.label;
+    final letter = drive.path.isNotEmpty ? drive.path.substring(0, 1) : 'X';
+    return '${sanitizeDriveLabel(rawLabel)}_$letter';
+  }
 
   bool get isProcessing => _isProcessing;
   int? get currentJobId => _currentJobId;
@@ -71,24 +96,42 @@ class JobQueueService {
     if (_isProcessing) return;
     _isProcessing = true;
 
-    while (_isProcessing) {
-      final job = await _jobDao.getNextQueuedJob();
-      if (job == null) {
-        _isProcessing = false;
-        break;
-      }
+    try {
+      while (_isProcessing) {
+        final job = await _jobDao.getNextQueuedJob();
+        if (job == null) {
+          _isProcessing = false;
+          break;
+        }
 
-      _currentJobId = job.id;
-      await _processJob(job);
-      _currentJobId = null;
+        _currentJobId = job.id;
+        await _processJob(job);
+        _currentJobId = null;
+      }
+    } finally {
+      // Loop exited (queue drained, stopped, or threw). Resolve any
+      // pending stopProcessing future AFTER state writes are complete.
+      final completer = _stopCompleter;
+      _stopCompleter = null;
+      completer?.complete();
     }
   }
 
-  /// Stop processing and kill the running subprocess immediately.
-  void stopProcessing() {
+  /// Stop processing and kill any running subprocess. Returns a Future
+  /// that resolves AFTER the processing loop has exited and all in-flight
+  /// state writes have completed (including pending-status writes from
+  /// hash cancellation), so the caller can safely close the database
+  /// once awaited.
+  Future<void> stopProcessing() {
+    if (!_isProcessing) {
+      // Either never started, or already stopped — nothing to wait for.
+      return Future<void>.value();
+    }
+    _stopCompleter ??= Completer<void>();
     _isProcessing = false;
     _transferService.cancel();
     _compressionService.cancel();
+    return _stopCompleter!.future;
   }
 
   Future<void> _processJob(Job job) async {
@@ -361,15 +404,28 @@ class JobQueueService {
   }
 
   /// Create transfer jobs for multiple drives in batch.
-  /// Returns the number of jobs created (skips drives with no video files).
-  Future<({int created, int skipped})> createBatchTransferJobs(
+  ///
+  /// Each card writes into its own per-card subfolder
+  /// (`destination/<label>_<driveletter>/...`) so two cards with identical
+  /// folder structures (e.g., two Canon cameras both with
+  /// `DCIM/100CANON/C0001.MP4`) cannot overwrite each other.
+  ///
+  /// All jobs are created atomically (job + files + totals in a single
+  /// transaction). Cards with no video files are skipped without creating
+  /// a job. Conflict detection (existing files at destination) is
+  /// performed first as a single global preflight; if [onConflict] is
+  /// provided and conflicts are found, the callback is awaited to obtain
+  /// a [ConflictResolution] which is then applied to the file list before
+  /// any jobs are created.
+  Future<({int created, int skipped, List<String> conflicts})>
+      createBatchTransferJobs(
     List<DetectedDrive> drives,
     String destination, {
     VerificationMode verificationMode = VerificationMode.size,
+    Future<ConflictResolution> Function(List<String> conflicts)? onConflict,
   }) async {
-    var created = 0;
-    var skipped = 0;
-
+    // Phase 1: enumerate per-card files with per-card subfolders.
+    final cardPlans = <_CardTransferPlan>[];
     for (final drive in drives) {
       final drivePath = drive.path;
       final files = await Directory(drivePath)
@@ -382,87 +438,242 @@ class JobQueueService {
           .toList();
 
       if (files.isEmpty) {
-        skipped++;
+        cardPlans.add(_CardTransferPlan.empty(drive));
         continue;
       }
 
-      final newJobId = await _jobDao.insertJob(
-        JobsCompanion.insert(
-          type: JobType.transfer,
-          status: JobStatus.queued,
-          sourcePath: drivePath,
-          destinationPath: destination,
-          verificationMode: Value(verificationMode),
-          createdAt: DateTime.now(),
-        ),
-      );
-
-      var totalBytes = 0;
-      final fileEntries = <JobFilesCompanion>[];
+      final subfolder = await buildCardSubfolder(drive);
+      final cardDest = p.join(destination, subfolder);
+      final entries = <_PlannedFile>[];
       for (final entity in files) {
-        final file = File(entity.path);
-        final size = await file.length();
+        final size = await File(entity.path).length();
         final relativePath = p.relative(entity.path, from: drivePath);
-        final fileName = p.basename(entity.path);
-        totalBytes += size;
-        fileEntries.add(
-          JobFilesCompanion.insert(
-            jobId: newJobId,
-            sourceFilePath: entity.path,
-            destinationFilePath: p.join(destination, relativePath),
-            fileName: fileName,
-            fileSize: size,
-            status: FileStatus.pending,
-          ),
-        );
+        entries.add(_PlannedFile(
+          sourcePath: entity.path,
+          destinationPath: p.join(cardDest, relativePath),
+          fileName: p.basename(entity.path),
+          fileSize: size,
+        ));
       }
-
-      await _jobFileDao.insertFiles(fileEntries);
-      await _jobDao.updateJobTotals(newJobId, fileEntries.length, totalBytes);
-      created++;
+      cardPlans.add(_CardTransferPlan(
+        drive: drive,
+        cardDestination: cardDest,
+        files: entries,
+      ));
     }
 
-    return (created: created, skipped: skipped);
+    // Phase 2: global conflict preflight across all cards.
+    final allConflicts = <String>[];
+    for (final plan in cardPlans) {
+      for (final file in plan.files) {
+        if (await File(file.destinationPath).exists()) {
+          allConflicts.add(file.destinationPath);
+        }
+      }
+    }
+
+    var resolution = ConflictResolution.overwrite;
+    if (allConflicts.isNotEmpty) {
+      if (onConflict != null) {
+        resolution = await onConflict(allConflicts);
+      }
+      if (resolution == ConflictResolution.cancel ||
+          resolution == ConflictResolution.newFolder) {
+        // Caller handles re-target / abort externally.
+        return (created: 0, skipped: 0, conflicts: allConflicts);
+      }
+      _applyResolution(cardPlans, resolution);
+    }
+
+    // Phase 3: assign sortOrder values once, then create jobs atomically.
+    final baseOrder = await _jobDao.getMaxSortOrder();
+    var created = 0;
+    var skipped = 0;
+    var orderIndex = 0;
+
+    for (final plan in cardPlans) {
+      if (plan.files.isEmpty) {
+        skipped++;
+        continue;
+      }
+      orderIndex++;
+      final totalBytes = plan.files.fold<int>(0, (sum, f) => sum + f.fileSize);
+      try {
+        await _jobDao.createJobWithFiles(
+          job: JobsCompanion.insert(
+            type: JobType.transfer,
+            status: JobStatus.queued,
+            sourcePath: plan.drive.path,
+            destinationPath: plan.cardDestination,
+            verificationMode: Value(verificationMode),
+            sortOrder: Value(baseOrder + orderIndex),
+            createdAt: DateTime.now(),
+          ),
+          buildFiles: (newJobId) => plan.files
+              .map((f) => JobFilesCompanion.insert(
+                    jobId: newJobId,
+                    sourceFilePath: f.sourcePath,
+                    destinationFilePath: f.destinationPath,
+                    fileName: f.fileName,
+                    fileSize: f.fileSize,
+                    status: FileStatus.pending,
+                  ))
+              .toList(),
+          totalBytes: totalBytes,
+        );
+        created++;
+      } on StateError {
+        // All files for this card were filtered out — skip without
+        // creating a phantom zero-file job.
+        skipped++;
+      }
+    }
+
+    return (created: created, skipped: skipped, conflicts: allConflicts);
+  }
+
+  /// Apply a conflict resolution to the planned file list. `skip` removes
+  /// conflicting entries; `rename` rewrites their destination path with
+  /// an auto-suffix (`_1`, `_2`, ...). `overwrite` is a no-op (callers
+  /// proceed with original paths). `cancel`/`newFolder` are handled by
+  /// the caller and never reach this method.
+  void _applyResolution(
+      List<_CardTransferPlan> plans, ConflictResolution resolution) {
+    if (resolution == ConflictResolution.overwrite) return;
+
+    for (final plan in plans) {
+      final kept = <_PlannedFile>[];
+      for (final file in plan.files) {
+        final exists = File(file.destinationPath).existsSync();
+        if (!exists) {
+          kept.add(file);
+          continue;
+        }
+        switch (resolution) {
+          case ConflictResolution.skip:
+            // drop
+            break;
+          case ConflictResolution.rename:
+            kept.add(file.copyWith(
+                destinationPath: _suffixedPath(file.destinationPath)));
+            break;
+          case ConflictResolution.overwrite:
+          case ConflictResolution.cancel:
+          case ConflictResolution.newFolder:
+            kept.add(file);
+            break;
+        }
+      }
+      plan.files
+        ..clear()
+        ..addAll(kept);
+    }
+  }
+
+  /// Append `_1`, `_2`, ... before the file extension until a free path
+  /// is found.
+  String _suffixedPath(String path) {
+    final dir = p.dirname(path);
+    final ext = p.extension(path);
+    final stem = p.basenameWithoutExtension(path);
+    var i = 1;
+    while (true) {
+      final candidate = p.join(dir, '${stem}_$i$ext');
+      if (!File(candidate).existsSync()) return candidate;
+      i++;
+    }
   }
 
   /// Create a chained compression job after a successful transfer.
+  /// Preserves the relative folder structure from the transfer destination
+  /// so duplicate basenames in different folders cannot collide in the
+  /// compression output.
   Future<void> _createChainedCompressionJob(Job transferJob) async {
     final outputPath = transferJob.compressionOutputPath;
     if (outputPath == null) return;
 
-    final jobId = await _jobDao.insertJob(
-      JobsCompanion.insert(
+    final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
+    final ready = transferFiles
+        .where((f) => f.status == FileStatus.completed && f.verified)
+        .toList();
+
+    if (ready.isEmpty) return;
+
+    final totalBytes = ready.fold<int>(0, (sum, f) => sum + f.fileSize);
+    final baseOrder = await _jobDao.getMaxSortOrder();
+
+    await _jobDao.createJobWithFiles(
+      job: JobsCompanion.insert(
         type: JobType.compression,
         status: JobStatus.queued,
         sourcePath: transferJob.destinationPath,
         destinationPath: outputPath,
         presetName: Value(transferJob.presetName),
+        sortOrder: Value(baseOrder + 1),
         createdAt: DateTime.now(),
       ),
+      buildFiles: (newJobId) => ready
+          .map((f) => JobFilesCompanion.insert(
+                jobId: newJobId,
+                sourceFilePath: f.destinationFilePath,
+                destinationFilePath: p.join(
+                  outputPath,
+                  p.relative(
+                    f.destinationFilePath,
+                    from: transferJob.destinationPath,
+                  ),
+                ),
+                fileName: f.fileName,
+                fileSize: f.fileSize,
+                status: FileStatus.pending,
+              ))
+          .toList(),
+      totalBytes: totalBytes,
     );
-
-    // Copy file list from transfer job, pointing to transferred files.
-    final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
-    final compressionFiles = transferFiles
-        .where((f) => f.status == FileStatus.completed && f.verified)
-        .map(
-          (f) => JobFilesCompanion.insert(
-            jobId: jobId,
-            sourceFilePath: f.destinationFilePath,
-            destinationFilePath: p.join(outputPath, f.fileName),
-            fileName: f.fileName,
-            fileSize: f.fileSize,
-            status: FileStatus.pending,
-          ),
-        )
-        .toList();
-
-    await _jobFileDao.insertFiles(compressionFiles);
-
-    final totalBytes = compressionFiles.fold<int>(
-      0,
-      (sum, f) => sum + f.fileSize.value,
-    );
-    await _jobDao.updateJobTotals(jobId, compressionFiles.length, totalBytes);
   }
+}
+
+/// Operator-chosen response when a transfer job's destination already
+/// contains some of the files it would write.
+enum ConflictResolution { skip, rename, newFolder, overwrite, cancel }
+
+/// Internal: a planned file destination prior to job creation.
+class _PlannedFile {
+  String sourcePath;
+  String destinationPath;
+  String fileName;
+  int fileSize;
+
+  _PlannedFile({
+    required this.sourcePath,
+    required this.destinationPath,
+    required this.fileName,
+    required this.fileSize,
+  });
+
+  _PlannedFile copyWith({String? destinationPath}) => _PlannedFile(
+        sourcePath: sourcePath,
+        destinationPath: destinationPath ?? this.destinationPath,
+        fileName: fileName,
+        fileSize: fileSize,
+      );
+}
+
+/// Internal: the planned transfer for a single card in a batch.
+class _CardTransferPlan {
+  final DetectedDrive drive;
+  final String cardDestination;
+  final List<_PlannedFile> files;
+
+  _CardTransferPlan({
+    required this.drive,
+    required this.cardDestination,
+    required this.files,
+  });
+
+  factory _CardTransferPlan.empty(DetectedDrive drive) => _CardTransferPlan(
+        drive: drive,
+        cardDestination: '',
+        files: <_PlannedFile>[],
+      );
 }

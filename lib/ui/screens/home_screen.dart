@@ -7,8 +7,10 @@ import '../../database/database.dart';
 import '../../database/extensions.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
+import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
 import '../widgets/confirmation_dialog.dart';
+import '../widgets/conflict_dialog.dart';
 import '../widgets/job_card.dart';
 import 'settings_screen.dart';
 
@@ -446,26 +448,54 @@ class _HomeScreenState extends State<HomeScreen> {
       verificationMode = selected;
     }
 
-    final destination = await FilePicker.platform.getDirectoryPath();
+    var destination = await FilePicker.platform.getDirectoryPath();
     if (destination == null) return;
 
-    final result = await jobQueueService.createBatchTransferJobs(
-      drives,
-      destination,
-      verificationMode: verificationMode,
-    );
-
-    if (result.created > 0) {
-      settingsDao.setFirstRunCompleted(true);
-    }
-
-    if (mounted) {
-      final msg = result.skipped > 0
-          ? 'Created ${result.created} jobs — ${result.skipped} cards had no video files'
-          : 'Created ${result.created} jobs';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg)),
+    // Loop until the operator either lets a non-empty batch through, picks
+    // a fresh folder, or cancels via the conflict dialog.
+    while (true) {
+      ConflictResolution? lastChoice;
+      final result = await jobQueueService.createBatchTransferJobs(
+        drives,
+        destination!,
+        verificationMode: verificationMode,
+        onConflict: (conflicts) async {
+          if (!mounted) return ConflictResolution.cancel;
+          final choice =
+              await ConflictResolutionDialog.show(context, conflicts);
+          lastChoice = choice ?? ConflictResolution.cancel;
+          return lastChoice!;
+        },
       );
+
+      if (lastChoice == ConflictResolution.newFolder) {
+        final newDest = await FilePicker.platform.getDirectoryPath();
+        if (newDest == null) return;
+        destination = newDest;
+        continue; // re-attempt with the new folder
+      }
+
+      if (lastChoice == ConflictResolution.cancel) {
+        return; // operator aborted
+      }
+
+      if (result.created > 0) {
+        settingsDao.setFirstRunCompleted(true);
+      }
+
+      if (mounted) {
+        final String msg;
+        if (result.created == 0 && result.conflicts.isNotEmpty) {
+          msg = 'All files already exist at destination — no jobs created.';
+        } else if (result.skipped > 0) {
+          msg =
+              'Created ${result.created} jobs — ${result.skipped} cards had no new files';
+        } else {
+          msg = 'Created ${result.created} jobs';
+        }
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      break;
     }
   }
 }

@@ -28,6 +28,18 @@ class DetectedDrive {
 ///
 /// On non-Windows platforms, returns an empty list (development fallback).
 class DriveService {
+  /// Run a PowerShell command safely. Returns null if PowerShell is
+  /// unavailable, throws an unexpected error, or exits non-zero.
+  Future<ProcessResult?> _runPowerShell(List<String> args) async {
+    try {
+      final result = await Process.run('powershell', ['-NoProfile', ...args]);
+      if (result.exitCode != 0) return null;
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Get all currently mounted removable drives.
   Future<List<DetectedDrive>> getRemovableDrives() async {
     if (!Platform.isWindows) return [];
@@ -35,15 +47,14 @@ class DriveService {
   }
 
   Future<List<DetectedDrive>> _getWindowsDrives() async {
-    final result = await Process.run('powershell', [
-      '-NoProfile',
+    final result = await _runPowerShell([
       '-Command',
       r"Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | "
           r"Select-Object DeviceID, VolumeName, Size, FreeSpace | "
           r"ConvertTo-Json -Compress",
     ]);
 
-    if (result.exitCode != 0) return [];
+    if (result == null) return [];
 
     final output = result.stdout.toString().trim();
     if (output.isEmpty || output == 'null') return [];
@@ -101,38 +112,60 @@ class DriveService {
     if (!Platform.isWindows) return -1;
 
     final driveLetter = dirPath.substring(0, 1);
-    final result = await Process.run('powershell', [
-      '-NoProfile',
+    final result = await _runPowerShell([
       '-Command',
-      'Get-PSDrive -Name $driveLetter | Select-Object -ExpandProperty Free',
+      r'Get-PSDrive -Name $args[0] | Select-Object -ExpandProperty Free',
+      driveLetter,
     ]);
 
-    if (result.exitCode != 0) return -1;
+    if (result == null) return -1;
     return int.tryParse(result.stdout.toString().trim()) ?? -1;
   }
 
   /// Get drive identity info for verification before erase.
-  Future<({String label, int totalBytes})?> getDriveIdentity(
-      String drivePath) async {
+  ///
+  /// Returns label, total size, and physical disk serial number (when
+  /// available). Serial number is the strongest physical identifier and is
+  /// used to detect card swaps during a confirmation dialog.
+  Future<({String label, int totalBytes, String? serialNumber})?>
+      getDriveIdentity(String drivePath) async {
     if (!Platform.isWindows) return null;
 
-    final result = await Process.run('powershell', [
-      '-NoProfile',
+    // Take "E:" from "E:\\" — matches Win32_LogicalDisk.DeviceID.
+    final deviceId = drivePath.substring(0, 2);
+
+    final result = await _runPowerShell([
       '-Command',
-      r"Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DeviceID -eq '"
-          "${drivePath.substring(0, 2)}"
-          r"' } | Select-Object VolumeName, Size | ConvertTo-Json -Compress",
+      // Trace the WMI association chain: LogicalDisk -> Partition -> DiskDrive
+      // to get the physical disk's SerialNumber. SerialNumber is null on
+      // some card readers; callers must handle that case.
+      r'''
+$drive = $args[0]
+$logical = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID = '$drive'"
+if (-not $logical) { return }
+$partition = $logical | Get-CimAssociatedInstance -Association Win32_LogicalDiskToPartition | Select-Object -First 1
+$disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Win32_DiskDriveToDiskPartition | Select-Object -First 1 } else { $null }
+@{
+  VolumeName = $logical.VolumeName
+  Size = $logical.Size
+  SerialNumber = if ($disk) { $disk.SerialNumber } else { $null }
+} | ConvertTo-Json -Compress
+''',
+      deviceId,
     ]);
 
-    if (result.exitCode != 0) return null;
+    if (result == null) return null;
     final output = result.stdout.toString().trim();
     if (output.isEmpty || output == 'null') return null;
 
     try {
       final data = jsonDecode(output);
+      final rawSerial = data['SerialNumber'] as String?;
+      final serial = rawSerial?.trim();
       return (
         label: (data['VolumeName'] as String?) ?? 'Unknown',
         totalBytes: (data['Size'] as num?)?.toInt() ?? 0,
+        serialNumber: (serial == null || serial.isEmpty) ? null : serial,
       );
     } catch (_) {
       return null;
@@ -146,13 +179,12 @@ class DriveService {
     // Validate drive path to prevent command injection.
     if (!RegExp(r'^[A-Za-z]:\\$').hasMatch(drivePath)) return false;
 
-    final result = await Process.run('powershell', [
-      '-NoProfile',
+    final result = await _runPowerShell([
       '-Command',
       'Remove-Item -Path "$drivePath*" -Recurse -Force',
     ]);
 
-    return result.exitCode == 0;
+    return result != null;
   }
 
   /// Prep test cards by copying test video files to DCIM/100TEST/ on each drive.

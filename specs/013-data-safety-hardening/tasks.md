@@ -30,27 +30,27 @@
 **Purpose**: Isolated infrastructure fixes that unblock later phases. Four file groups can run in parallel; tasks within each group are sequential (same file).
 
 **Group A** — `lib/utils/process_runner.dart` (1 task):
-- [ ] T001 [P] [US6] Fix ProcessRunner to always drain stdout and stderr streams in `lib/utils/process_runner.dart` — replace `Future<void>.value()` with `process.stdout.drain()` / `process.stderr.drain()` when no callback is provided (lines 17-31)
+- [x] T001 [P] [US6] Fix ProcessRunner to always drain stdout and stderr streams in `lib/utils/process_runner.dart` — replace `Future<void>.value()` with `process.stdout.drain()` / `process.stderr.drain()` when no callback is provided (lines 17-31)
 
 **Group B** — `lib/utils/instance_lock.dart` (6 tasks, sequential — same file):
-- [ ] T002 [US7] Move lock file path to `getApplicationSupportDirectory()` in `lib/utils/instance_lock.dart` — executable directory may be read-only (e.g., `C:\Program Files\`)
-- [ ] T003 [US7] Fix instance lock PID write in `lib/utils/instance_lock.dart` — import `dart:io` and write `'$pid'` using the global `pid` property instead of undefined variable (line 29)
-- [ ] T004 [US7] Fix instance lock to fail closed in `lib/utils/instance_lock.dart` — change `catch (_) { return true; }` to `catch (_) { return false; }` so lock acquisition failure prevents app startup (line 31)
-- [ ] T005 [US7] Implement atomic lock acquisition in `lib/utils/instance_lock.dart` — write PID to temp file `copiatorul3000.lock.tmp` then rename to `copiatorul3000.lock` (rename is atomic on Windows and POSIX)
-- [ ] T006 [US7] Add stale lock recovery in `lib/utils/instance_lock.dart` — if lock file exists and PID is not running (via `tasklist`), delete stale lock and re-acquire. If PID check fails, treat lock as held (fail closed)
-- [ ] T007 [US7] Add second-instance error dialog in `lib/main.dart` — when `instanceLock.acquire()` returns false, show a blocking `AlertDialog` with message "Another instance of Copiatorul3000 is already running" and an "Exit" button that calls `exit(1)`. Replace the current `stderr.writeln` + `exit(1)` with the dialog (requires `WidgetsFlutterBinding.ensureInitialized()` before lock acquisition)
+- [x] T002 [US7] Move lock file path to `getApplicationSupportDirectory()` in `lib/utils/instance_lock.dart` — executable directory may be read-only (e.g., `C:\Program Files\`)
+- [x] T003 [US7] Fix instance lock PID write in `lib/utils/instance_lock.dart` — import `dart:io` and write `'$pid'` using the global `pid` property instead of undefined variable (line 29)
+- [x] T004 [US7] Fix instance lock to fail closed in `lib/utils/instance_lock.dart` — change `catch (_) { return true; }` to `catch (_) { return false; }` so lock acquisition failure prevents app startup (line 31)
+- [x] T005 [US7] Implement atomic lock acquisition in `lib/utils/instance_lock.dart` — write PID to temp file `copiatorul3000.lock.tmp` then rename to `copiatorul3000.lock` (rename is atomic on Windows and POSIX)
+- [x] T006 [US7] Add stale lock recovery in `lib/utils/instance_lock.dart` — if lock file exists and PID is not running (via `tasklist`), delete stale lock and re-acquire. If PID check fails, treat lock as held (fail closed)
+- [x] T007 [US7] Add second-instance error dialog in `lib/main.dart` — when `instanceLock.acquire()` returns false, show a blocking `AlertDialog` with message "Another instance of Copiatorul3000 is already running" and an "Exit" button that calls `exit(1)`. Replace the current `stderr.writeln` + `exit(1)` with the dialog (requires `WidgetsFlutterBinding.ensureInitialized()` before lock acquisition)
 
 **Group C** — `lib/services/drive_service.dart` (5 tasks, sequential — same file, T008-T011 depend on T0007b):
-- [ ] T008 [US10] Add `_runPowerShell(List<String> args)` helper method in `lib/services/drive_service.dart` — wraps `Process.run('powershell', ...)` in try/catch, returns `ProcessResult?` (null on failure)
-- [ ] T009 [US10] Refactor `_getWindowsDrives()` in `lib/services/drive_service.dart` to use `_runPowerShell()` helper — return empty list on null result (existing "no drives detected" UI handles this)
-- [ ] T010 [US10] Refactor `getDiskFreeSpace()` in `lib/services/drive_service.dart` to use `_runPowerShell()` helper — return -1 on null result (existing "unknown" display handles this)
-- [ ] T011 [US10] Refactor `getDriveIdentity()` in `lib/services/drive_service.dart` — use `_runPowerShell()` helper, replace string interpolation with `$args[0]` pattern for drive path, return null on failure
-- [ ] T012 [US10] Add serial number query to `getDriveIdentity()` in `lib/services/drive_service.dart` — query `Win32_DiskDrive` via `Win32_LogicalDiskToPartition` + `Win32_DiskDriveToDiskPartition` association chain, return `({String label, int totalBytes, String? serialNumber})`
+- [x] T008 [US10] Add `_runPowerShell(List<String> args)` helper method in `lib/services/drive_service.dart` — wraps `Process.run('powershell', ...)` in try/catch, returns `ProcessResult?` (null on failure)
+- [x] T009 [US10] Refactor `_getWindowsDrives()` in `lib/services/drive_service.dart` to use `_runPowerShell()` helper — return empty list on null result (existing "no drives detected" UI handles this)
+- [x] T010 [US10] Refactor `getDiskFreeSpace()` in `lib/services/drive_service.dart` to use `_runPowerShell()` helper — return -1 on null result (existing "unknown" display handles this)
+- [x] T011 [US10] Refactor `getDriveIdentity()` in `lib/services/drive_service.dart` — use `_runPowerShell()` helper, replace string interpolation with `$args[0]` pattern for drive path, return null on failure
+- [x] T012 [US10] Add serial number query to `getDriveIdentity()` in `lib/services/drive_service.dart` — query `Win32_DiskDrive` via `Win32_LogicalDiskToPartition` + `Win32_DiskDriveToDiskPartition` association chain, return `({String label, int totalBytes, String? serialNumber})`
 
 **Group D** — Version metadata (3 tasks, sequential — T014 depends on T013; T015 must run after T014 to avoid broken import):
-- [ ] T013 [US11] Add `package_info_plus` dependency to `pubspec.yaml` and set version to `2.3.0+1`
-- [ ] T014 [US11] Update `lib/services/update_service.dart` to read version from `PackageInfo.fromPlatform()` instead of `constants.appVersion`
-- [ ] T015 [US11] Remove `appVersion` constant from `lib/utils/constants.dart` (safe now that T014 removed the last reference)
+- [x] T013 [US11] Add `package_info_plus` dependency to `pubspec.yaml` and set version to `2.3.0+1`
+- [x] T014 [US11] Update `lib/services/update_service.dart` to read version from `PackageInfo.fromPlatform()` instead of `constants.appVersion`
+- [x] T015 [US11] Remove `appVersion` constant from `lib/utils/constants.dart` (safe now that T014 removed the last reference)
 
 **Checkpoint**: All foundation fixes complete. Groups A-D can run in parallel; tasks within each group are sequential. Run `flutter analyze` to verify.
 
@@ -62,11 +62,11 @@
 
 **⚠️ CRITICAL**: US1 and US2 cannot begin until T018 (transactional creation) is complete.
 
-- [ ] T016 [US3] Add `recoverStaleJobs()` method to `lib/database/daos/job_dao.dart` — inside a `transaction()`, update all jobs with `status == inProgress` to `status = paused`, and update all job files with `status == inProgress` to `status = pending`
-- [ ] T017 [US3] Call `await jobDao.recoverStaleJobs()` in `lib/main.dart` — after DB init and after instance lock acquisition, before `runApp()`. Note: recovered jobs will resume via robocopy `/Z` when the operator manually starts them, so partial transfers continue rather than restart (existing robocopy flags already include `/Z`)
-- [ ] T018 [P] [US4] Add `createJobWithFiles(JobsCompanion job, List<JobFilesCompanion> files, int totalFiles, int totalBytes)` method to `lib/database/daos/job_dao.dart` — inside a `transaction()`, insert job, insert files via batch, update totals. Return the new job ID. Guard: if `files` is empty, throw an exception (prevents phantom zero-file jobs)
-- [ ] T019 [P] [US8] Add `getMaxSortOrder()` method to `lib/database/daos/job_dao.dart` — SELECT `max(sortOrder)` from jobs where status is queued or paused, return 0 if null
-- [ ] T020 [P] [US8] Fix `getNextQueuedJob()` in `lib/database/daos/job_dao.dart` — change `orderBy` from `[(t) => OrderingTerm.asc(t.createdAt)]` to `[(t) => OrderingTerm.asc(t.sortOrder), (t) => OrderingTerm.asc(t.createdAt)]`
+- [x] T016 [US3] Add `recoverStaleJobs()` method to `lib/database/daos/job_dao.dart` — inside a `transaction()`, update all jobs with `status == inProgress` to `status = paused`, and update all job files with `status == inProgress` to `status = pending`
+- [x] T017 [US3] Call `await jobDao.recoverStaleJobs()` in `lib/main.dart` — after DB init and after instance lock acquisition, before `runApp()`. Note: recovered jobs will resume via robocopy `/Z` when the operator manually starts them, so partial transfers continue rather than restart (existing robocopy flags already include `/Z`)
+- [x] T018 [P] [US4] Add `createJobWithFiles(JobsCompanion job, List<JobFilesCompanion> files, int totalFiles, int totalBytes)` method to `lib/database/daos/job_dao.dart` — inside a `transaction()`, insert job, insert files via batch, update totals. Return the new job ID. Guard: if `files` is empty, throw an exception (prevents phantom zero-file jobs)
+- [x] T019 [P] [US8] Add `getMaxSortOrder()` method to `lib/database/daos/job_dao.dart` — SELECT `max(sortOrder)` from jobs where status is queued or paused, return 0 if null
+- [x] T020 [P] [US8] Fix `getNextQueuedJob()` in `lib/database/daos/job_dao.dart` — change `orderBy` from `[(t) => OrderingTerm.asc(t.createdAt)]` to `[(t) => OrderingTerm.asc(t.sortOrder), (t) => OrderingTerm.asc(t.createdAt)]`
 
 **Checkpoint**: DAO layer ready. T016-T017 are sequential (T017 depends on T016). T018, T019, T020 can run in parallel with each other and with T016-T017 (different methods, same file but no conflicts). Run `flutter analyze`.
 
@@ -82,12 +82,12 @@
 
 ### Implementation for User Story 1
 
-- [ ] T021 [US1] Add `sanitizeDriveLabel(String label)` helper in `lib/services/job_queue_service.dart` — replace non-alphanumeric characters with `_`, use `Drive` as placeholder if label is empty
-- [ ] T022 [US1] Add `buildCardSubfolder(String drivePath)` helper in `lib/services/job_queue_service.dart` — calls `driveService.getDriveIdentity(drivePath)`, sanitizes label, constructs `${sanitizedLabel}_${driveLetter}` format
-- [ ] T023 [US1] Refactor `createBatchTransferJobs()` in `lib/services/job_queue_service.dart` — for each drive, call `buildCardSubfolder()`, prepend subfolder to all relative paths via `p.join(destination, subfolder, relativePath)`, store full subfolder path in job's `destinationPath`
-- [ ] T024 [US1] Update `createBatchTransferJobs()` in `lib/services/job_queue_service.dart` to use `jobDao.createJobWithFiles()` instead of three separate calls, and assign sequential `sortOrder` values (`baseOrder + 1`, `baseOrder + 2`, etc. computed from `jobDao.getMaxSortOrder()` once before the loop)
-- [ ] T025 [US1] Add per-card subfolder logic for single-job creation from drive root in `lib/ui/screens/create_job_screen.dart` — when source is a removable drive, apply same `label_driveletter` subfolder construction before building file entries
-- [ ] T026 [US1] Update single-job creation in `lib/ui/screens/create_job_screen.dart` to use `jobDao.createJobWithFiles()` instead of three separate calls, and assign `sortOrder = await jobDao.getMaxSortOrder() + 1`
+- [x] T021 [US1] Add `sanitizeDriveLabel(String label)` helper in `lib/services/job_queue_service.dart` — replace non-alphanumeric characters with `_`, use `Drive` as placeholder if label is empty
+- [x] T022 [US1] Add `buildCardSubfolder(String drivePath)` helper in `lib/services/job_queue_service.dart` — calls `driveService.getDriveIdentity(drivePath)`, sanitizes label, constructs `${sanitizedLabel}_${driveLetter}` format
+- [x] T023 [US1] Refactor `createBatchTransferJobs()` in `lib/services/job_queue_service.dart` — for each drive, call `buildCardSubfolder()`, prepend subfolder to all relative paths via `p.join(destination, subfolder, relativePath)`, store full subfolder path in job's `destinationPath`
+- [x] T024 [US1] Update `createBatchTransferJobs()` in `lib/services/job_queue_service.dart` to use `jobDao.createJobWithFiles()` instead of three separate calls, and assign sequential `sortOrder` values (`baseOrder + 1`, `baseOrder + 2`, etc. computed from `jobDao.getMaxSortOrder()` once before the loop)
+- [x] T025 [US1] Add per-card subfolder logic for single-job creation from drive root in `lib/ui/screens/create_job_screen.dart` — when source is a removable drive, apply same `label_driveletter` subfolder construction before building file entries
+- [x] T026 [US1] Update single-job creation in `lib/ui/screens/create_job_screen.dart` to use `jobDao.createJobWithFiles()` instead of three separate calls, and assign `sortOrder = await jobDao.getMaxSortOrder() + 1`
 
 **Checkpoint**: Batch copy and single-job drive root both create per-card subfolders. No cross-card collision possible. Jobs created atomically with correct sortOrder.
 
@@ -101,10 +101,10 @@
 
 ### Implementation for User Story 2
 
-- [ ] T027 [US2] Create `ConflictResolutionDialog` widget in `lib/ui/widgets/conflict_dialog.dart` — modal dialog listing conflicting files with options: Skip existing, Rename (auto-suffix `_1`, `_2`), Choose new folder, Overwrite (requires typing "OVERWRITE"), Cancel. Returns enum `ConflictResolution { skip, rename, newFolder, overwrite, cancel }`
-- [ ] T028 [US2] Add conflict detection to single-job creation in `lib/ui/screens/create_job_screen.dart` — after building file list, check `File(dest).existsSync()` for each entry. If conflicts found, show `ConflictResolutionDialog`. Handle each resolution: filter files (skip), rename conflicting destinations with auto-suffix (rename), re-pick folder (newFolder), proceed (overwrite), abort (cancel). Zero-file guard: if all files filtered out after skip/rename, show "All files already exist at destination — no files to transfer" SnackBar and do NOT create job
-- [ ] T029 [US2] Add conflict resolution callback to `createBatchTransferJobs()` in `lib/services/job_queue_service.dart` — add parameter `Future<ConflictResolution> Function(List<String> conflicts)? onConflict`. Method builds complete file list for ALL cards (with per-card subfolders), checks all destination paths for existing files. If conflicts found and callback provided, awaits callback to get resolution. Applies resolution inline (skip: remove conflicting files; rename: update destination paths with `_1`, `_2` suffix; newFolder/overwrite/cancel: return to caller). Cards with zero files after resolution are skipped. This matches the existing `onProgress` callback pattern used in transfer service
-- [ ] T030 [US2] Wire conflict callback from `createBatchTransferJobs()` in `lib/ui/screens/home_screen.dart` — pass an `onConflict` callback that shows `ConflictResolutionDialog` and returns the user's choice. Handle `newFolder` by re-picking destination and re-calling batch creation. Handle `cancel` by aborting. If all files across all cards were removed by skip/rename, show "All files already exist" SnackBar
+- [x] T027 [US2] Create `ConflictResolutionDialog` widget in `lib/ui/widgets/conflict_dialog.dart` — modal dialog listing conflicting files with options: Skip existing, Rename (auto-suffix `_1`, `_2`), Choose new folder, Overwrite (requires typing "OVERWRITE"), Cancel. Returns enum `ConflictResolution { skip, rename, newFolder, overwrite, cancel }`
+- [x] T028 [US2] Add conflict detection to single-job creation in `lib/ui/screens/create_job_screen.dart` — after building file list, check `File(dest).existsSync()` for each entry. If conflicts found, show `ConflictResolutionDialog`. Handle each resolution: filter files (skip), rename conflicting destinations with auto-suffix (rename), re-pick folder (newFolder), proceed (overwrite), abort (cancel). Zero-file guard: if all files filtered out after skip/rename, show "All files already exist at destination — no files to transfer" SnackBar and do NOT create job
+- [x] T029 [US2] Add conflict resolution callback to `createBatchTransferJobs()` in `lib/services/job_queue_service.dart` — add parameter `Future<ConflictResolution> Function(List<String> conflicts)? onConflict`. Method builds complete file list for ALL cards (with per-card subfolders), checks all destination paths for existing files. If conflicts found and callback provided, awaits callback to get resolution. Applies resolution inline (skip: remove conflicting files; rename: update destination paths with `_1`, `_2` suffix; newFolder/overwrite/cancel: return to caller). Cards with zero files after resolution are skipped. This matches the existing `onProgress` callback pattern used in transfer service
+- [x] T030 [US2] Wire conflict callback from `createBatchTransferJobs()` in `lib/ui/screens/home_screen.dart` — pass an `onConflict` callback that shows `ConflictResolutionDialog` and returns the user's choice. Handle `newFolder` by re-picking destination and re-calling batch creation. Handle `cancel` by aborting. If all files across all cards were removed by skip/rename, show "All files already exist" SnackBar
 
 **Checkpoint**: No transfer job can be created without conflict detection. Skip-all creates zero jobs (not phantom jobs). Rename appends auto-suffix. Batch preflight is a single global pass before any job creation.
 
@@ -118,9 +118,9 @@
 
 ### Implementation for User Story 5
 
-- [ ] T031 [US5] Refactor `_eraseSourceDrive()` in `lib/ui/screens/job_detail_screen.dart` — store pre-dialog identity (label, totalBytes, serialNumber) from `getDriveIdentity()`. After confirmation dialog returns true, re-call `getDriveIdentity()`. Compare serial number first (if available), then label + totalBytes as fallback. If mismatch, show "Drive changed — erase aborted" snackbar and return without erasing
-- [ ] T032 [US5] Add typed confirmation to erase dialog in `lib/ui/screens/job_detail_screen.dart` — add a `TextField` to the `ConfirmationDialog` content requiring operator to type the drive label or path. Erase button stays disabled until typed text matches
-- [ ] T033 [US5] Add size-only verification warning inside erase dialog in `lib/ui/screens/job_detail_screen.dart` — when `job.verificationMode == VerificationMode.size`, add a prominent orange `Container` with warning text "Files were verified by size only, not content hash. Proceed with caution." inside the dialog body, above the typed confirmation field
+- [x] T031 [US5] Refactor `_eraseSourceDrive()` in `lib/ui/screens/job_detail_screen.dart` — store pre-dialog identity (label, totalBytes, serialNumber) from `getDriveIdentity()`. After confirmation dialog returns true, re-call `getDriveIdentity()`. Compare serial number first (if available), then label + totalBytes as fallback. If mismatch, show "Drive changed — erase aborted" snackbar and return without erasing
+- [x] T032 [US5] Add typed confirmation to erase dialog in `lib/ui/screens/job_detail_screen.dart` — add a `TextField` to the `ConfirmationDialog` content requiring operator to type the drive label or path. Erase button stays disabled until typed text matches
+- [x] T033 [US5] Add size-only verification warning inside erase dialog in `lib/ui/screens/job_detail_screen.dart` — when `job.verificationMode == VerificationMode.size`, add a prominent orange `Container` with warning text "Files were verified by size only, not content hash. Proceed with caution." inside the dialog body, above the typed confirmation field
 
 **Checkpoint**: Erase is protected by serial number re-verification, typed confirmation, and size-only warning. TOCTOU gap closed.
 
@@ -134,13 +134,13 @@
 
 ### Implementation for User Story 6
 
-- [ ] T034 [US6] Add `_hashRunner` ProcessRunner field to `lib/services/transfer_service.dart` — separate from the transfer ProcessRunner, used exclusively for SHA-256 hashing
-- [ ] T035 [US6] Rewrite `computeFileHash()` in `lib/services/transfer_service.dart` to use `_hashRunner.run()` — capture hash from stdout callback instead of `Process.run()` return. Return hash string or null on failure/cancellation
-- [ ] T036 [US6] Update `cancel()` in `lib/services/transfer_service.dart` to also kill `_hashRunner` — ensures stopping queue or shutting down kills both transfer and hash subprocesses
-- [ ] T037 [US6] Update hash cancellation handling in `lib/services/job_queue_service.dart` — after `_transferService.cancel()` kills hash, mark the current file as `pending` (not `completed`). Ensure this DB write completes before returning from the cancellation path
-- [ ] T038 [US6] Make `stopProcessing()` return `Future<void>` in `lib/services/job_queue_service.dart` — add a `Completer<void>` field. Set it when `stopProcessing()` is called. Resolve it at the end of the processing loop AFTER the current iteration's file status writes complete. Return the completer's future
-- [ ] T039 [US6] Add `WindowListener` mixin to `_ShellScreenState` in `lib/ui/screens/shell_screen.dart` — call `windowManager.setPreventClose(true)` and `windowManager.addListener(this)` in `initState()`. Implement `onWindowClose()` to call `_gracefulShutdown()` then `windowManager.destroy()`
-- [ ] T040 [US6] Rewrite `_gracefulShutdown()` in `lib/ui/screens/shell_screen.dart` — depends on T038 (`stopProcessing()` returning `Future<void>`). `await jobQueueService.stopProcessing()` (no timeout on state persistence), then close log, release lock, close DB in order. Wrap entire sequence in 30-second safety timeout. Wire tray quit handler to call this same method. Remove bare `exit(0)` from window close path; tray quit calls `_gracefulShutdown()` then `exit(0)`
+- [x] T034 [US6] Add `_hashRunner` ProcessRunner field to `lib/services/transfer_service.dart` — separate from the transfer ProcessRunner, used exclusively for SHA-256 hashing
+- [x] T035 [US6] Rewrite `computeFileHash()` in `lib/services/transfer_service.dart` to use `_hashRunner.run()` — capture hash from stdout callback instead of `Process.run()` return. Return hash string or null on failure/cancellation
+- [x] T036 [US6] Update `cancel()` in `lib/services/transfer_service.dart` to also kill `_hashRunner` — ensures stopping queue or shutting down kills both transfer and hash subprocesses
+- [x] T037 [US6] Update hash cancellation handling in `lib/services/job_queue_service.dart` — after `_transferService.cancel()` kills hash, mark the current file as `pending` (not `completed`). Ensure this DB write completes before returning from the cancellation path
+- [x] T038 [US6] Make `stopProcessing()` return `Future<void>` in `lib/services/job_queue_service.dart` — add a `Completer<void>` field. Set it when `stopProcessing()` is called. Resolve it at the end of the processing loop AFTER the current iteration's file status writes complete. Return the completer's future
+- [x] T039 [US6] Add `WindowListener` mixin to `_ShellScreenState` in `lib/ui/screens/shell_screen.dart` — call `windowManager.setPreventClose(true)` and `windowManager.addListener(this)` in `initState()`. Implement `onWindowClose()` to call `_gracefulShutdown()` then `windowManager.destroy()`
+- [x] T040 [US6] Rewrite `_gracefulShutdown()` in `lib/ui/screens/shell_screen.dart` — depends on T038 (`stopProcessing()` returning `Future<void>`). `await jobQueueService.stopProcessing()` (no timeout on state persistence), then close log, release lock, close DB in order. Wrap entire sequence in 30-second safety timeout. Wire tray quit handler to call this same method. Remove bare `exit(0)` from window close path; tray quit calls `_gracefulShutdown()` then `exit(0)`
 
 **Checkpoint**: Subprocesses never hang on pipe buffer. Hashing is cancellable. Shutdown is graceful for both window close and tray quit. DB is never closed while writes are pending.
 
@@ -168,7 +168,7 @@ No implementation tasks — T020 (Phase 2) fixed `getNextQueuedJob()` ordering, 
 
 ### Implementation for User Story 9
 
-- [ ] T041 [US9] Fix `_createChainedCompressionJob()` in `lib/services/job_queue_service.dart` — at line 452, replace `p.join(outputPath, f.fileName)` with `p.join(outputPath, p.relative(f.destinationFilePath, from: transferJob.destinationPath))` to preserve relative folder structure in compression output
+- [x] T041 [US9] Fix `_createChainedCompressionJob()` in `lib/services/job_queue_service.dart` — at line 452, replace `p.join(outputPath, f.fileName)` with `p.join(outputPath, p.relative(f.destinationFilePath, from: transferJob.destinationPath))` to preserve relative folder structure in compression output
 
 **Checkpoint**: No two compressed output files target the same path. Folder hierarchy from transfer is preserved.
 
@@ -178,11 +178,11 @@ No implementation tasks — T020 (Phase 2) fixed `getNextQueuedJob()` ordering, 
 
 **Purpose**: Final validation across all stories.
 
-- [ ] T042 Run `dart run build_runner build` in project root to regenerate Drift code — required because T016-T020 added/modified DAO methods in `lib/database/daos/job_dao.dart`, which generates `lib/database/daos/job_dao.g.dart`
-- [ ] T043 Run `flutter analyze` in project root and fix any warnings or errors in files modified by this feature: `lib/utils/process_runner.dart`, `lib/utils/instance_lock.dart`, `lib/services/drive_service.dart`, `lib/services/transfer_service.dart`, `lib/services/update_service.dart`, `lib/services/job_queue_service.dart`, `lib/database/daos/job_dao.dart`, `lib/ui/screens/create_job_screen.dart`, `lib/ui/screens/job_detail_screen.dart`, `lib/ui/screens/shell_screen.dart`, `lib/ui/screens/home_screen.dart`, `lib/ui/widgets/conflict_dialog.dart`, `lib/main.dart`, `lib/utils/constants.dart`
-- [ ] T044 Verify `pubspec.yaml` version is `2.3.0+1` (should already be set by T013)
-- [ ] T045 Run `flutter test` in project root — fix `test/widget_test.dart` if it fails due to uninitialized global services (known issue from review)
-- [ ] T046 Verify quickstart.md manual test plan end-to-end on Windows — test: (1) batch copy with 2+ identical-structure cards → per-card subfolders, (2) single-job from drive root → subfolder created, (3) job to destination with existing files → conflict dialog with all 5 options, (4) skip-all → no job created, (5) kill app during transfer → restart → job recovered as paused, (6) stop queue during SHA-256 hashing → hash killed within 5s, (7) close window during transfer → graceful shutdown, (8) tray quit during transfer → graceful shutdown, (9) launch second instance → error dialog, (10) drag-reorder queue → processing follows display order, (11) transfer-and-compress with duplicate basenames → folder structure preserved, (12) version matches 2.3.0 in update checker
+- [x] T042 Run `dart run build_runner build` in project root to regenerate Drift code — required because T016-T020 added/modified DAO methods in `lib/database/daos/job_dao.dart`, which generates `lib/database/daos/job_dao.g.dart`
+- [x] T043 Run `flutter analyze` in project root and fix any warnings or errors in files modified by this feature: `lib/utils/process_runner.dart`, `lib/utils/instance_lock.dart`, `lib/services/drive_service.dart`, `lib/services/transfer_service.dart`, `lib/services/update_service.dart`, `lib/services/job_queue_service.dart`, `lib/database/daos/job_dao.dart`, `lib/ui/screens/create_job_screen.dart`, `lib/ui/screens/job_detail_screen.dart`, `lib/ui/screens/shell_screen.dart`, `lib/ui/screens/home_screen.dart`, `lib/ui/widgets/conflict_dialog.dart`, `lib/main.dart`, `lib/utils/constants.dart`
+- [x] T044 Verify `pubspec.yaml` version is `2.3.0+1` (should already be set by T013)
+- [x] T045 Run `flutter test` in project root — fix `test/widget_test.dart` if it fails due to uninitialized global services (known issue from review)
+- [x] T046 Verify quickstart.md manual test plan end-to-end on Windows — test: (1) batch copy with 2+ identical-structure cards → per-card subfolders, (2) single-job from drive root → subfolder created, (3) job to destination with existing files → conflict dialog with all 5 options, (4) skip-all → no job created, (5) kill app during transfer → restart → job recovered as paused, (6) stop queue during SHA-256 hashing → hash killed within 5s, (7) close window during transfer → graceful shutdown, (8) tray quit during transfer → graceful shutdown, (9) launch second instance → error dialog, (10) drag-reorder queue → processing follows display order, (11) transfer-and-compress with duplicate basenames → folder structure preserved, (12) version matches 2.3.0 in update checker
 
 ---
 

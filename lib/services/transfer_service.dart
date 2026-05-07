@@ -14,6 +14,9 @@ typedef TransferProgressCallback = void Function(FileProgressEvent event);
 class TransferService {
   TransferProgressCallback? onProgress;
   final _processRunner = ProcessRunner();
+  // Separate runner for SHA-256 hashing so the hash subprocess can be
+  // cancelled independently (or together with) the transfer subprocess.
+  final _hashRunner = ProcessRunner();
   DateTime? _fileStartTime;
   int _fileTotalBytes = 0;
 
@@ -52,28 +55,45 @@ class TransferService {
     return result.success;
   }
 
-  /// Kill the currently running subprocess.
+  /// Kill any currently running transfer or hash subprocess.
   void cancel() {
     _processRunner.kill();
+    _hashRunner.kill();
     _fileStartTime = null;
   }
 
   /// Compute SHA-256 hash of a file using PowerShell Get-FileHash.
-  /// Returns the hex hash string, or null on non-Windows / error.
+  ///
+  /// Routed through [ProcessRunner] (rather than raw [Process.run]) so the
+  /// hash subprocess is killable via [cancel] — important for large files
+  /// where hashing can take minutes and a stop request must take effect
+  /// promptly.
+  ///
+  /// Returns the hex hash string, or null on non-Windows / cancellation /
+  /// failure.
   Future<String?> computeFileHash(String filePath) async {
     if (!Platform.isWindows) return null;
 
+    final captured = StringBuffer();
     try {
-      final result = await Process.run('powershell', [
-        '-NoProfile',
-        '-Command',
-        r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
-        filePath,
-      ]);
-
-      if (result.exitCode != 0) return null;
-      final hash = result.stdout.toString().trim();
-      return hash.isNotEmpty ? hash : null;
+      final exitCode = await _hashRunner.run(
+        executable: 'powershell',
+        arguments: [
+          '-NoProfile',
+          '-Command',
+          r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
+          filePath,
+        ],
+        onStdoutLine: (line) {
+          final t = line.trim();
+          if (t.isNotEmpty) captured.writeln(t);
+        },
+      );
+      if (exitCode != 0) return null;
+      final hash = captured.toString().trim();
+      // SHA-256 hex is 64 chars; reject anything else as malformed.
+      if (hash.length != 64) return null;
+      return hash;
     } catch (_) {
       return null;
     }
