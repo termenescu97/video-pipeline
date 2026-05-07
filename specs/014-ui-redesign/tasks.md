@@ -138,7 +138,7 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 - [X] T045 [US4] Add prominent `FilledButton.tonalIcon` "Export CSV" at bottom of ActivityPanel invoking `exportHistoryToCsv` helper
 - [X] T046 [US4] Rewrite `lib/ui/screens/shell_screen.dart` body to three columns: Sources(240) / Expanded(Row[HomeScreen(360) | _buildRightPanel]) / ActivityPanel(300). StatusBar `appBar:` slot preserved.
 - [X] T047 [US4] Preserved existing `WindowListener` graceful-shutdown logic (from 013) in the rewritten ShellScreen
-- [ ] T048 [US4] Stop routing `JobDetailScreen` as the right pane default — **deferred to US5 T054/T055**. Until inline DetailTabs ships, JobDetailScreen remains the right-pane fallback so the operator can still see job detail; FilesTab is already mounted inside it (mid-impl fix commit) so verification UX is reachable today.
+- [X] T048 [US4] Stop routing `JobDetailScreen` as the right pane default. **Done in Phase 7**: shell `_buildRightPanel` no longer routes to JobDetailScreen; right pane is empty-state or CreateJobScreen. JobDetailScreen kept registered for backwards compat (deep-links / programmatic navigation only).
 - [X] T049 [US4] Empty state in ActivityPanel: "Completed jobs will appear here."
 
 **Checkpoint**: Three-column layout always on; no responsive collapse; min window enforced.
@@ -153,12 +153,12 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 5
 
-- [ ] T050 [US5] Track `expandedJobIds: Set<int>` state owner in `lib/ui/screens/home_screen.dart`. Multiple cards may be expanded simultaneously. Toggling driven by card-body taps and Space-key (US11 T093).
-- [ ] T051 [US5] Create `lib/ui/widgets/audit_tab.dart`: timeline (created → started → file events → completed), verification mode, operator name, total bytes, full hash list
-- [ ] T052 [US5] Create `lib/ui/widgets/errors_tab.dart`: failed-file list with `errorMessage`; empty state copy "No errors. Every file completed successfully."
-- [ ] T053 [US5] Create `lib/ui/widgets/detail_tabs.dart` with `TabBar`: Files (count) / Audit / Errors (count); tabs always visible. Errors tab label format: `Errors (N)` where N is failed-file count (including "(0)").
-- [ ] T054 [US5] Card-variant inline expansion policy: **Active and Queued cards expand into the full DetailTabs** (Files/Audit/Errors). **Done cards expand into a reduced DetailTabs with the Audit tab pre-selected** (file list and errors are still accessible by tab). Next-up cards (which are just a styled first-queued) follow the Queued behavior.
-- [ ] T055 [US5] Embed `DetailTabs` as inline expansion inside `JobCardActive` / `JobCardQueued` / `JobCardDone`. Each variant gives DetailTabs a bounded height (e.g., `SizedBox(height: 320)` or constrained box) so the inner FilesTab's `ListView.builder` has a finite container — required for virtualized scrolling. Toggling driven by `expandedJobIds` (T050).
+- [X] T050 [US5] Track `expandedJobIds: Set<int>` state owner in `lib/ui/screens/home_screen.dart` (queue) AND `lib/ui/widgets/activity_panel.dart` (history) — each panel owns its own set so expanding history doesn't toggle queue cards. Multiple cards may be expanded simultaneously. Toggling driven by card-body taps; Space-key shortcut wired in US11 T093.
+- [X] T051 [US5] Create `lib/ui/widgets/audit_tab.dart`: Summary / Timeline / Hash trail sections with verification mode, operator name, total bytes, all hashes (selectable, JetBrains Mono).
+- [X] T052 [US5] Create `lib/ui/widgets/errors_tab.dart`: failed-file list with `errorMessage`; empty state copy "No errors. Every file completed successfully."
+- [X] T053 [US5] Create `lib/ui/widgets/detail_tabs.dart` with `TabBar`: Files (count) / Audit / Errors (count); tabs always visible. Errors tab label format: `Errors (N)` where N is failed-file count (including "(0)").
+- [X] T054 [US5] Card-variant inline expansion policy: **Active / Queued / Next-up cards expand into the full DetailTabs** with Files tab default. **Done cards** use `DetailTabs.forDone` which pre-selects the Audit tab (history-friendly). All four variants expose `isExpanded` constructor param.
+- [X] T055 [US5] Embed `DetailTabs` as inline expansion inside `JobCardActive` / `JobCardQueued` / `JobCardNextUp` / `JobCardDone`. Each variant restructured to wrap its body and the optional detail panel in a Card-internal Column. Inline detail uses `SizedBox(height: 320)` so FilesTab's `ListView.builder` has a finite container for virtualization. Toggling driven by panel-owned `expandedJobIds`.
 
 **Checkpoint**: Inline detail works for active/queued/done jobs; tabs render with correct counts; FilesTab scrolls 200+ rows smoothly.
 

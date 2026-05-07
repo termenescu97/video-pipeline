@@ -21,10 +21,26 @@ import 'job_card_done.dart';
 /// The CSV export is shared with the Ctrl+E shortcut (US11 T097) via
 /// `lib/utils/history_export.dart`, so the button and the shortcut both
 /// invoke the same flow.
-class ActivityPanel extends StatelessWidget {
-  final ValueChanged<int>? onJobSelected;
+class ActivityPanel extends StatefulWidget {
+  const ActivityPanel({super.key});
 
-  const ActivityPanel({super.key, this.onJobSelected});
+  @override
+  State<ActivityPanel> createState() => _ActivityPanelState();
+}
+
+class _ActivityPanelState extends State<ActivityPanel> {
+  /// Job IDs in this panel whose inline DetailTabs are expanded.
+  /// Owned independently from HomeScreen's expanded set (T050) so
+  /// expanding history rows does not affect the queue panel.
+  final Set<int> _expandedJobIds = <int>{};
+
+  void _toggleExpanded(int jobId) {
+    setState(() {
+      if (!_expandedJobIds.add(jobId)) {
+        _expandedJobIds.remove(jobId);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +86,8 @@ class ActivityPanel extends StatelessWidget {
                 }
                 return _GroupedHistoryList(
                   jobs: jobs,
-                  onJobSelected: onJobSelected,
+                  expandedJobIds: _expandedJobIds,
+                  onToggleExpanded: _toggleExpanded,
                 );
               },
             ),
@@ -94,10 +111,14 @@ class ActivityPanel extends StatelessWidget {
 
 class _GroupedHistoryList extends StatelessWidget {
   final List<Job> jobs;
-  final ValueChanged<int>? onJobSelected;
+  final Set<int> expandedJobIds;
+  final ValueChanged<int> onToggleExpanded;
 
-  const _GroupedHistoryList(
-      {required this.jobs, required this.onJobSelected});
+  const _GroupedHistoryList({
+    required this.jobs,
+    required this.expandedJobIds,
+    required this.onToggleExpanded,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -123,9 +144,8 @@ class _GroupedHistoryList extends StatelessWidget {
         final job = entry.job!;
         return JobCardDone(
           job: job,
-          onTap: onJobSelected != null
-              ? () => onJobSelected!(job.id)
-              : null,
+          isExpanded: expandedJobIds.contains(job.id),
+          onTap: () => onToggleExpanded(job.id),
           onDelete: () => _confirmAndDelete(context, job),
           onRetry:
               job.status == JobStatus.failed ? () => _retry(job.id) : null,

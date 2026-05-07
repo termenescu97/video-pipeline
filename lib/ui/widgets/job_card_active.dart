@@ -10,6 +10,7 @@ import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'detail_tabs.dart';
 import 'progress_bar.dart';
 
 /// Hero variant for the currently-running job.
@@ -20,12 +21,14 @@ import 'progress_bar.dart';
 /// in US6 Phase 8).
 class JobCardActive extends StatelessWidget {
   final Job job;
+  final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
 
   const JobCardActive({
     super.key,
     required this.job,
+    this.isExpanded = false,
     this.onTap,
     this.onDelete,
   });
@@ -41,55 +44,73 @@ class JobCardActive extends StatelessWidget {
           _showContextMenu(context, details.globalPosition),
       child: Card(
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: dotColor, width: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InkWell(
+              onTap: onTap,
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: dotColor, width: 4),
+                  ),
+                ),
+                padding: const EdgeInsets.all(Insets.l),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _Header(
+                      dotColor: dotColor,
+                      job: job,
+                      onMenu: (pos) => _showContextMenu(context, pos),
+                    ),
+                    const SizedBox(height: Insets.m),
+                    ValueListenableBuilder<ProgressData?>(
+                      valueListenable: jobQueueService.progressNotifier,
+                      builder: (context, progress, _) {
+                        final liveForThisJob =
+                            jobQueueService.currentJobId == job.id;
+                        return PipelineProgressBar(
+                          progress: job.totalFiles > 0
+                              ? job.completedFiles / job.totalFiles
+                              : 0,
+                          label: job.type.label,
+                          currentFileName: liveForThisJob
+                              ? progress?.currentFileName
+                              : null,
+                          completedFiles: job.completedFiles,
+                          totalFiles: job.totalFiles,
+                          elapsed:
+                              liveForThisJob ? progress?.elapsed : null,
+                          eta: liveForThisJob ? progress?.eta : null,
+                          speedBytesPerSec: liveForThisJob
+                              ? progress?.speedBytesPerSec
+                              : null,
+                          fps: liveForThisJob ? progress?.fps : null,
+                        );
+                      },
+                    ),
+                    const SizedBox(height: Insets.s),
+                    _StatsRow(job: job, scheme: scheme),
+                    if (job.type == JobType.transferAndCompress) ...[
+                      const SizedBox(height: Insets.s),
+                      _PhaseIndicator(job: job, scheme: scheme),
+                    ],
+                  ],
+                ),
               ),
             ),
-            padding: const EdgeInsets.all(Insets.l),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _Header(
-                  dotColor: dotColor,
-                  job: job,
-                  onMenu: (pos) => _showContextMenu(context, pos),
+            if (isExpanded)
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: scheme.outlineVariant, width: 1),
+                  ),
                 ),
-                const SizedBox(height: Insets.m),
-                ValueListenableBuilder<ProgressData?>(
-                  valueListenable: jobQueueService.progressNotifier,
-                  builder: (context, progress, _) {
-                    final liveForThisJob =
-                        jobQueueService.currentJobId == job.id;
-                    return PipelineProgressBar(
-                      progress: job.totalFiles > 0
-                          ? job.completedFiles / job.totalFiles
-                          : 0,
-                      label: job.type.label,
-                      currentFileName:
-                          liveForThisJob ? progress?.currentFileName : null,
-                      completedFiles: job.completedFiles,
-                      totalFiles: job.totalFiles,
-                      elapsed: liveForThisJob ? progress?.elapsed : null,
-                      eta: liveForThisJob ? progress?.eta : null,
-                      speedBytesPerSec:
-                          liveForThisJob ? progress?.speedBytesPerSec : null,
-                      fps: liveForThisJob ? progress?.fps : null,
-                    );
-                  },
-                ),
-                const SizedBox(height: Insets.s),
-                _StatsRow(job: job, scheme: scheme),
-                if (job.type == JobType.transferAndCompress) ...[
-                  const SizedBox(height: Insets.s),
-                  _PhaseIndicator(job: job, scheme: scheme),
-                ],
-              ],
-            ),
-          ),
+                height: 320,
+                child: DetailTabs(job: job),
+              ),
+          ],
         ),
       ),
     );

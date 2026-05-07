@@ -7,21 +7,25 @@ import '../../database/tables.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'detail_tabs.dart';
 
 /// Slim row variant for queued/paused jobs that are not next-up.
 ///
 /// 64 px tall. State dot at the left edge, monochrome type glyph, source →
 /// destination basenames, ⋯ overflow on the right. The visible ☰ drag
 /// handle is added in US7 (T062) when [ReorderableDragStartListener] is
-/// moved off the whole card body.
+/// moved off the whole card body. When [isExpanded] is true, an inline
+/// [DetailTabs] panel renders below the row.
 class JobCardQueued extends StatelessWidget {
   final Job job;
+  final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
 
   const JobCardQueued({
     super.key,
     required this.job,
+    this.isExpanded = false,
     this.onTap,
     this.onDelete,
   });
@@ -42,18 +46,21 @@ class JobCardQueued extends StatelessWidget {
           _showContextMenu(context, details.globalPosition),
       child: Card(
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            height: 64,
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: dotColor, width: 4),
-              ),
-            ),
-            padding: const EdgeInsets.symmetric(
-                horizontal: Insets.l, vertical: Insets.s),
-            child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InkWell(
+              onTap: onTap,
+              child: Container(
+                height: 64,
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: dotColor, width: 4),
+                  ),
+                ),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: Insets.l, vertical: Insets.s),
+                child: Row(
               children: [
                 Container(
                   width: 12,
@@ -104,7 +111,19 @@ class JobCardQueued extends StatelessWidget {
                 const SizedBox(width: Insets.xs),
               ],
             ),
-          ),
+              ),
+            ),
+            if (isExpanded)
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: scheme.outlineVariant, width: 1),
+                  ),
+                ),
+                height: 320,
+                child: DetailTabs(job: job),
+              ),
+          ],
         ),
       ),
     );

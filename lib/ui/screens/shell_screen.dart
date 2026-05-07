@@ -11,7 +11,6 @@ import '../widgets/activity_panel.dart';
 import '../widgets/sources_panel.dart';
 import '../widgets/status_bar.dart';
 import 'create_job_screen.dart';
-import 'job_detail_screen.dart';
 import 'home_screen.dart';
 import 'settings_screen.dart';
 
@@ -26,7 +25,6 @@ class ShellScreen extends StatefulWidget {
 
 class _ShellScreenState extends State<ShellScreen>
     with TrayListener, WindowListener {
-  int? _selectedJobId;
   bool _showCreateJob = false;
   bool _shuttingDown = false;
   // When the operator picks a drive from SourcesPanel, hand it to
@@ -142,7 +140,6 @@ class _ShellScreenState extends State<ShellScreen>
           _CreateJobIntent: CallbackAction<_CreateJobIntent>(
             onInvoke: (_) {
               setState(() {
-                _selectedJobId = null;
                 _showCreateJob = true;
               });
               return null;
@@ -184,7 +181,6 @@ class _ShellScreenState extends State<ShellScreen>
                   child: SourcesPanel(
                     onSourceSelected: (drive) {
                       setState(() {
-                        _selectedJobId = null;
                         _showCreateJob = true;
                         _preSelectedDrive = drive;
                       });
@@ -203,15 +199,13 @@ class _ShellScreenState extends State<ShellScreen>
                       SizedBox(
                         width: 360,
                         child: HomeScreen(
-                          onJobSelected: (jobId) {
-                            setState(() {
-                              _selectedJobId = jobId;
-                              _showCreateJob = false;
-                            });
-                          },
+                          // onJobSelected kept as a no-op signal so
+                          // HomeScreen still treats itself as embedded.
+                          // Inline expansion is local to HomeScreen now;
+                          // no shell navigation occurs on card tap (US5).
+                          onJobSelected: (_) {},
                           onCreateJob: () {
                             setState(() {
-                              _selectedJobId = null;
                               _showCreateJob = true;
                               _preSelectedDrive = null;
                             });
@@ -224,17 +218,12 @@ class _ShellScreenState extends State<ShellScreen>
                   ),
                 ),
                 const VerticalDivider(width: 1),
-                // Right column — Activity (FR-031/032).
-                SizedBox(
+                // Right column — Activity (FR-031/032). History rows
+                // expand inline within this column (US5 T054); no
+                // navigation away to a detail screen.
+                const SizedBox(
                   width: 300,
-                  child: ActivityPanel(
-                    onJobSelected: (jobId) {
-                      setState(() {
-                        _selectedJobId = jobId;
-                        _showCreateJob = false;
-                      });
-                    },
-                  ),
+                  child: ActivityPanel(),
                 ),
               ],
             ),
@@ -263,21 +252,17 @@ class _ShellScreenState extends State<ShellScreen>
       );
     }
 
-    if (_selectedJobId != null) {
-      return JobDetailScreen(
-        key: ValueKey(_selectedJobId),
-        jobId: _selectedJobId!,
-      );
-    }
-
-    // Empty state.
+    // Empty state. Job detail now expands inline within the queue
+    // panel (US5); JobDetailScreen is retained as a route for
+    // backwards compat (deep-links / programmatic navigation) but
+    // is no longer surfaced from the shell by default (T048).
     return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.touch_app, size: 48, color: Colors.grey),
           SizedBox(height: 16),
-          Text('Select a job or create a new one',
+          Text('Click a job in the queue to expand its detail',
               style: TextStyle(color: Colors.grey)),
           SizedBox(height: 8),
           Text('Ctrl+N: New Job  |  Ctrl+Enter: Start/Stop Queue',

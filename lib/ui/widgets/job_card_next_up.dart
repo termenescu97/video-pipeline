@@ -7,6 +7,7 @@ import '../../main.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'detail_tabs.dart';
 
 /// Hero variant for the first queued job when nothing is currently running.
 ///
@@ -14,14 +15,17 @@ import '../theme/text_styles.dart';
 /// hint instead of stats. Pressing Start activates the queue (FR-005a — the
 /// in-place transition to Active variant happens when the queue starts and
 /// the job's status flips to inProgress; the router upgrades the variant).
+/// When [isExpanded] is true, an inline [DetailTabs] panel renders below.
 class JobCardNextUp extends StatelessWidget {
   final Job job;
+  final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
 
   const JobCardNextUp({
     super.key,
     required this.job,
+    this.isExpanded = false,
     this.onTap,
     this.onDelete,
   });
@@ -40,18 +44,21 @@ class JobCardNextUp extends StatelessWidget {
           _showContextMenu(context, details.globalPosition),
       child: Card(
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: scheme.primary, width: 4),
-              ),
-            ),
-            padding: const EdgeInsets.all(Insets.l),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InkWell(
+              onTap: onTap,
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: scheme.primary, width: 4),
+                  ),
+                ),
+                padding: const EdgeInsets.all(Insets.l),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                 Row(
                   children: [
                     Container(
@@ -131,7 +138,19 @@ class JobCardNextUp extends StatelessWidget {
                 ),
               ],
             ),
-          ),
+              ),
+            ),
+            if (isExpanded)
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: scheme.outlineVariant, width: 1),
+                  ),
+                ),
+                height: 320,
+                child: DetailTabs(job: job),
+              ),
+          ],
         ),
       ),
     );

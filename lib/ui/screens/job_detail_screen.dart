@@ -149,11 +149,12 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
                 const SizedBox(height: 24),
 
-                // File list — uses the new FilesTab widget so the
-                // "✓ matches" badge + JetBrains Mono hash popover (US3)
-                // are reachable today. Inline DetailTabs container lands
-                // in US5 T055; until then JobDetailScreen hosts FilesTab
-                // directly, giving it a bounded height for virtualization.
+                // File list. As of US5 (T048), inline `DetailTabs`
+                // expansion in the queue panel is the primary path.
+                // JobDetailScreen remains as a backwards-compat route
+                // for deep-links / programmatic navigation; FilesTab
+                // here gives it the same per-row UX (matches badge,
+                // hash popover) as the inline tab.
                 Text('Files',
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),

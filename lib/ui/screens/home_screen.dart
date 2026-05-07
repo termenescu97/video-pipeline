@@ -25,6 +25,20 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool get _isEmbedded => widget.onJobSelected != null;
 
+  /// Job IDs whose inline DetailTabs panel is currently expanded.
+  /// Multiple cards may be expanded simultaneously (T050). Cleared
+  /// when the operator collapses a card explicitly. Owned here at
+  /// the panel level so reorders / queue updates don't reset it.
+  final Set<int> _expandedJobIds = <int>{};
+
+  void _toggleExpanded(int jobId) {
+    setState(() {
+      if (!_expandedJobIds.add(jobId)) {
+        _expandedJobIds.remove(jobId);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Job>>(
@@ -249,7 +263,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: JobCard(
                           job: job,
                           isNextUp: index == nextUpIndex,
-                          onTap: () => _onJobTap(job),
+                          isExpanded: _expandedJobIds.contains(job.id),
+                          onTap: () => _toggleExpanded(job.id),
                           onDelete: () => _deleteJob(job),
                           onRetry: job.status == JobStatus.failed
                               ? () => _retryJob(job)
@@ -267,13 +282,6 @@ class _HomeScreenState extends State<HomeScreen> {
         );
   }
 
-  void _onJobTap(Job job) {
-    if (_isEmbedded) {
-      widget.onJobSelected!(job.id);
-    } else {
-      // Standalone mode — push to detail screen (fallback).
-    }
-  }
 
   void _onCreateJob() {
     if (_isEmbedded) {

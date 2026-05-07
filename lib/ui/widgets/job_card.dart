@@ -20,6 +20,7 @@ import 'job_card_queued.dart';
 class JobCard extends StatelessWidget {
   final Job job;
   final bool isNextUp;
+  final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
   final VoidCallback? onRetry;
@@ -28,6 +29,7 @@ class JobCard extends StatelessWidget {
     super.key,
     required this.job,
     this.isNextUp = false,
+    this.isExpanded = false,
     this.onTap,
     this.onDelete,
     this.onRetry,
@@ -39,6 +41,7 @@ class JobCard extends StatelessWidget {
       case JobStatus.inProgress:
         return JobCardActive(
           job: job,
+          isExpanded: isExpanded,
           onTap: onTap,
           onDelete: onDelete,
         );
@@ -46,6 +49,7 @@ class JobCard extends StatelessWidget {
       case JobStatus.failed:
         return JobCardDone(
           job: job,
+          isExpanded: isExpanded,
           onTap: onTap,
           onDelete: onDelete,
           onRetry: onRetry,
@@ -55,12 +59,14 @@ class JobCard extends StatelessWidget {
         if (isNextUp) {
           return JobCardNextUp(
             job: job,
+            isExpanded: isExpanded,
             onTap: onTap,
             onDelete: onDelete,
           );
         }
         return JobCardQueued(
           job: job,
+          isExpanded: isExpanded,
           onTap: onTap,
           onDelete: onDelete,
         );

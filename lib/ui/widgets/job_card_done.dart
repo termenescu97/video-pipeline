@@ -7,14 +7,18 @@ import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'detail_tabs.dart';
 
 /// Compact dimmed variant for completed/failed jobs (history).
 ///
 /// 48 px tall. State dot communicates success vs failure; type glyph stays
 /// monochrome (color reserved for state per FR-009). Only ⋯ overflow is
 /// surfaced — primary actions (Retry, View Details) live in the menu.
+/// When [isExpanded] is true, an inline [DetailTabs] panel renders below
+/// with the Audit tab pre-selected (history-friendly default per T054).
 class JobCardDone extends StatelessWidget {
   final Job job;
+  final bool isExpanded;
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
   final VoidCallback? onRetry;
@@ -22,6 +26,7 @@ class JobCardDone extends StatelessWidget {
   const JobCardDone({
     super.key,
     required this.job,
+    this.isExpanded = false,
     this.onTap,
     this.onDelete,
     this.onRetry,
@@ -48,18 +53,21 @@ class JobCardDone extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         // Use a slightly muted surface for the "dimmed" look.
         color: scheme.surfaceContainerLowest,
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            height: 48,
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: dotColor, width: 4),
-              ),
-            ),
-            padding: const EdgeInsets.symmetric(
-                horizontal: Insets.l, vertical: Insets.xs),
-            child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InkWell(
+              onTap: onTap,
+              child: Container(
+                height: 48,
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: dotColor, width: 4),
+                  ),
+                ),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: Insets.l, vertical: Insets.xs),
+                child: Row(
               children: [
                 Container(
                   width: 10,
@@ -98,7 +106,19 @@ class JobCardDone extends StatelessWidget {
                 ),
               ],
             ),
-          ),
+              ),
+            ),
+            if (isExpanded)
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: scheme.outlineVariant, width: 1),
+                  ),
+                ),
+                height: 320,
+                child: DetailTabs.forDone(job: job),
+              ),
+          ],
         ),
       ),
     );
