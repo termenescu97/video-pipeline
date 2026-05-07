@@ -64,7 +64,16 @@ class ActivityPanel extends StatelessWidget {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final jobs = snapshot.data ?? const <Job>[];
+                // Activity panel = success history only. Failed jobs
+                // live in the queue (FR-005a/FR-011 — banner anchors
+                // them at top while keeping their natural position).
+                // `watchCompletedJobs` returns both completed AND failed
+                // for legacy CSV/export reasons; we filter failed out
+                // here so a job is never visible in two surfaces at
+                // once (Codex Phase 9 review WARN).
+                final jobs = (snapshot.data ?? const <Job>[])
+                    .where((j) => j.status == JobStatus.completed)
+                    .toList();
                 if (jobs.isEmpty) {
                   return Center(
                     child: Padding(
@@ -139,20 +148,16 @@ class _GroupedHistoryList extends StatelessWidget {
           return _GroupHeader(label: entry.label!);
         }
         final job = entry.job!;
+        // ActivityPanel only renders completed jobs (failed are filtered
+        // upstream in build) so onRetry is structurally null here.
         return JobCardDone(
           job: job,
           isExpanded: expandedJobIds.contains(job.id),
           onTap: () => onToggleExpanded(job.id),
           onDelete: () => _confirmAndDelete(context, job),
-          onRetry:
-              job.status == JobStatus.failed ? () => _retry(job.id) : null,
         );
       },
     );
-  }
-
-  Future<void> _retry(int jobId) async {
-    await jobDao.resetJobForRetry(jobId);
   }
 
   /// Constitution Principle I: deletion is destructive and MUST require

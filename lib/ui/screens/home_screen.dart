@@ -158,29 +158,24 @@ class _HomeScreenState extends State<HomeScreen> {
         final jobs = snapshot.data ?? const <Job>[];
         final failedJobs =
             jobs.where((j) => j.status == JobStatus.failed).toList();
-        // T066: prune dismissed IDs that are no longer failing. A job
-        // that was dismissed and then retried (or deleted) should not
-        // keep its slot in the set — otherwise a future re-failure of
-        // the same ID would be pre-suppressed. The pruning happens at
-        // render time; the set we hand to the banner is what matters.
+        // T066: a job that was dismissed and then retried (or deleted)
+        // must not keep its slot in the dismissed set — otherwise a
+        // re-failure of the same ID would be pre-suppressed. We prune
+        // for THIS frame's render via a local set, and schedule a
+        // post-frame setState to persist the pruning. Direct mid-build
+        // mutation would be fragile (Codex Phase 9 review NIT).
         final activeFailedIds = failedJobs.map((j) => j.id).toSet();
-        if (_dismissedFailureIds.isNotEmpty) {
-          final pruned =
-              _dismissedFailureIds.intersection(activeFailedIds);
-          if (pruned.length != _dismissedFailureIds.length) {
-            // Schedule the state update for the next frame to avoid
-            // setState-during-build; the banner read below uses the
-            // local `pruned` set so this frame is correct.
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                setState(() => _dismissedFailureIds = pruned);
-              }
-            });
-          }
-          _dismissedFailureIds = pruned;
+        final prunedDismissed =
+            _dismissedFailureIds.intersection(activeFailedIds);
+        if (prunedDismissed.length != _dismissedFailureIds.length) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() => _dismissedFailureIds = prunedDismissed);
+            }
+          });
         }
         final visibleFailures = failedJobs
-            .where((j) => !_dismissedFailureIds.contains(j.id))
+            .where((j) => !prunedDismissed.contains(j.id))
             .toList();
 
         // Warning banners (Slack misconfigured, HandBrake missing,
@@ -192,8 +187,13 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             _WarningBannerSlot(
               visibleFailures: visibleFailures,
-              onRetryAllFailed: () => _retryAllFailed(failedJobs),
-              onDismissFailed: () => _dismissFailedBanner(failedJobs),
+              // Retry only the failures the operator can SEE in the
+              // banner (Codex Phase 9 review WARN). Dismissed failures
+              // are silent by operator choice — pulling them back into
+              // the queue without prompting would surprise the operator
+              // (Principle V: action scope must match what's visible).
+              onRetryAllFailed: () => _retryAllFailed(visibleFailures),
+              onDismissFailed: () => _dismissFailedBanner(visibleFailures),
             ),
             Expanded(child: _buildBody(context, jobs)),
           ],
@@ -215,22 +215,33 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// T065 retry-all: reset every failed job for retry. Clears the
-  /// dismiss set as a side-effect — once we've actively addressed the
-  /// failures, there's nothing left to "stay dismissed" against.
+  /// T065 retry-all: reset every supplied failed job for retry. Each
+  /// reset runs in its own try/catch so a single DB hiccup doesn't
+  /// abandon the rest (Codex Phase 9 review WARN — partial success
+  /// must be visible to the operator, Principle V).
+  ///
+  /// Clears the dismiss set as a side-effect — once we've actively
+  /// addressed the visible failures, there's nothing left to "stay
+  /// dismissed" against. Re-failures will repopulate the banner.
   Future<void> _retryAllFailed(List<Job> failures) async {
     if (failures.isEmpty) return;
+    var ok = 0;
+    var failed = 0;
     for (final j in failures) {
-      await jobDao.resetJobForRetry(j.id);
+      try {
+        await jobDao.resetJobForRetry(j.id);
+        ok++;
+      } catch (_) {
+        failed++;
+      }
     }
     if (!mounted) return;
     setState(() => _dismissedFailureIds = const <int>{});
+    final msg = failed == 0
+        ? (ok == 1 ? '1 job re-queued for retry' : '$ok jobs re-queued for retry')
+        : 'Re-queued $ok of ${failures.length} — $failed failed to reset';
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(failures.length == 1
-            ? '1 job re-queued for retry'
-            : '${failures.length} jobs re-queued for retry'),
-      ),
+      SnackBar(content: Text(msg)),
     );
   }
 
@@ -450,10 +461,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (activeIdx != -1 && newIndex <= activeIdx) {
                         return;
                       }
-                      jobDao.reorderJobs(
-                        activeJobs[oldIndex].id,
-                        activeJobs[newIndex].id,
-                      );
+                      // True insertion (not swap): build the new order
+                      // locally, then persist via setJobsOrder which
+                      // re-numbers sortOrder 0..n-1 in one transaction.
+                      // Codex Phase 9 review caught the previous swap
+                      // path producing [C,B,A] when the operator
+                      // expected [C,A,B] for a 3-card top drop.
+                      final newOrder = List<Job>.from(activeJobs);
+                      final moved = newOrder.removeAt(oldIndex);
+                      newOrder.insert(newIndex, moved);
+                      jobDao.setJobsOrder(
+                          newOrder.map((j) => j.id).toList());
                     },
                     itemBuilder: (context, index) {
                       final job = activeJobs[index];

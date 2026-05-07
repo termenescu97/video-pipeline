@@ -19,19 +19,26 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         .watch();
   }
 
-  /// Reorder jobs by swapping sortOrder values between two jobs identified by ID.
-  Future<void> reorderJobs(int movedJobId, int targetJobId) async {
-    if (movedJobId == targetJobId) return;
-
-    final movedJob = await getJob(movedJobId);
-    final targetJob = await getJob(targetJobId);
-    if (movedJob == null || targetJob == null) return;
-
+  /// Persist a new queue ordering (T065 fix from Codex Phase 9 review —
+  /// the previous swap-only `reorderJobs` was a v2.3.0 bug that became
+  /// reachable once the drag handle gained visible affordance).
+  ///
+  /// [orderedJobIds] is the desired top-to-bottom order; each row gets
+  /// `sortOrder = index` inside a single transaction so partial state is
+  /// not observable. IDs not present in the list are left untouched
+  /// (Active stays at its current sortOrder; completed jobs in the
+  /// Activity panel are untouched).
+  ///
+  /// Re-numbering 0..n-1 means inserting C at index 0 from `[A, B, C]`
+  /// produces `[C, A, B]` — true insertion semantics, not a two-row
+  /// swap that would have produced `[C, B, A]`.
+  Future<void> setJobsOrder(List<int> orderedJobIds) async {
+    if (orderedJobIds.isEmpty) return;
     await transaction(() async {
-      await (update(jobs)..where((t) => t.id.equals(movedJobId)))
-          .write(JobsCompanion(sortOrder: Value(targetJob.sortOrder)));
-      await (update(jobs)..where((t) => t.id.equals(targetJobId)))
-          .write(JobsCompanion(sortOrder: Value(movedJob.sortOrder)));
+      for (var i = 0; i < orderedJobIds.length; i++) {
+        await (update(jobs)..where((t) => t.id.equals(orderedJobIds[i])))
+            .write(JobsCompanion(sortOrder: Value(i)));
+      }
     });
   }
 
