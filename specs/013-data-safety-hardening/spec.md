@@ -5,6 +5,14 @@
 **Status**: Draft  
 **Input**: 14 validated findings from GPT 5.5 adversarial code review + counter-review
 
+## Clarifications
+
+### Session 2026-05-07
+
+- Q: How should per-card subfolders be named when two cards have identical labels? → A: Always use `label_driveletter` format (e.g., `EOS_DIGITAL_E/`, `EOS_DIGITAL_F/`). No fallback logic needed.
+- Q: Should recovered in-progress jobs auto-resume or wait for manual start? → A: Recover to paused state. Operator must manually resume after reviewing.
+- Q: Does destination conflict detection apply inside batch copy with per-card subfolders? → A: Yes, conflict detection applies universally to all job creation (single and batch), including inside per-card subfolders.
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Safe Batch Copy Across Identical Cards (Priority: P1)
@@ -17,9 +25,9 @@ An operator shoots with two Canon cameras. Both SD cards contain `DCIM/100CANON/
 
 **Acceptance Scenarios**:
 
-1. **Given** two SD cards with identical DCIM folder structure, **When** the operator runs "Copy All Cards", **Then** each card's files are placed in a separate per-card subfolder at the destination (using drive label or drive letter).
+1. **Given** two SD cards with identical DCIM folder structure, **When** the operator runs "Copy All Cards", **Then** each card's files are placed in a separate per-card subfolder at the destination using `label_driveletter` format (e.g., `EOS_DIGITAL_E/`, `EOS_DIGITAL_F/`).
 2. **Given** a single job created from a drive root, **When** the destination already contains files from a previous card with the same folder structure, **Then** the system detects the collision and creates a distinct subfolder.
-3. **Given** batch copy completes, **Then** the destination folder names clearly identify which card each subfolder came from (e.g., `CardA_E/`, `CANON_F/`).
+3. **Given** batch copy completes, **Then** the destination folder names use the `label_driveletter` format to clearly identify which card each subfolder came from.
 
 ---
 
@@ -50,9 +58,9 @@ The operator is transferring footage when the PC loses power. On restart, the in
 
 **Acceptance Scenarios**:
 
-1. **Given** a job was in-progress when the app crashed, **When** the app restarts, **Then** the job and its in-progress files are moved back to a resumable state (paused or queued).
-2. **Given** a recovered job resumes, **When** robocopy runs with `/Z`, **Then** partially transferred files continue from where they left off rather than restarting.
-3. **Given** multiple jobs were in-progress at crash time, **When** the app restarts, **Then** all stranded jobs are recovered.
+1. **Given** a job was in-progress when the app crashed, **When** the app restarts, **Then** the job and its in-progress files are moved to paused state. The operator must manually resume after reviewing.
+2. **Given** a recovered job is manually resumed by the operator, **When** robocopy runs with `/Z`, **Then** partially transferred files continue from where they left off rather than restarting.
+3. **Given** multiple jobs were in-progress at crash time, **When** the app restarts, **Then** all stranded jobs are recovered to paused state.
 
 ---
 
@@ -184,7 +192,7 @@ The app must report its actual version so that the update checker compares again
 
 ### Edge Cases
 
-- What happens when a drive label is empty or contains special characters? The per-card subfolder falls back to drive letter (e.g., `Drive_E/`).
+- What happens when a drive label is empty or contains special characters? The label portion is sanitized (special characters removed); if the label is empty, `Drive` is used as placeholder (e.g., `Drive_E/`).
 - What happens when the operator creates a single job (not batch) from a drive root that collides with an existing destination folder? The same collision detection and resolution applies.
 - What happens when all files at the destination already exist? The conflict dialog shows "all files conflict" and offers the same resolution options.
 - What happens when a recovered in-progress job's source card is no longer mounted? The job resumes in queued/paused state; when processing reaches it, it fails with a clear "source not found" error.
@@ -195,12 +203,12 @@ The app must report its actual version so that the update checker compares again
 ### Functional Requirements
 
 **Data Integrity — Transfer**
-- **FR-001**: System MUST create a per-card subfolder in the destination when batch-copying multiple cards, using the drive label (or drive letter as fallback) as the subfolder name.
-- **FR-002**: System MUST detect existing files at destination paths before creating a transfer job and present a conflict resolution dialog (skip, rename, new folder, or typed overwrite confirmation).
+- **FR-001**: System MUST create a per-card subfolder in the destination when batch-copying multiple cards, using `label_driveletter` format (e.g., `EOS_DIGITAL_E/`) as the subfolder name.
+- **FR-002**: System MUST detect existing files at destination paths before creating any transfer job (single or batch, including inside per-card subfolders) and present a conflict resolution dialog (skip, rename, new folder, or typed overwrite confirmation).
 - **FR-003**: Chained compression output MUST preserve the relative folder structure from the transfer destination, not flatten to basenames.
 
 **Data Integrity — Recovery**
-- **FR-004**: On startup, the system MUST detect jobs left in in-progress state and move them (and their in-progress files) back to a resumable state.
+- **FR-004**: On startup, the system MUST detect jobs left in in-progress state and move them (and their in-progress files) to paused state. The operator must manually resume.
 - **FR-005**: Job creation (job record, file records, totals) MUST be written in a single atomic database transaction.
 
 **Data Integrity — Erase**
