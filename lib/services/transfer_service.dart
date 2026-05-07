@@ -14,6 +14,11 @@ typedef TransferProgressCallback = void Function(FileProgressEvent event);
 class TransferService {
   TransferProgressCallback? onProgress;
   final _processRunner = ProcessRunner();
+  // Active SHA-256 hash subprocesses. We track every concurrent hash so
+  // [cancel] can kill all of them — source/destination hashes commonly
+  // run in parallel (different physical drives) and a single shared
+  // runner would race the second call over the first's process handle.
+  final Set<ProcessRunner> _activeHashRunners = <ProcessRunner>{};
   DateTime? _fileStartTime;
   int _fileTotalBytes = 0;
 
@@ -52,30 +57,54 @@ class TransferService {
     return result.success;
   }
 
-  /// Kill the currently running subprocess.
+  /// Kill any currently running transfer or hash subprocess.
   void cancel() {
     _processRunner.kill();
+    // Snapshot to avoid concurrent-modification while runners self-remove.
+    for (final runner in _activeHashRunners.toList()) {
+      runner.kill();
+    }
     _fileStartTime = null;
   }
 
   /// Compute SHA-256 hash of a file using PowerShell Get-FileHash.
-  /// Returns the hex hash string, or null on non-Windows / error.
+  ///
+  /// Each invocation owns a dedicated [ProcessRunner] so parallel hashing
+  /// of source and destination is safe — see [_activeHashRunners]. The
+  /// runner is registered while the subprocess is alive so [cancel] can
+  /// kill it; deregistered on completion or error.
+  ///
+  /// Returns the hex hash string, or null on non-Windows / cancellation /
+  /// failure.
   Future<String?> computeFileHash(String filePath) async {
     if (!Platform.isWindows) return null;
 
+    final runner = ProcessRunner();
+    _activeHashRunners.add(runner);
+    final captured = StringBuffer();
     try {
-      final result = await Process.run('powershell', [
-        '-NoProfile',
-        '-Command',
-        r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
-        filePath,
-      ]);
-
-      if (result.exitCode != 0) return null;
-      final hash = result.stdout.toString().trim();
-      return hash.isNotEmpty ? hash : null;
+      final exitCode = await runner.run(
+        executable: 'powershell',
+        arguments: [
+          '-NoProfile',
+          '-Command',
+          r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
+          filePath,
+        ],
+        onStdoutLine: (line) {
+          final t = line.trim();
+          if (t.isNotEmpty) captured.writeln(t);
+        },
+      );
+      if (exitCode != 0) return null;
+      final hash = captured.toString().trim();
+      // SHA-256 hex is 64 chars; reject anything else as malformed.
+      if (hash.length != 64) return null;
+      return hash;
     } catch (_) {
       return null;
+    } finally {
+      _activeHashRunners.remove(runner);
     }
   }
 

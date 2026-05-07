@@ -47,6 +47,9 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   }
 
   /// Get the next queued or paused job (first in queue).
+  ///
+  /// Orders by [Jobs.sortOrder] first (matching UI display after
+  /// drag-reorder), then [Jobs.createdAt] as a tiebreaker.
   Future<Job?> getNextQueuedJob() {
     return (select(jobs)
           ..where(
@@ -54,9 +57,83 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
                 t.status.equalsValue(JobStatus.queued) |
                 t.status.equalsValue(JobStatus.paused),
           )
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)])
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.sortOrder),
+            (t) => OrderingTerm.asc(t.createdAt),
+          ])
           ..limit(1))
         .getSingleOrNull();
+  }
+
+  /// Returns the highest sortOrder currently assigned to any active
+  /// (queued or paused) job, or 0 if none. Used to place new jobs at
+  /// the end of the queue.
+  Future<int> getMaxSortOrder() async {
+    final maxExpr = jobs.sortOrder.max();
+    final query = selectOnly(jobs)
+      ..where(
+        jobs.status.equalsValue(JobStatus.queued) |
+            jobs.status.equalsValue(JobStatus.paused),
+      )
+      ..addColumns([maxExpr]);
+    final row = await query.getSingleOrNull();
+    return row?.read(maxExpr) ?? 0;
+  }
+
+  /// Recover jobs left in [JobStatus.inProgress] state from a previous run
+  /// (crash, power loss, kill). Moves them and their in-progress files back
+  /// to a resumable state so the operator can review and manually resume.
+  ///
+  /// Per the spec, recovery moves to [JobStatus.paused] (not [JobStatus.queued])
+  /// so the operator must explicitly resume after reviewing.
+  Future<void> recoverStaleJobs() async {
+    await transaction(() async {
+      await (update(jobs)
+            ..where((t) => t.status.equalsValue(JobStatus.inProgress)))
+          .write(const JobsCompanion(status: Value(JobStatus.paused)));
+
+      await (update(db.jobFiles)
+            ..where((t) => t.status.equalsValue(FileStatus.inProgress)))
+          .write(
+        const JobFilesCompanion(
+          status: Value(FileStatus.pending),
+          startedAt: Value(null),
+        ),
+      );
+    });
+  }
+
+  /// Atomic job creation. Inserts the job, its files, and totals in a
+  /// single Drift transaction so a crash mid-creation leaves no partial
+  /// state. The [buildFiles] callback receives the new job ID and must
+  /// return the file companions with that ID set.
+  ///
+  /// Throws [StateError] if [buildFiles] returns an empty list — phantom
+  /// zero-file jobs would otherwise be marked completed without ever
+  /// transferring anything.
+  Future<int> createJobWithFiles({
+    required JobsCompanion job,
+    required List<JobFilesCompanion> Function(int newJobId) buildFiles,
+    required int totalBytes,
+  }) async {
+    return await transaction(() async {
+      final newJobId = await into(jobs).insert(job);
+      final files = buildFiles(newJobId);
+      if (files.isEmpty) {
+        throw StateError(
+          'Cannot create a job with zero files. '
+          'Filter conflicts at the UI layer before calling createJobWithFiles.',
+        );
+      }
+      await batch((b) => b.insertAll(db.jobFiles, files));
+      await (update(jobs)..where((t) => t.id.equals(newJobId))).write(
+        JobsCompanion(
+          totalFiles: Value(files.length),
+          totalBytes: Value(totalBytes),
+        ),
+      );
+      return newJobId;
+    });
   }
 
   /// Insert a new job and return its ID.

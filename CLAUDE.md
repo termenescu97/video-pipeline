@@ -98,9 +98,10 @@ lib/
 | 010 - Medium Fixes | `010-medium-fixes` | 21/21 | ✅ Complete |
 | 011 - SHA-256 Verification | `011-sha256-verification` | 19/19 | ✅ Complete |
 | 012 - Test Card Prep | `012-test-card-prep` | 4/4 | ✅ Complete |
+| 013 - Data Safety & Reliability Hardening | `013-data-safety-hardening` | 46/46 | ✅ Complete |
 
-**Latest release**: v2.2.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 231
+**Latest release**: v2.3.0 (tagged, built via GitHub Actions)
+**Total tasks implemented**: 277
 
 ### What Works
 
@@ -137,6 +138,16 @@ lib/
 - Optional SHA-256 hash verification per job (toggle in creation form + batch copy)
 - Hash audit trail — source and destination hashes stored per file, viewable in UI
 - Test card prep utility (one-click SD card setup for QA testing)
+- Per-card destination subfolders in batch copy (`label_driveletter` format) — prevents cross-card collisions
+- Destination conflict detection at job creation time (skip / rename / new folder / typed-overwrite confirmation)
+- Crash recovery for in-progress jobs on startup (recovered to paused for operator review)
+- Atomic transactional job creation (zero-file guard prevents phantom jobs)
+- Erase safety: serial-number identity re-verification + typed-confirmation TextField
+- Size-only verification warning shown inside the erase dialog
+- Cancellable SHA-256 hashing (parallel-safe, killable mid-stream)
+- Graceful shutdown for both window close and tray quit (awaits queue + 30s safety timeout)
+- OS-level instance lock (atomic acquisition via RandomAccessFile.lock, fail-closed)
+- Queue ordering matches drag-and-drop display order (sortOrder, then createdAt)
 
 ### Known Issues (from review-report-v2.md)
 
@@ -181,12 +192,25 @@ Full report: `specs/006-review-findings/review-report-v2.md`
 
 **All 30 review issues resolved** (28 fixed, 2 false positives, 1 deferred to v3.0 by design).
 
-### Open Bugs (fix before next release)
+**Critical/High (fixed in 013-data-safety-hardening)** — 14 findings from GPT 5.5 adversarial review + 7 from a follow-up Codex review of the implementation:
+- ~~Cross-card collision in batch copy~~ — fixed: per-card `label_driveletter` subfolders in batch and single-job drive root
+- ~~Destination files silently overwritten~~ — fixed: pre-flight conflict detection with skip/rename/new folder/typed-overwrite resolution
+- ~~In-progress jobs stranded on crash~~ — fixed: `recoverStaleJobs` on startup moves them to paused
+- ~~Job creation not transactional~~ — fixed: `createJobWithFiles` wraps job + files + totals in a Drift transaction with zero-file guard
+- ~~SD erase TOCTOU~~ — fixed: pre/post identity comparison via WMI disk serial number + typed-confirmation field
+- ~~Size-only verification unlocks erase silently~~ — fixed: prominent warning inside the erase dialog
+- ~~ProcessRunner can hang on unconsumed pipes~~ — fixed: stdout/stderr always drained
+- ~~Shutdown closes DB while queue is writing~~ — fixed: `stopProcessing` returns `Future<void>` resolving after state writes; window close + tray quit share the same path with a 30s safety timeout
+- ~~Instance lock is non-atomic and permissive~~ — fixed: OS-level `RandomAccessFile.lock(FileLock.exclusive)`, fails closed
+- ~~Reorder doesn't affect processing order~~ — fixed: `getNextQueuedJob` orders by `sortOrder`, `createdAt`
+- ~~SHA-256 hashing uncancellable~~ — fixed: routed through per-call `ProcessRunner` instances; `cancel()` kills all active hash subprocesses
+- ~~Chained compression flattens paths~~ — fixed: preserves relative path from transfer destination
+- ~~PowerShell calls not exception-safe~~ — fixed: `_runPowerShell` helper with try/catch; `getDriveIdentity` uses `$args[0]`; `eraseDrive` uses `-LiteralPath` + `$args[0]`
+- ~~Version stuck at 1.0.0~~ — fixed: single-sourced from pubspec.yaml via `package_info_plus`
 
-**CRITICAL: Cross-card collision in batch copy** (found by GPT 5.5 adversarial review)
-- `lib/services/job_queue_service.dart:405,412` — batch copy creates jobs with the same destination for all cards. Cards with identical DCIM structure (e.g., `DCIM/100CANON/C0001.MP4` on two Canon cameras) overwrite each other.
-- Fix: create a per-card subfolder in destination using drive label or letter.
-- Track as feature 013 through spec-kit flow.
+### Open Bugs
+
+None — all known data-safety bugs resolved as of v2.3.0.
 
 ### Review & Quality Process
 
@@ -225,5 +249,5 @@ git push origin vX.Y.Z
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/012-test-card-prep/plan.md
+specs/013-data-safety-hardening/plan.md
 <!-- SPECKIT END -->

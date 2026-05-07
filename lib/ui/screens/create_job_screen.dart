@@ -9,7 +9,9 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
+import '../widgets/conflict_dialog.dart';
 import '../widgets/drive_list.dart';
 
 /// Screen for creating a new job with source, destination, and options.
@@ -514,11 +516,22 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       return;
     }
 
+    // For single-job transfer/copy from a drive root, prepend a per-card
+    // subfolder (`label_driveletter`) so two cards with the same DCIM
+    // structure cannot collide if the operator runs the same destination
+    // twice. Compression jobs (folder source) do not get a subfolder.
+    String effectiveDestination = _destinationPath!;
+    if (_jobType != JobType.compression && _selectedDrive != null) {
+      final subfolder =
+          await jobQueueService.buildCardSubfolder(_selectedDrive!);
+      effectiveDestination = p.join(_destinationPath!, subfolder);
+    }
+
     // Check for paths exceeding Windows MAX_PATH (260 chars).
     final longPaths = <String>[];
     for (final entity in videoFiles) {
       final relativePath = p.relative(entity.path, from: sourcePath);
-      final destFullPath = p.join(_destinationPath!, relativePath);
+      final destFullPath = p.join(effectiveDestination, relativePath);
       if (destFullPath.length > 260) {
         longPaths.add(destFullPath);
       }
@@ -557,20 +570,31 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       );
     }
 
-    // Check disk space before creating.
-    var totalSourceBytes = 0;
+    // Build planned file list with sizes.
+    final planned = <_PlannedFile>[];
+    var totalBytes = 0;
     for (final entity in videoFiles) {
-      totalSourceBytes += await File(entity.path).length();
+      final size = await File(entity.path).length();
+      totalBytes += size;
+      final relativePath = p.relative(entity.path, from: sourcePath);
+      planned.add(_PlannedFile(
+        sourcePath: entity.path,
+        destinationPath: p.join(effectiveDestination, relativePath),
+        fileName: p.basename(entity.path),
+        fileSize: size,
+      ));
     }
+
+    // Check disk space before creating.
     if (_destinationFreeSpace != null &&
-        totalSourceBytes > _destinationFreeSpace!) {
+        totalBytes > _destinationFreeSpace!) {
       if (mounted) {
         final proceed = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Insufficient Disk Space'),
             content: Text(
-              'Source files (${formatBytes(totalSourceBytes)}) exceed '
+              'Source files (${formatBytes(totalBytes)}) exceed '
               'available space (${formatBytes(_destinationFreeSpace!)}).\n\n'
               'Proceed anyway?',
             ),
@@ -590,51 +614,111 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       }
     }
 
+    // Conflict detection — check whether any planned destination already
+    // exists, and if so let the operator choose how to resolve. Repeats
+    // until the operator picks an actionable resolution (skip, rename,
+    // overwrite) or aborts.
+    var resolved = planned;
+    while (true) {
+      final conflicts = <String>[];
+      for (final f in resolved) {
+        if (await File(f.destinationPath).exists()) {
+          conflicts.add(f.destinationPath);
+        }
+      }
+      if (conflicts.isEmpty) break;
+
+      if (!mounted) return;
+      final choice =
+          await ConflictResolutionDialog.show(context, conflicts);
+      if (choice == null || choice == ConflictResolution.cancel) return;
+
+      if (choice == ConflictResolution.newFolder) {
+        final newPath = await FilePicker.platform.getDirectoryPath();
+        if (newPath == null) return;
+        setState(() => _destinationPath = newPath);
+        // Re-build planned destinations with the new folder.
+        final newDest = (_jobType != JobType.compression &&
+                _selectedDrive != null)
+            ? p.join(newPath,
+                await jobQueueService.buildCardSubfolder(_selectedDrive!))
+            : newPath;
+        // Keep the job-row destination in sync with the file paths.
+        // Without this, the persisted job points at the OLD folder
+        // while its files point at the NEW one, breaking chained
+        // compression's relative-path computation.
+        effectiveDestination = newDest;
+        resolved = [
+          for (final f in planned)
+            f.copyWith(
+              destinationPath: p.join(
+                newDest,
+                p.relative(f.sourcePath, from: sourcePath),
+              ),
+            ),
+        ];
+        continue;
+      }
+
+      // Apply skip / rename / overwrite.
+      resolved = _applyResolution(resolved, choice);
+      if (resolved.isEmpty) {
+        // Skip-all — nothing to transfer. Don't create a phantom job.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'All files already exist at destination — no files to transfer.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      break;
+    }
+
+    // Recompute totals after resolution (rename doesn't change bytes; skip does).
+    final resolvedTotalBytes =
+        resolved.fold<int>(0, (sum, f) => sum + f.fileSize);
+
     // Read operator name from settings.
     final settings = await settingsDao.getSettings();
     final operatorName = settings?.operatorName;
 
-    final newJobId = await jobDao.insertJob(
-      JobsCompanion.insert(
+    // Atomic creation: job + files + totals in one transaction. sortOrder
+    // places the new job at the end of the active queue.
+    final baseOrder = await jobDao.getMaxSortOrder();
+    await jobDao.createJobWithFiles(
+      job: JobsCompanion.insert(
         type: _jobType,
         status: JobStatus.queued,
         sourcePath: sourcePath,
-        destinationPath: _destinationPath!,
+        destinationPath: effectiveDestination,
         compressionOutputPath: Value(_compressionOutputPath),
         presetName: Value(_selectedPreset),
         autoChain: Value(_jobType == JobType.transferAndCompress),
-        operatorName: Value(operatorName != null && operatorName.isNotEmpty ? operatorName : null),
-        verificationMode: Value(_jobType != JobType.compression ? _verificationMode : VerificationMode.size),
+        operatorName: Value(
+            operatorName != null && operatorName.isNotEmpty ? operatorName : null),
+        verificationMode: Value(_jobType != JobType.compression
+            ? _verificationMode
+            : VerificationMode.size),
+        sortOrder: Value(baseOrder + 1),
         createdAt: DateTime.now(),
       ),
+      buildFiles: (newJobId) => resolved
+          .map((f) => JobFilesCompanion.insert(
+                jobId: newJobId,
+                sourceFilePath: f.sourcePath,
+                destinationFilePath: f.destinationPath,
+                fileName: f.fileName,
+                fileSize: f.fileSize,
+                status: FileStatus.pending,
+              ))
+          .toList(),
+      totalBytes: resolvedTotalBytes,
     );
-
-    // Build file entries with proper paths.
-    final destPath = _jobType == JobType.compression
-        ? _destinationPath! // For compression, destination is the output folder.
-        : _destinationPath!;
-    var totalBytes = 0;
-    final fileEntries = <JobFilesCompanion>[];
-    for (final entity in videoFiles) {
-      final file = File(entity.path);
-      final size = await file.length();
-      final relativePath = p.relative(entity.path, from: sourcePath);
-      final fileName = p.basename(entity.path);
-      totalBytes += size;
-      fileEntries.add(
-        JobFilesCompanion.insert(
-          jobId: newJobId,
-          sourceFilePath: entity.path,
-          destinationFilePath: p.join(destPath, relativePath),
-          fileName: fileName,
-          fileSize: size,
-          status: FileStatus.pending,
-        ),
-      );
-    }
-
-    await jobFileDao.insertFiles(fileEntries);
-    await jobDao.updateJobTotals(newJobId, fileEntries.length, totalBytes);
 
     // Save last-used paths for next session.
     settingsDao.setLastUsedDestination(_destinationPath!);
@@ -650,4 +734,59 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       }
     }
   }
+
+  /// Apply a conflict resolution to a planned file list. Mirrors the
+  /// equivalent helper in [JobQueueService]; kept local to avoid
+  /// exposing private types across the service boundary.
+  List<_PlannedFile> _applyResolution(
+      List<_PlannedFile> files, ConflictResolution resolution) {
+    if (resolution == ConflictResolution.overwrite) return files;
+    final kept = <_PlannedFile>[];
+    for (final f in files) {
+      final exists = File(f.destinationPath).existsSync();
+      if (!exists) {
+        kept.add(f);
+        continue;
+      }
+      if (resolution == ConflictResolution.skip) continue;
+      if (resolution == ConflictResolution.rename) {
+        kept.add(f.copyWith(destinationPath: _suffixed(f.destinationPath)));
+      }
+    }
+    return kept;
+  }
+
+  String _suffixed(String path) {
+    final dir = p.dirname(path);
+    final ext = p.extension(path);
+    final stem = p.basenameWithoutExtension(path);
+    var i = 1;
+    while (true) {
+      final candidate = p.join(dir, '${stem}_$i$ext');
+      if (!File(candidate).existsSync()) return candidate;
+      i++;
+    }
+  }
+}
+
+/// Internal: a single planned destination prior to job creation.
+class _PlannedFile {
+  final String sourcePath;
+  final String destinationPath;
+  final String fileName;
+  final int fileSize;
+
+  const _PlannedFile({
+    required this.sourcePath,
+    required this.destinationPath,
+    required this.fileName,
+    required this.fileSize,
+  });
+
+  _PlannedFile copyWith({String? destinationPath}) => _PlannedFile(
+        sourcePath: sourcePath,
+        destinationPath: destinationPath ?? this.destinationPath,
+        fileName: fileName,
+        fileSize: fileSize,
+      );
 }

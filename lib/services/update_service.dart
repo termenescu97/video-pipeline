@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../utils/constants.dart';
 
@@ -27,6 +28,10 @@ class UpdateService {
   /// Check GitHub Releases for a newer version.
   Future<UpdateCheckResult> checkForUpdate() async {
     try {
+      // Single-source the running app's version from pubspec.yaml.
+      final info = await PackageInfo.fromPlatform();
+      final currentVersion = info.version;
+
       final response = await _dio.get(
         'https://api.github.com/repos/$githubRepo/releases/latest',
         options: Options(
@@ -43,7 +48,7 @@ class UpdateService {
       final tagName = (data['tag_name'] as String?) ?? '';
       final latestVersion = tagName.replaceFirst('v', '');
 
-      if (_isNewer(latestVersion, appVersion)) {
+      if (_isNewer(latestVersion, currentVersion)) {
         // Find the Windows zip asset.
         final assets = data['assets'] as List<dynamic>? ?? [];
         String? downloadUrl;

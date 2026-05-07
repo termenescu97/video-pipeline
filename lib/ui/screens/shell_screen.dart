@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
 import 'create_job_screen.dart';
@@ -19,21 +20,37 @@ class ShellScreen extends StatefulWidget {
   State<ShellScreen> createState() => _ShellScreenState();
 }
 
-class _ShellScreenState extends State<ShellScreen> with TrayListener {
+class _ShellScreenState extends State<ShellScreen>
+    with TrayListener, WindowListener {
   int? _selectedJobId;
   bool _showCreateJob = false;
+  bool _shuttingDown = false;
 
   @override
   void initState() {
     super.initState();
     _initSystemTray();
     trayManager.addListener(this);
+    // Intercept window close so we can stop the queue and persist state
+    // before the OS terminates the process.
+    windowManager.addListener(this);
+    windowManager.setPreventClose(true);
   }
 
   @override
   void dispose() {
     trayManager.removeListener(this);
+    windowManager.removeListener(this);
     super.dispose();
+  }
+
+  @override
+  void onWindowClose() async {
+    // Re-entry guard: window_manager can fire the event again while we are
+    // mid-shutdown.
+    if (_shuttingDown) return;
+    await _gracefulShutdown();
+    await windowManager.destroy();
   }
 
   Future<void> _initSystemTray() async {
@@ -61,17 +78,46 @@ class _ShellScreenState extends State<ShellScreen> with TrayListener {
       // Bring window to front — handled by window_manager if needed.
     }
     if (menuItem.key == 'quit') {
-      _gracefulShutdown();
+      _gracefulShutdownAndExit();
     }
   }
 
-  Future<void> _gracefulShutdown() async {
-    jobQueueService.stopProcessing();
-    logService.info('App closed');
-    await logService.close();
-    await instanceLock.release();
-    await database.close();
+  /// Graceful shutdown for tray quit. Performs the same shutdown sequence
+  /// as window close, then explicitly calls [exit] (tray quit doesn't go
+  /// through the window close path).
+  Future<void> _gracefulShutdownAndExit() async {
+    if (_shuttingDown) return;
+    await _gracefulShutdown();
     exit(0);
+  }
+
+  /// Stop the queue, await state persistence, then close log/lock/DB.
+  /// Wrapped in a 30-second outer safety timeout so a stuck subprocess
+  /// can't keep the app alive indefinitely.
+  Future<void> _gracefulShutdown() async {
+    _shuttingDown = true;
+    try {
+      await Future(() async {
+        // Wait for the queue to actually stop. No timeout here — state
+        // persistence MUST complete to prevent DB corruption.
+        await jobQueueService.stopProcessing();
+        logService.info('App closed');
+        await logService.close();
+        await instanceLock.release();
+        await database.close();
+      }).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          // Last-resort: shutdown sequence stuck. Close what we can and
+          // proceed; the OS will reap any remaining handles on exit.
+          stderr.writeln(
+            '[shutdown] Timed out after 30s — forcing close.',
+          );
+        },
+      );
+    } catch (e) {
+      stderr.writeln('[shutdown] Error during shutdown: $e');
+    }
   }
 
   @override

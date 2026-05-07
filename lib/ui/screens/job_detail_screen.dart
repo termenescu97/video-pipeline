@@ -7,7 +7,6 @@ import '../../main.dart';
 import '../../services/job_queue_service.dart';
 import '../../utils/error_mapper.dart';
 import '../../utils/format_utils.dart';
-import '../widgets/confirmation_dialog.dart';
 import '../widgets/progress_bar.dart';
 
 /// Per-job detail view showing file list and progress.
@@ -241,8 +240,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       return SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          onPressed: () =>
-                              _eraseSourceDrive(job.sourcePath),
+                          onPressed: () => _eraseSourceDrive(job),
                           icon: const Icon(Icons.delete_forever,
                               color: Colors.red),
                           label: const Text('Erase SD Card'),
@@ -292,28 +290,45 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     }
   }
 
-  Future<void> _eraseSourceDrive(String drivePath) async {
-    // Verify drive identity before erasing.
-    final identity = await driveService.getDriveIdentity(drivePath);
-    final identityDesc = identity != null
-        ? '${identity.label} (${formatBytes(identity.totalBytes)})'
+  Future<void> _eraseSourceDrive(Job job) async {
+    final drivePath = job.sourcePath;
+
+    // Capture pre-dialog identity. Used to detect a card swap during the
+    // confirmation window. Serial number is the strongest physical
+    // identifier; label + totalBytes is the fallback when the card reader
+    // doesn't expose serial.
+    final preIdentity = await driveService.getDriveIdentity(drivePath);
+    final identityDesc = preIdentity != null
+        ? '${preIdentity.label} (${formatBytes(preIdentity.totalBytes)})'
         : drivePath;
 
     if (!mounted) return;
-    final confirmed = await ConfirmationDialog.show(
-      context: context,
-      title: 'Erase SD Card',
-      message:
-          'This will permanently delete ALL files on:\n\n'
-          '$identityDesc\n'
-          'Path: $drivePath\n\n'
-          'This action cannot be undone.',
-      confirmLabel: 'Erase',
-      cancelLabel: 'Cancel',
-      confirmColor: Colors.red,
+    final sizeOnly = job.verificationMode == VerificationMode.size;
+    final confirmed = await _showEraseConfirmDialog(
+      identityDesc: identityDesc,
+      drivePath: drivePath,
+      sizeOnlyVerification: sizeOnly,
     );
-
     if (!confirmed) return;
+
+    // Re-verify identity AFTER the dialog returns. The card may have been
+    // physically swapped during the confirmation window, or the drive
+    // letter may have been reused for a different device.
+    final postIdentity = await driveService.getDriveIdentity(drivePath);
+    if (!_identityMatches(preIdentity, postIdentity)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Drive changed during confirmation — erase aborted for safety.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      return;
+    }
 
     final success = await driveService.eraseDrive(drivePath);
 
@@ -329,4 +344,120 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
     }
   }
 
+  /// Compare two [getDriveIdentity] results. Returns true if the same
+  /// physical device is still mounted at the drive letter. Prefers serial
+  /// number (factory-unique); falls back to label + totalBytes when serial
+  /// is unavailable on either side.
+  bool _identityMatches(
+    ({String label, int totalBytes, String? serialNumber})? a,
+    ({String label, int totalBytes, String? serialNumber})? b,
+  ) {
+    if (a == null || b == null) return false;
+    if (a.serialNumber != null && b.serialNumber != null) {
+      return a.serialNumber == b.serialNumber;
+    }
+    return a.label == b.label && a.totalBytes == b.totalBytes;
+  }
+
+  /// Show the erase confirmation dialog. Requires the operator to type
+  /// the drive path to enable the Erase button. Surfaces a prominent
+  /// warning when the job was verified by file size only (not SHA-256).
+  Future<bool> _showEraseConfirmDialog({
+    required String identityDesc,
+    required String drivePath,
+    required bool sizeOnlyVerification,
+  }) async {
+    final controller = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final typedMatches = controller.text.trim() == drivePath;
+          return AlertDialog(
+            title: const Text('Erase SD Card'),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'This will permanently delete ALL files on:',
+                    ),
+                    const SizedBox(height: 8),
+                    Text(identityDesc,
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text('Path: $drivePath'),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'This action cannot be undone.',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                    if (sizeOnlyVerification) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.12),
+                          border: Border.all(color: Colors.orange),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.warning_amber, color: Colors.orange),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Files were verified by size only, not content '
+                                'hash. A corrupted file with the same byte size '
+                                'as the source would have passed verification. '
+                                'Proceed with caution.',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Text(
+                      'Type "$drivePath" to confirm:',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        border: const OutlineInputBorder(),
+                        hintText: drivePath,
+                      ),
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed:
+                    typedMatches ? () => Navigator.pop(ctx, true) : null,
+                child: const Text('Erase'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+    return result ?? false;
+  }
 }
