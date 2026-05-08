@@ -278,10 +278,33 @@ class JobQueueService {
           break;
         case JobType.transferAndCompress:
           await _processTransfer(job);
-          // If transfer succeeded, auto-chain compression.
+          // Codex round-13 P2 #2: auto-chain compression ONLY when
+          // every file passed verification. If any file ended at
+          // verifyStatus=mismatch / unverified, _createChainedCompressionJob
+          // would silently exclude them (it filters on the legacy
+          // `verified` boolean), compressing only the verified
+          // subset before the operator has triaged the warnings.
+          // Pause for explicit operator decision instead.
           final updatedJob = await _jobDao.getJob(job.id);
           if (updatedJob?.status == JobStatus.completed) {
-            await _createChainedCompressionJob(job);
+            final files = await _jobFileDao.getFilesForJob(job.id);
+            final hasNonCleanVerify = files.any((f) =>
+                f.verifyStatus == VerifyStatus.mismatch ||
+                f.verifyStatus == VerifyStatus.unverified);
+            if (hasNonCleanVerify) {
+              _logService?.warning(
+                'Auto-chain compression suppressed: '
+                '${files.where((f) => f.verifyStatus == VerifyStatus.mismatch).length} '
+                'mismatch + '
+                '${files.where((f) => f.verifyStatus == VerifyStatus.unverified).length} '
+                'unverified files. Operator must Retry or Accept the '
+                'mismatches before compression auto-chains.',
+                jobId: job.id,
+                phase: LogPhase.finalize,
+              );
+            } else {
+              await _createChainedCompressionJob(job);
+            }
           }
           break;
       }
@@ -826,19 +849,31 @@ class JobQueueService {
             job.id,
             '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed copy',
           ));
-    } else {
-      // 017 (FR-004): mismatchedCount > 0 does NOT fail the job — bytes
-      // are on disk, just not trusted. Soft fail surfaced via banner +
-      // Slack warning prefix below. Operator decides next action.
-      _logService?.info(
-        'Job completed — $completedCount transferred, '
-        '$verifiedCount verified, $unverifiedCount unverified, '
-        '$mismatchedCount mismatch',
+      // Codex round-13 P2 #1: route failed-copy jobs through
+      // notifyJobFailed instead of the green-check-by-default
+      // notifyTransferCompleted. Without this branch a job that
+      // markJobFailed-ed above would still send "Transfer Complete /
+      // Passed" to Slack — silent false success.
+      await _slackService.notifyJobFailed(
         jobId: job.id,
-        phase: LogPhase.finalize,
+        phase: 'Transfer',
+        error:
+            '$completedCount/${completedCount + failedCount} files transferred, '
+            '$failedCount failed copy',
       );
-      await _safeWrite(() => _jobDao.markJobCompleted(job.id));
+      return;
     }
+    // 017 (FR-004): mismatchedCount > 0 does NOT fail the job — bytes
+    // are on disk, just not trusted. Soft fail surfaced via banner +
+    // Slack warning prefix below. Operator decides next action.
+    _logService?.info(
+      'Job completed — $completedCount transferred, '
+      '$verifiedCount verified, $unverifiedCount unverified, '
+      '$mismatchedCount mismatch',
+      jobId: job.id,
+      phase: LogPhase.finalize,
+    );
+    await _safeWrite(() => _jobDao.markJobCompleted(job.id));
     // 017 (T043, FR-016): Slack call expanded with per-state verify
     // counts. Warning prefix fires automatically when
     // mismatchedCount > 0 or unverifiedCount > 0.

@@ -42,6 +42,8 @@ video_pipeline.iml
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.dart-tool/
+.dartServer/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
