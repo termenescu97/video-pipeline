@@ -249,9 +249,9 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 10
 
-- [ ] T081 [US10] Replace literal `SizedBox(height: N)` / `EdgeInsets.all(N)` values with `Insets.*` accessors across `lib/ui/screens/` and `lib/ui/widgets/`. **Acceptance criteria**: `grep -rE 'SizedBox\(height: ?[0-9]+\.?[0-9]*\)' lib/ui/` returns zero hits in screen/widget files; layout snapshots before/after look equivalent on Windows 11.
-- [ ] T082 [US10] Apply `AppTextStyles` via `Theme.of(context).textTheme` across affected widgets (status bar large numerics → display, screen titles → headline, section headers → title, etc.). **Acceptance criteria**: no raw `TextStyle(fontSize: ...)` literals remain in screen/widget files outside `text_styles.dart`.
-- [ ] T083 [US10] Apply `AppTextStyles.mono` (JetBrainsMono) to all path renderings and SHA-256 hash labels across cards, files tab, hash popover, audit tab. **Acceptance criteria**: `grep -rE "fontFamily: 'monospace'" lib/ui/` returns zero hits.
+- [X] T081 [US10] Replace literal `SizedBox(height: N)` / `EdgeInsets.all(N)` values with `Insets.*` accessors across `lib/ui/screens/` and `lib/ui/widgets/`. **Acceptance criteria**: `grep -rE 'SizedBox\(height: ?[0-9]+\.?[0-9]*\)' lib/ui/` returns zero hits in screen/widget files; layout snapshots before/after look equivalent on Windows 11.
+- [X] T082 [US10] Apply `AppTextStyles` via `Theme.of(context).textTheme` across affected widgets (status bar large numerics → display, screen titles → headline, section headers → title, etc.). **Acceptance criteria**: no raw `TextStyle(fontSize: ...)` literals remain in screen/widget files outside `text_styles.dart`.
+- [X] T083 [US10] Apply `AppTextStyles.mono` (JetBrainsMono) to all path renderings and SHA-256 hash labels across cards, files tab, hash popover, audit tab. **Acceptance criteria**: `grep -rE "fontFamily: 'monospace'" lib/ui/` returns zero hits.
 
 **Checkpoint**: No raw color literals, no raw SizedBox literals, no system monospace fallback for hashes.
 

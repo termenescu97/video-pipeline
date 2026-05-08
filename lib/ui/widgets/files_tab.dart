@@ -105,7 +105,7 @@ class _FilterChipRow extends StatelessWidget {
   Widget _chip(BuildContext context,
       {required String label, required FileStatus? value}) {
     return FilterChip(
-      label: Text(label, style: const TextStyle(fontSize: 12)),
+      label: Text(label, style: AppTextStyles.caption),
       selected: selected == value,
       onSelected: (_) => onSelected(value),
       visualDensity: VisualDensity.compact,
@@ -321,7 +321,7 @@ class _HashBlock extends StatelessWidget {
             fontWeight: FontWeight.w600,
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: Insets.xxs),
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(Insets.s),

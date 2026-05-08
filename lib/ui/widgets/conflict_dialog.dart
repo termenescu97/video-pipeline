@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../services/job_queue_service.dart';
 import '../theme/app_theme.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 
 /// Modal dialog presenting destination-conflict resolution options when a
 /// new transfer job's destination already contains some of the files it
@@ -75,7 +77,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                 'The destination already contains files that this job would '
                 'write. Choose how to resolve the conflict:',
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: Insets.m),
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -90,25 +92,25 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Text(
                           '• $path',
-                          style: const TextStyle(fontSize: 11),
+                          style: AppTextStyles.caption.copyWith(fontSize: 11),
                         ),
                       ),
                     if (more > 0)
                       Text(
                         '... and $more more',
-                        style:
-                            const TextStyle(fontSize: 11, color: Colors.grey),
+                        style: AppTextStyles.caption
+                            .copyWith(fontSize: 11, color: Colors.grey),
                       ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: Insets.l),
               if (_showOverwriteConfirm) ...[
                 const Text(
                   'Type OVERWRITE to confirm replacing the existing files:',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: Insets.s),
                 TextField(
                   controller: _overwriteController,
                   autofocus: true,
@@ -118,7 +120,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                   ),
                   onChanged: (_) => setState(() {}),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: Insets.s),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -129,7 +131,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                       }),
                       child: const Text('Back'),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: Insets.s),
                     FilledButton(
                       style: FilledButton.styleFrom(
                         backgroundColor: statusColors.error,
@@ -220,16 +222,16 @@ class _ResolutionTile extends StatelessWidget {
         child: Row(
           children: [
             Icon(icon, color: iconColor),
-            const SizedBox(width: 12),
+            const SizedBox(width: Insets.m),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
                       style: const TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: Insets.xxs),
                   Text(description,
-                      style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                      style: AppTextStyles.caption.copyWith(color: Colors.grey)),
                 ],
               ),
             ),

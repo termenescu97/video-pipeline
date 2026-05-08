@@ -7,6 +7,8 @@ import '../../main.dart';
 import '../../services/job_queue_service.dart';
 import '../../utils/error_mapper.dart';
 import '../theme/app_theme.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 import '../widgets/erase_drive_action.dart';
 import '../widgets/files_tab.dart';
 import '../widgets/progress_bar.dart';
@@ -49,7 +51,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                           job.type.label,
                           style: Theme.of(context).textTheme.headlineSmall,
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Insets.s),
                         _infoRow('Status', job.status.label),
                         _infoRow('Source', job.sourcePath),
                         _infoRow('Destination', job.destinationPath),
@@ -58,7 +60,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                         if (job.operatorName != null && job.operatorName!.isNotEmpty)
                           _infoRow('Operator', job.operatorName!),
                         if (job.errorMessage != null) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: Insets.s),
                           // Human-friendly error message.
                           Container(
                             padding: const EdgeInsets.all(8),
@@ -74,7 +76,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                                       job.errorMessage),
                                   style: TextStyle(color: statusColors.error),
                                 ),
-                                const SizedBox(height: 4),
+                                const SizedBox(height: Insets.xs),
                                 ExpansionTile(
                                   title: const Text(
                                     'Technical Details',
@@ -100,7 +102,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: Insets.l),
 
                 // Retry button for failed jobs.
                 if (job.status == JobStatus.failed) ...[
@@ -112,7 +114,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       label: const Text('Retry'),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: Insets.l),
                 ],
 
                 // Progress.
@@ -141,13 +143,13 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
                         'Preset: ${job.presetName ?? "default"}',
-                        style:
-                            const TextStyle(fontSize: 12, color: Colors.grey),
+                        style: AppTextStyles.caption
+                            .copyWith(color: Colors.grey),
                       ),
                     ),
                 ],
 
-                const SizedBox(height: 24),
+                const SizedBox(height: Insets.xl),
 
                 // File list. As of US5 (T048), inline `DetailTabs`
                 // expansion in the queue panel is the primary path.
@@ -157,7 +159,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                 // hash popover) as the inline tab.
                 Text('Files',
                     style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
+                const SizedBox(height: Insets.s),
                 SizedBox(
                   height: 360,
                   child: StreamBuilder<List<JobFile>>(
@@ -167,13 +169,13 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 24),
+                const SizedBox(height: Insets.xl),
 
                 // Erase SD Card button — at the BOTTOM, after file list.
                 if (job.status == JobStatus.completed &&
                     job.type != JobType.compression) ...[
                   const Divider(),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Insets.s),
                   StreamBuilder<List<JobFile>>(
                     stream: jobFileDao.watchFilesForJob(widget.jobId),
                     builder: (context, filesSnapshot) {
@@ -185,7 +187,8 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                       if (!allVerified) {
                         return Text(
                           'Cannot erase — some files not verified',
-                          style: TextStyle(color: statusColors.warning, fontSize: 13),
+                          style: AppTextStyles.body
+                              .copyWith(color: statusColors.warning),
                         );
                       }
 

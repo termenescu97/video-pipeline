@@ -5,6 +5,8 @@ import '../../database/tables.dart';
 import '../../main.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 
 /// Header-action button that runs the SD card erase flow when eligible
 /// (FR-018). Always visible for transfer-type jobs whose source is a
@@ -52,9 +54,8 @@ class EraseDriveActionButton extends StatelessWidget {
             ),
             label: Text(
               enabled ? 'Erase SD' : reason,
-              style: TextStyle(
+              style: AppTextStyles.caption.copyWith(
                 color: enabled ? statusColors.error : scheme.onSurfaceVariant,
-                fontSize: 12,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -238,18 +239,18 @@ Future<bool> _showEraseConfirmDialog({
                   const Text(
                     'This will permanently delete ALL files on:',
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Insets.s),
                   Text(identityDesc,
                       style:
                           const TextStyle(fontWeight: FontWeight.bold)),
                   Text('Path: $drivePath'),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: Insets.m),
                   Text(
                     'This action cannot be undone.',
                     style: TextStyle(color: statusColors.error),
                   ),
                   if (sizeOnlyVerification) ...[
-                    const SizedBox(height: 16),
+                    const SizedBox(height: Insets.l),
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
@@ -263,26 +264,26 @@ Future<bool> _showEraseConfirmDialog({
                         children: [
                           Icon(Icons.warning_amber,
                               color: statusColors.warning),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: Insets.s),
                           const Expanded(
                             child: Text(
                               'Files were verified by size only, not content '
                               'hash. A corrupted file with the same byte size '
                               'as the source would have passed verification. '
                               'Proceed with caution.',
-                              style: TextStyle(fontSize: 12),
+                              style: AppTextStyles.caption,
                             ),
                           ),
                         ],
                       ),
                     ),
                   ],
-                  const SizedBox(height: 16),
+                  const SizedBox(height: Insets.l),
                   Text(
                     'Type "$drivePath" to confirm:',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Insets.s),
                   TextField(
                     controller: controller,
                     autofocus: true,

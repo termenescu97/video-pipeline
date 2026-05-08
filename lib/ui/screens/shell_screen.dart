@@ -7,6 +7,8 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 import '../widgets/activity_panel.dart';
 import '../widgets/sources_panel.dart';
 import '../widgets/status_bar.dart';
@@ -281,17 +283,17 @@ class _ShellScreenState extends State<ShellScreen>
     // panel (US5); JobDetailScreen is retained as a route for
     // backwards compat (deep-links / programmatic navigation) but
     // is no longer surfaced from the shell by default (T048).
-    return const Center(
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.touch_app, size: 48, color: Colors.grey),
-          SizedBox(height: 16),
-          Text('Click a job in the queue to expand its detail',
+          const Icon(Icons.touch_app, size: 48, color: Colors.grey),
+          const SizedBox(height: Insets.l),
+          const Text('Click a job in the queue to expand its detail',
               style: TextStyle(color: Colors.grey)),
-          SizedBox(height: 8),
+          const SizedBox(height: Insets.s),
           Text('Ctrl+N: New Job  |  Ctrl+Enter: Start/Stop Queue',
-              style: TextStyle(color: Colors.grey, fontSize: 12)),
+              style: AppTextStyles.caption.copyWith(color: Colors.grey)),
         ],
       ),
     );

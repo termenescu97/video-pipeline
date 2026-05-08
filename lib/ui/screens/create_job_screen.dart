@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:drift/drift.dart' hide Column;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
+import '../theme/insets.dart';
 import 'package:path/path.dart' as p;
 
 import '../../database/database.dart';
@@ -13,6 +15,7 @@ import '../../services/drive_service.dart';
 import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
+import '../theme/text_styles.dart';
 import '../widgets/conflict_dialog.dart';
 import '../widgets/plan_summary_panel.dart';
 
@@ -361,24 +364,24 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 child: Row(
                   children: [
                     Icon(Icons.warning_amber, color: statusColors.warning),
-                    const SizedBox(width: 8),
-                    const Expanded(
+                    const SizedBox(width: Insets.s),
+                    Expanded(
                       child: Text(
                         'Compression requires HandBrake. '
                         'Download it at handbrake.fr. '
                         'Compression options are disabled.',
-                        style: TextStyle(fontSize: 13),
+                        style: AppTextStyles.body,
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: Insets.l),
             ],
 
             // Job type selector.
             Text('Job Type', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
+            const SizedBox(height: Insets.s),
             SegmentedButton<JobType>(
               segments: const [
                 ButtonSegment(
@@ -404,7 +407,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               },
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: Insets.xl),
 
             // Source drive selection (for transfer jobs) — inline radio chips.
             if (_jobType != JobType.compression) ...[
@@ -420,19 +423,19 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: Insets.s),
               if (_loading && _drives.isEmpty)
                 const Center(child: CircularProgressIndicator())
               else
                 _buildSourceChips(),
-              const SizedBox(height: 24),
+              const SizedBox(height: Insets.xl),
             ],
 
             // Source folder (compression-only jobs).
             if (_jobType == JobType.compression) ...[
               Text('Input Folder',
                   style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
+              const SizedBox(height: Insets.s),
               _buildFolderPicker(
                 currentPath: _sourcePath,
                 favoriteType: FavoritePathType.source,
@@ -441,7 +444,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   _schedulePlanRecompute();
                 },
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: Insets.xl),
             ],
 
             // Destination / output folder.
@@ -449,7 +452,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               _jobType == JobType.compression ? 'Output Folder' : 'Destination',
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Insets.s),
             _buildFolderPicker(
               currentPath: _destinationPath,
               favoriteType: _jobType == JobType.compression
@@ -467,7 +470,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
             // the Add to Queue button. Per-section _FreeSpaceSentence
             // retired to avoid two free-space sentences on the page.
 
-            const SizedBox(height: 24),
+            const SizedBox(height: Insets.xl),
 
             // Compression options — collapsed by default (FR-025).
             // Only the common case (Transfer to a known destination) needs
@@ -484,7 +487,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   if (_jobType == JobType.transferAndCompress) ...[
                     Text('Compression Output',
                         style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: Insets.s),
                     _buildFolderPicker(
                       currentPath: _compressionOutputPath,
                       favoriteType: FavoritePathType.output,
@@ -497,11 +500,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                         _schedulePlanRecompute();
                       },
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: Insets.l),
                   ],
                   Text('Compression Preset',
                       style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Insets.s),
                   DropdownButtonFormField<String>(
                     initialValue: _selectedPreset,
                     decoration: const InputDecoration(
@@ -527,14 +530,14 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                     ),
                 ],
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: Insets.xl),
             ],
 
             // Verification mode (for transfer jobs).
             if (_jobType != JobType.compression) ...[
               Text('Verification',
                   style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
+              const SizedBox(height: Insets.s),
               SegmentedButton<VerificationMode>(
                 segments: const [
                   ButtonSegment(
@@ -558,10 +561,11 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     'SHA-256 hashing adds ~8 min per 50 GB file',
-                    style: TextStyle(color: statusColors.warning, fontSize: 12),
+                    style: AppTextStyles.caption
+                        .copyWith(color: statusColors.warning),
                   ),
                 ),
-              const SizedBox(height: 24),
+              const SizedBox(height: Insets.xl),
             ],
 
             // US8 plan summary — live preview of what will happen if
@@ -577,7 +581,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               longPathCount: _planLongPathCount,
               longPathSamples: _planLongPathSamples,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: Insets.l),
 
             // Create button.
             SizedBox(
@@ -607,12 +611,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
           children: [
             Icon(Icons.sd_storage,
                 size: 18, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.s),
             Expanded(
               child: Text(
                 'No removable drives detected. Click "Folder…" to pick a path.',
-                style:
-                    TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+                style: AppTextStyles.body
+                    .copyWith(color: scheme.onSurfaceVariant),
               ),
             ),
             TextButton.icon(
@@ -697,7 +701,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.s),
             IconButton(
               icon: const Icon(Icons.folder_open),
               onPressed: () => _pickFolder(onPathSelected),
@@ -711,7 +715,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: Insets.s),
         // Favorites dropdown.
         StreamBuilder<List<FavoritePath>>(
           stream: favoritePathDao.watchFavoritesByType(favoriteType),
@@ -832,11 +836,10 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text('The following paths could not be scanned:'),
-                const SizedBox(height: 8),
+                const SizedBox(height: Insets.s),
                 ...scanResult.skippedPaths.map((path) => Padding(
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: Text('• $path',
-                          style: const TextStyle(fontSize: 13)),
+                      child: Text('• $path', style: AppTextStyles.body),
                     )),
               ],
             ),

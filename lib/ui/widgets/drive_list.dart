@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../services/drive_service.dart';
 import '../theme/app_theme.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 
 /// Displays a list of detected removable drives with selection support.
 class DriveList extends StatelessWidget {
@@ -19,17 +21,18 @@ class DriveList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (drives.isEmpty) {
-      return const Card(
+      return Card(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Column(
             children: [
-              Icon(Icons.sd_storage_outlined, size: 48, color: Colors.grey),
-              SizedBox(height: 8),
-              Text('No removable drives detected'),
+              const Icon(Icons.sd_storage_outlined,
+                  size: 48, color: Colors.grey),
+              const SizedBox(height: Insets.s),
+              const Text('No removable drives detected'),
               Text(
                 'Insert SD cards and refresh',
-                style: TextStyle(color: Colors.grey, fontSize: 12),
+                style: AppTextStyles.caption.copyWith(color: Colors.grey),
               ),
             ],
           ),

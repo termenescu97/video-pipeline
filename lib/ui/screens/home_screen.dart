@@ -8,6 +8,8 @@ import '../../main.dart';
 import '../../services/drive_service.dart';
 import '../../services/queue_state_notifier.dart';
 import '../theme/app_theme.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
 import '../widgets/job_card.dart';
@@ -282,17 +284,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Icon(Icons.video_library, size: 64, color: Colors.blue),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: Insets.l),
                         Text('Welcome to Copiatorul3000',
                             style: Theme.of(context).textTheme.headlineSmall),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Insets.s),
                         const Text(
                           'Automate video file transfer and compression.\n'
                           'Insert an SD card and create your first job to get started.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey),
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: Insets.xl),
                         FilledButton.icon(
                           onPressed: () {
                             settingsDao.setFirstRunCompleted(true);
@@ -301,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           icon: const Icon(Icons.play_arrow),
                           label: const Text('Get Started'),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Insets.s),
                         OutlinedButton.icon(
                           onPressed: () {
                             Navigator.push(context,
@@ -332,19 +334,19 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             Icon(Icons.sd_storage,
                                 size: 56, color: Theme.of(context).colorScheme.primary),
-                            const SizedBox(height: 16),
+                            const SizedBox(height: Insets.l),
                             Text(
                               '${drives.length} card${drives.length == 1 ? '' : 's'} detected',
                               style: Theme.of(context).textTheme.headlineSmall,
                               textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 24),
+                            const SizedBox(height: Insets.xl),
                             FilledButton.icon(
                               onPressed: _batchCopyAllCards,
                               icon: const Icon(Icons.sd_storage),
                               label: const Text('Copy All Cards'),
                             ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: Insets.s),
                             TextButton.icon(
                               onPressed: _onCreateJob,
                               icon: const Icon(Icons.add),
@@ -360,15 +362,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Icon(Icons.queue, size: 48, color: Colors.grey),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: Insets.l),
                         const Text('No jobs in queue'),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Insets.s),
                         FilledButton.icon(
                           onPressed: _onCreateJob,
                           icon: const Icon(Icons.add),
                           label: const Text('Create Job'),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Insets.s),
                         OutlinedButton.icon(
                           onPressed: _batchCopyAllCards,
                           icon: const Icon(Icons.sd_storage),
@@ -401,23 +403,23 @@ class _HomeScreenState extends State<HomeScreen> {
                           size: 18),
                       label: Text(
                           isProcessing ? 'Stop' : 'Start',
-                          style: const TextStyle(fontSize: 13)),
+                          style: AppTextStyles.body),
                       style: isProcessing
                           ? FilledButton.styleFrom(
                               backgroundColor: Theme.of(context).extension<StatusColors>()!.error)
                           : null,
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: Insets.s),
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: _batchCopyAllCards,
                       icon: const Icon(Icons.sd_storage, size: 18),
-                      label: const Text('Copy All',
-                          style: TextStyle(fontSize: 13)),
+                      label: Text('Copy All',
+                          style: AppTextStyles.body),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: Insets.s),
                   IconButton(
                     icon: const Icon(Icons.add),
                     tooltip: 'New Job',
@@ -649,14 +651,13 @@ class _FailedJobsBanner extends StatelessWidget {
       child: Row(
         children: [
           Icon(Icons.error_outline, color: statusColors.error, size: 18),
-          const SizedBox(width: 8),
+          const SizedBox(width: Insets.s),
           Expanded(
             child: Text(
               count == 1
                   ? '1 job failed — review'
                   : '$count jobs failed — review',
-              style: TextStyle(
-                fontSize: 12,
+              style: AppTextStyles.caption.copyWith(
                 color: statusColors.error,
                 fontWeight: FontWeight.w600,
               ),
@@ -669,7 +670,7 @@ class _FailedJobsBanner extends StatelessWidget {
               minimumSize: const Size(0, 28),
               padding: const EdgeInsets.symmetric(horizontal: 8),
             ),
-            child: const Text('Retry all', style: TextStyle(fontSize: 12)),
+            child: Text('Retry all', style: AppTextStyles.caption),
           ),
           TextButton(
             onPressed: onDismiss,
@@ -678,7 +679,7 @@ class _FailedJobsBanner extends StatelessWidget {
               minimumSize: const Size(0, 28),
               padding: const EdgeInsets.symmetric(horizontal: 8),
             ),
-            child: const Text('Dismiss', style: TextStyle(fontSize: 12)),
+            child: Text('Dismiss', style: AppTextStyles.caption),
           ),
         ],
       ),
@@ -712,12 +713,12 @@ class _SlackUnconfiguredBanner extends StatelessWidget {
               children: [
                 Icon(Icons.warning_amber,
                     color: statusColors.warning, size: 18),
-                const SizedBox(width: 8),
+                const SizedBox(width: Insets.s),
                 Expanded(
                   child: Text(
                     'Slack notifications disabled — tap to configure',
-                    style:
-                        TextStyle(fontSize: 12, color: statusColors.warning),
+                    style: AppTextStyles.caption
+                        .copyWith(color: statusColors.warning),
                   ),
                 ),
                 Icon(Icons.chevron_right,

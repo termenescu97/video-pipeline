@@ -8,6 +8,7 @@ import '../../services/job_queue_service.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 import 'conflict_dialog.dart';
 
 /// Review-first batch flow for "Copy All Cards" (FR-029, FR-030).
@@ -254,7 +255,7 @@ class _CopyAllCardsDialogState extends State<CopyAllCardsDialog> {
                     },
                     title: Text(
                       '${drive.path}  ${drive.label}',
-                      style: const TextStyle(fontSize: 14),
+                      style: AppTextStyles.body,
                     ),
                     subtitle: Text(
                       drive.displaySize,

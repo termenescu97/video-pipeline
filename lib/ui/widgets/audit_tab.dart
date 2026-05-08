@@ -245,7 +245,7 @@ class _HashEntry extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(file.fileName, style: AppTextStyles.body),
-          const SizedBox(height: 2),
+          const SizedBox(height: Insets.xxs),
           SelectableText(
             'src: ${file.sourceHash ?? '—'}',
             style: AppTextStyles.mono.copyWith(

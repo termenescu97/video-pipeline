@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../utils/format_utils.dart';
+import '../theme/insets.dart';
+import '../theme/text_styles.dart';
 
 /// A progress bar widget with label, percentage, ETA, speed, and current file.
 class PipelineProgressBar extends StatelessWidget {
@@ -42,21 +44,21 @@ class PipelineProgressBar extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: Insets.s),
         LinearProgressIndicator(
           value: progress.clamp(0.0, 1.0),
           minHeight: 8,
           borderRadius: BorderRadius.circular(4),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: Insets.xs),
         // Current file name.
         if (currentFileName != null)
           Text(
             currentFileName!,
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
+            style: AppTextStyles.caption.copyWith(color: Colors.grey),
             overflow: TextOverflow.ellipsis,
           ),
-        const SizedBox(height: 2),
+        const SizedBox(height: Insets.xxs),
         // Stats row: files, speed, elapsed, ETA.
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -64,17 +66,17 @@ class PipelineProgressBar extends StatelessWidget {
             if (totalFiles > 0)
               Text(
                 '$completedFiles / $totalFiles files',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                style: AppTextStyles.caption.copyWith(color: Colors.grey),
               ),
             if (speedBytesPerSec != null)
               Text(
                 formatSpeed(speedBytesPerSec!),
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                style: AppTextStyles.caption.copyWith(color: Colors.grey),
               ),
             if (fps != null)
               Text(
                 '${fps!.toStringAsFixed(1)} fps',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                style: AppTextStyles.caption.copyWith(color: Colors.grey),
               ),
           ],
         ),
@@ -85,12 +87,12 @@ class PipelineProgressBar extends StatelessWidget {
               if (elapsed != null)
                 Text(
                   'Elapsed: ${formatDuration(elapsed!)}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  style: AppTextStyles.caption.copyWith(color: Colors.grey),
                 ),
               if (eta != null)
                 Text(
                   'ETA: ${formatDuration(eta!)}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  style: AppTextStyles.caption.copyWith(color: Colors.grey),
                 ),
             ],
           ),
