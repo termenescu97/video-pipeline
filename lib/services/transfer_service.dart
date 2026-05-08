@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
 import '../utils/process_runner.dart';
+import '../utils/ps_escape.dart';
 import '../utils/robocopy_parser.dart';
 import 'log_service.dart';
 
@@ -87,19 +88,26 @@ class TransferService {
   Future<String?> computeFileHash(String filePath) async {
     if (!Platform.isWindows) return null;
 
+    // 017 (FR-001): caller-side validation. Empty path is a programmer error
+    // upstream; reject loudly rather than emitting an unparseable PS command.
+    if (filePath.isEmpty) {
+      logService?.error('computeFileHash called with empty path');
+      return null;
+    }
+
     final runner = ProcessRunner();
     _activeHashRunners.add(runner);
     final captured = StringBuffer();
     final stderr = StringBuffer();
     try {
-      final exitCode = await runner.run(
-        executable: 'powershell',
-        arguments: [
-          '-NoProfile',
-          '-Command',
-          r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
-          filePath,
-        ],
+      // 017 (R-A1): single-quoted -LiteralPath inside the -Command script
+      // string. PS single-quoted literals don't expand $var or backticks;
+      // doubling the only literal-special char (') closes injection. Length-3
+      // argv invariant enforced by runPowerShellInline.
+      final exitCode = await runner.runPowerShellInline(
+        tag: 'computeFileHash',
+        script:
+            "(Get-FileHash -LiteralPath '${escapePsLiteral(filePath)}' -Algorithm SHA256).Hash",
         onStdoutLine: (line) {
           final t = line.trim();
           if (t.isNotEmpty) captured.writeln(t);

@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
 import '../utils/format_utils.dart';
+import '../utils/ps_escape.dart';
 import 'log_service.dart';
 
 /// Represents a detected removable storage device.
@@ -138,14 +139,51 @@ class DriveService {
   }
 
   /// Get free space in bytes for a given path's drive.
+  ///
+  /// 017 (FR-013): path-shape validation upfront. Returns -1 (sentinel) on:
+  ///   - empty path (programmer error upstream),
+  ///   - UNC path (`\\nas01\share\...`) — surfaces a warning, no UNC
+  ///     support in v2.5; v3.0 NAS feature adds Win32 GetDiskFreeSpaceEx,
+  ///   - malformed drive-letter prefix (must match `^[A-Za-z]:`).
+  ///
+  /// Long-path warning (>260 chars): logged once at preflight; does NOT
+  /// block the caller's job creation.
   Future<int> getDiskFreeSpace(String dirPath) async {
     if (!Platform.isWindows) return -1;
+    if (dirPath.isEmpty) {
+      _logService?.warning(
+        'getDiskFreeSpace called with empty path — caller bug; returning -1',
+      );
+      return -1;
+    }
+    if (dirPath.startsWith(r'\\')) {
+      _logService?.warning(
+        'free space check skipped for UNC path "$dirPath"; '
+        'v3.0 NAS feature adds support',
+      );
+      return -1;
+    }
+    if (dirPath.length > 260) {
+      _logService?.warning(
+        'path exceeds Windows MAX_PATH (260 chars) — PS 5.1 may fail '
+        'without \\\\?\\ prefix: "$dirPath" (${dirPath.length} chars)',
+      );
+      // continue — only a warning, not a hard fail
+    }
+    if (!RegExp(r'^[A-Za-z]:').hasMatch(dirPath)) {
+      _logService?.warning(
+        'getDiskFreeSpace: path "$dirPath" does not start with a valid '
+        'drive letter (e.g. E:); returning -1',
+      );
+      return -1;
+    }
 
-    final driveLetter = dirPath.substring(0, 1);
+    final driveLetter = dirPath[0]; // validated single ASCII letter
     final result = await _runPowerShell([
       '-Command',
-      r'Get-PSDrive -Name $args[0] | Select-Object -ExpandProperty Free',
-      driveLetter,
+      // 017 (R-A1): drive letter is guaranteed [A-Za-z]; safe to inline.
+      // No trailing-argv positional pattern — that was the v2.4.0 root cause.
+      'Get-PSDrive -Name $driveLetter | Select-Object -ExpandProperty Free',
     ], tag: 'getDiskFreeSpace($driveLetter)');
 
     if (result == null) return -1;
@@ -162,26 +200,30 @@ class DriveService {
     if (!Platform.isWindows) return null;
 
     // Take "E:" from "E:\\" — matches Win32_LogicalDisk.DeviceID.
+    if (drivePath.length < 2) return null;
     final deviceId = drivePath.substring(0, 2);
+    if (!RegExp(r'^[A-Za-z]:$').hasMatch(deviceId)) return null;
 
+    // 017 (R-A1): inline the validated DeviceID via single-quoted literal +
+    // escapePsLiteral (defense-in-depth — deviceId is already regex-validated
+    // to ASCII alpha + ':' so it cannot contain '). No trailing-argv pattern.
+    final escapedDevice = escapePsLiteral(deviceId);
     final result = await _runPowerShell([
       '-Command',
       // Trace the WMI association chain: LogicalDisk -> Partition -> DiskDrive
       // to get the physical disk's SerialNumber. SerialNumber is null on
       // some card readers; callers must handle that case.
-      r'''
-$drive = $args[0]
-$logical = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID = '$drive'"
-if (-not $logical) { return }
-$partition = $logical | Get-CimAssociatedInstance -Association Win32_LogicalDiskToPartition | Select-Object -First 1
-$disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Win32_DiskDriveToDiskPartition | Select-Object -First 1 } else { $null }
+      '''
+\$logical = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID = '$escapedDevice'"
+if (-not \$logical) { return }
+\$partition = \$logical | Get-CimAssociatedInstance -Association Win32_LogicalDiskToPartition | Select-Object -First 1
+\$disk = if (\$partition) { \$partition | Get-CimAssociatedInstance -Association Win32_DiskDriveToDiskPartition | Select-Object -First 1 } else { \$null }
 @{
-  VolumeName = $logical.VolumeName
-  Size = $logical.Size
-  SerialNumber = if ($disk) { $disk.SerialNumber } else { $null }
+  VolumeName = \$logical.VolumeName
+  Size = \$logical.Size
+  SerialNumber = if (\$disk) { \$disk.SerialNumber } else { \$null }
 } | ConvertTo-Json -Compress
 ''',
-      deviceId,
     ], tag: 'getDriveIdentity($deviceId)');
 
     if (result == null) return null;
@@ -206,18 +248,16 @@ $disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Wi
   Future<bool> eraseDrive(String drivePath) async {
     if (!Platform.isWindows) return false;
 
-    // Validate drive path even though we now pass it via $args[0] —
-    // belt-and-suspenders against accidentally erasing a non-drive path.
+    // Validate drive path tightly — belt-and-suspenders against
+    // accidentally erasing a non-drive path. Regex matches `X:\` shape.
     if (!RegExp(r'^[A-Za-z]:\\$').hasMatch(drivePath)) return false;
 
-    // Pass the drive path as $args[0] (PowerShell positional arg) and use
-    // -LiteralPath so the value is treated as a literal string, never as
-    // a glob pattern. Enumerate children with -Force (include hidden /
-    // system files like volume metadata) and delete recursively.
+    // 017 (R-A1): inline the validated drive path via single-quoted
+    // -LiteralPath. Even though the regex above guarantees no apostrophes,
+    // escapePsLiteral is defense-in-depth (in case validation ever loosens).
     final result = await _runPowerShell([
       '-Command',
-      r'Get-ChildItem -LiteralPath $args[0] -Force | Remove-Item -Recurse -Force',
-      drivePath,
+      "Get-ChildItem -LiteralPath '${escapePsLiteral(drivePath)}' -Force | Remove-Item -Recurse -Force",
     ], tag: 'eraseDrive($drivePath)');
 
     return result != null;
