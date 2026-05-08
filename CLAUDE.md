@@ -69,8 +69,12 @@ lib/
 │   │   ├── create_job_screen.dart # Right panel: job creation form
 │   │   ├── job_detail_screen.dart # Right panel: job progress, retry, erase
 │   │   └── settings_screen.dart   # Slack webhook, operator name, update toggle, test card prep
-│   ├── widgets/                 # JobCard, DriveList, ProgressBar, ConfirmationDialog
-│   └── theme/app_theme.dart     # StatusColors theme extension
+│   ├── widgets/                 # JobCard variants (active/queued/done/next-up), DriveList,
+│   │                            #   ProgressBar, ConfirmationDialog, ConflictDialog,
+│   │                            #   StatusBar, SourcesPanel, ActivityPanel, PlanSummaryPanel,
+│   │                            #   DetailTabs (Files/Audit/Errors), KeyboardCheatSheet,
+│   │                            #   HandbrakeBanner, RecoveredChip, SkeletonRow, EraseDriveAction
+│   └── theme/app_theme.dart     # StatusColors theme extension, Insets, AppTextStyles
 └── utils/
     ├── constants.dart           # Video extensions, robocopy flags, regex patterns
     ├── format_utils.dart        # formatBytes, formatDuration, formatSpeed, formatRelativeTime
@@ -151,11 +155,11 @@ lib/
 - Erase safety: serial-number identity re-verification + typed-confirmation TextField
 - Size-only verification warning shown inside the erase dialog
 - Cancellable SHA-256 hashing (parallel-safe, killable mid-stream)
-- Graceful shutdown for both window close and tray quit (awaits queue + 30s safety timeout)
+- Graceful shutdown for both window close and tray quit (now phased + abandonment-aware — see 016 in load-bearing conventions)
 - OS-level instance lock (atomic acquisition via RandomAccessFile.lock, fail-closed)
 - Queue ordering matches drag-and-drop display order (sortOrder, then createdAt)
 
-### What Works (014 — UI/UX Redesign, v2.4.0)
+### What Works (014 + 015 + 016, v2.4.0)
 
 - Three-column shell: Sources (left, 240px) / Queue + inline Detail (center, flex) / Activity (right, 300px)
 - Slim StatusBar with single-color state dot + queue summary (replaces bare AppBar; tray tooltip mirrors)
@@ -177,6 +181,39 @@ lib/
 - Skeleton-row shimmer placeholders during first-load on Sources, Queue, and FilesTab
 - HandBrake-not-installed banner extracted to its own widget; renders in HomeScreen warning slot AND CreateJobScreen
 - Material 3 with `StatusColors` theme extension used everywhere; `Insets.*` spacing scale + `AppTextStyles` typography scale (tabular figures on numerics so digit changes don't reflow); JetBrains Mono for paths/hashes
+
+**015 — Robocopy execution-time overwrite guard:**
+- `robocopyFlags` always carries `/XN /XC /XO` so robocopy itself refuses to overwrite a non-empty dest. The executor in `JobQueueService._processTransfer` is the ONLY thing that may delete a dest before invoking robocopy — and only when the operator explicitly approved overwrite at preflight, OR when we're resuming our own `/Z` partial.
+- Schema v7 adds `JobFile.wasOverwriteApproved` — set at preflight in `_applyResolution` only for files whose dest existed at that moment. Survives retry; never cleared.
+- Split delete-rule: `wasOverwriteApproved || (everAttempted && isPartial)`. The `everAttempted` signal comes from preserved `JobFile.startedAt` (resetFileToPending / recoverStaleJobs / resetJobForRetry deliberately do NOT clear it).
+- mtime cutoff TOCTOU guard: dest files modified after `Job.createdAt` are treated as foreign intrusions, not own partials — refuses delete-then-copy unless approved.
+- Symlink/junction guard at dest: `FileSystemEntity.type` checked before delete; non-files refuse the unlink path.
+- Per-file `FileSystemException` on delete is isolated — that one file fails, queue continues.
+- `prepTestCards` re-verifies SD-card serial number per-card before deleting `DCIM/100TEST`.
+
+**016 — Graceful shutdown race hardening:**
+- `shell_screen.dart::_gracefulShutdown` is phased with phase-local timeouts: Phase A (acquire flag) → Phase B (10s queue drain via `stopProcessing()`) → Phase C (5s `database.close()`, instance lock release, 2s log close). Phase C ALWAYS runs regardless of Phase B drain outcome — never wrapped in a single timeout.
+- `JobQueueService._shutdownAbandoned` flag flips when Phase B times out. `markShutdownAbandoned()` is the public setter.
+- `_safeWrite(op)` wrapper sits in front of every DAO write inside the processing loop and `_processJob` / `_processTransfer` / `_processCompression` (~25 sites). When `_shutdownAbandoned` is true, the wrapper drops writes silently; otherwise it rethrows real exceptions. Bypassing it can deadlock shutdown or write into a closed DB.
+- `recoverStaleJobs` writes audit-log entries via injected `LogService` so post-mortem can trace which jobs were rescued.
+- DriveService `_runPowerShell` takes a `tag` param and logs every non-zero exit. Per-helper failure logging — no more silent PowerShell flakiness.
+- `TransferService.computeFileHash` catches `(e, st)`, captures stderr, logs root cause.
+- `completedBytes` accumulator is threaded through every job-completion path in JobQueueService — final byte progress no longer staler than `completedFiles`.
+- HandBrake banner detection cached at module level (was probing PATH on every rebuild).
+- `RecoveredChip` extracted as shared widget; was duplicated between `job_card_queued.dart` and `job_card_next_up.dart`.
+- Compression failure → honest Slack `notifyJobFailed`, not a green checkmark.
+
+### Load-Bearing Conventions (don't break these without updating the relevant feature spec)
+
+These invariants encode the v2.4.0 hardening from 015 + 016. A naive refactor that erases them re-opens a CRITICAL or HIGH bug. Each line names the file you'd touch:
+
+- **`_safeWrite` wrapper (`lib/services/job_queue_service.dart`)** — required for ALL DAO writes inside the processing loop, `_processJob`, `_processTransfer`, `_processCompression`. Bypassing it can deadlock shutdown or write into a closed DB during Phase C cleanup.
+- **`JobFile.startedAt` is preserved across resets (`lib/database/daos/job_file_dao.dart`, `lib/database/daos/job_dao.dart`)** — `resetFileToPending`, `recoverStaleJobs`, `resetJobForRetry` deliberately do NOT clear it. The 015 executor uses `file.startedAt != null` to distinguish own `/Z` partials from TOCTOU intrusions. If you find yourself "cleaning up" the reset, read 015's plan first.
+- **`JobFile.wasOverwriteApproved` semantics (`lib/services/job_queue_service.dart::_applyResolution`)** — set ONLY at preflight time, ONLY for files whose dest existed at that moment. Survives retry. Never cleared. The executor honors it absolutely (delete-then-copy regardless of size).
+- **`Job.createdAt` is the mtime cutoff baseline (`lib/services/job_queue_service.dart::_processTransfer`)** — never modify on retry/resume. Changing it shifts the TOCTOU guard window and could reclassify foreign intrusions as own partials.
+- **`robocopyFlags` (`lib/utils/constants.dart`)** — must include `/XN /XC /XO`. Removing them re-opens the v2.4.0 CRITICAL (silent overwrite). The flags are paired with executor-side delete logic; changing one without the other breaks the contract.
+- **Phased shutdown structure (`lib/ui/screens/shell_screen.dart::_gracefulShutdown`)** — Phase C cleanup (DB close, lock release, log close) must ALWAYS run regardless of Phase B drain outcome. Don't wrap them in a single outer timeout. If a refactor makes the function shorter, it's probably wrong.
+- **`_PlannedFile` is duplicated** across `job_queue_service.dart` and `create_job_screen.dart`. Keep both copies in sync until the v2.5 consolidation. A diverging shape will cause silent data loss in conflict resolution.
 
 ### Known Issues (from review-report-v2.md)
 
@@ -250,11 +287,24 @@ Deferred to v2.5 (no operator-visible behavior change):
 - **Adversarial review pattern**: after implementing a feature, run a review before merging. Has caught command injection, data loss bugs, and Constitution violations.
 - **Known false positives**: QA-5 (dropdown param correct in Flutter 3.41.9), QA-7 (Dart event loop makes race guard correct)
 
-### v3.0 Roadmap (from PM review)
+#### Codex Adversarial-Review Cadence (validated in 015 + 016)
 
-**Tier 1**: NAS upload automation, auto-detect SD cards, dashboard stats, ~~SHA-256 verification~~ (done in 011)
-**Tier 2**: Job templates, scheduled jobs, multi-machine sync, selective file copy
-**Tier 3**: Cloud backup, metadata extraction, team activity feed
+The pattern that worked across this session for data-safety-critical features:
+
+- Default flags: `--model gpt-5.5 --effort high`. (`gpt-5.5-codex` is rejected by the operator's account; bare `gpt-5.5` works. Use `--effort xhigh` for data-loss-CRITICAL passes.)
+- Cadence per feature: **plan v1 → Codex review → plan v2 → Codex review → implementation → Codex review → fix → Codex review → commit**. Two review rounds at each of "plan" and "implementation" is typical for non-trivial work; trivial features can do one of each.
+- The reviewer can disagree on framing (e.g. v1 015 plan claimed WAL mode — wrong, it's rollback-journal). Treat factual rebuttals as load-bearing: replace the rationale, don't paper over it.
+- The reviewer's CANNOT VERIFY findings still require investigation; they may be wrong, but they're rarely worthless. Resolve them by reading the code, not by handwaving.
+- If the reviewer flags 9 findings, applying 8 of them with explicit pushback on the 9th is normal and good. Track which were rejected and why so future sessions don't relitigate.
+
+### v3.0 Roadmap
+
+- **v2.5 (next release)**: NAS upload automation. Bundle `ConfirmationDialog.showCritical` consolidation for the SD-erase path so the bespoke typed-confirmation in `erase_drive_action.dart` finally routes through the canonical primitive. NAS feature ships its own "Disconnect & wipe local cache" destructive action — same dialog primitive should serve both.
+  - Convention going forward: any new destructive action defaults to `ConfirmationDialog.showCritical`. Bespoke gates require a written reason.
+- **v3.0 (from PM review)**:
+  - **Tier 1**: auto-detect SD cards (replace polling), dashboard stats, ~~SHA-256 verification~~ (done in 011), ~~NAS upload~~ (now v2.5).
+  - **Tier 2**: Job templates, scheduled jobs, multi-machine sync, selective file copy (PM-10).
+  - **Tier 3**: Cloud backup, metadata extraction, team activity feed.
 
 ## Build & Release
 
