@@ -51,7 +51,8 @@ class DriveList extends StatelessWidget {
           child: ListTile(
             leading: const Icon(Icons.sd_storage),
             title: Text(drive.label),
-            subtitle: Text('${drive.path} — ${drive.displaySize}'),
+            subtitle: Text('${drive.path} — ${drive.displaySize}',
+                style: AppTextStyles.mono),
             trailing: isSelected
                 ? Icon(Icons.check_circle,
                     color: Theme.of(context).extension<StatusColors>()!.success)

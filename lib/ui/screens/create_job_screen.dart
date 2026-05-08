@@ -365,7 +365,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                   children: [
                     Icon(Icons.warning_amber, color: statusColors.warning),
                     const SizedBox(width: Insets.s),
-                    Expanded(
+                    const Expanded(
                       child: Text(
                         'Compression requires HandBrake. '
                         'Download it at handbrake.fr. '
@@ -649,7 +649,8 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         for (final drive in _drives)
           ChoiceChip(
             avatar: const Icon(Icons.sd_storage, size: 16),
-            label: Text('${drive.path}  ${drive.label}'),
+            label: Text('${drive.path}  ${drive.label}',
+                style: AppTextStyles.mono),
             selected: _selectedDrive?.path == drive.path,
             onSelected: (_) {
               setState(() => _selectedDrive = drive);
@@ -839,7 +840,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 const SizedBox(height: Insets.s),
                 ...scanResult.skippedPaths.map((path) => Padding(
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: Text('• $path', style: AppTextStyles.body),
+                      child: Text('• $path', style: AppTextStyles.mono),
                     )),
               ],
             ),

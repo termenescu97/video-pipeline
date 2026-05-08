@@ -415,7 +415,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: OutlinedButton.icon(
                       onPressed: _batchCopyAllCards,
                       icon: const Icon(Icons.sd_storage, size: 18),
-                      label: Text('Copy All',
+                      label: const Text('Copy All',
                           style: AppTextStyles.body),
                     ),
                   ),
@@ -670,7 +670,7 @@ class _FailedJobsBanner extends StatelessWidget {
               minimumSize: const Size(0, 28),
               padding: const EdgeInsets.symmetric(horizontal: 8),
             ),
-            child: Text('Retry all', style: AppTextStyles.caption),
+            child: const Text('Retry all', style: AppTextStyles.caption),
           ),
           TextButton(
             onPressed: onDismiss,
@@ -679,7 +679,7 @@ class _FailedJobsBanner extends StatelessWidget {
               minimumSize: const Size(0, 28),
               padding: const EdgeInsets.symmetric(horizontal: 8),
             ),
-            child: Text('Dismiss', style: AppTextStyles.caption),
+            child: const Text('Dismiss', style: AppTextStyles.caption),
           ),
         ],
       ),

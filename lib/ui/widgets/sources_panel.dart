@@ -204,8 +204,10 @@ class _DriveRow extends StatelessWidget {
               const SizedBox(height: Insets.xs),
               Text(
                 '${drive.path}  ·  ${drive.displaySize}',
-                style: AppTextStyles.caption
-                    .copyWith(color: scheme.onSurfaceVariant),
+                style: AppTextStyles.mono.copyWith(
+                  fontSize: 12,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: Insets.xs),
               Row(

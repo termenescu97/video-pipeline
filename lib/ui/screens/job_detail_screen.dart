@@ -53,8 +53,9 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
                         ),
                         const SizedBox(height: Insets.s),
                         _infoRow('Status', job.status.label),
-                        _infoRow('Source', job.sourcePath),
-                        _infoRow('Destination', job.destinationPath),
+                        _infoRow('Source', job.sourcePath, isPath: true),
+                        _infoRow('Destination', job.destinationPath,
+                            isPath: true),
                         if (job.presetName != null)
                           _infoRow('Preset', job.presetName!),
                         if (job.operatorName != null && job.operatorName!.isNotEmpty)
@@ -215,7 +216,7 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
       );
   }
 
-  Widget _infoRow(String label, String value) {
+  Widget _infoRow(String label, String value, {bool isPath = false}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -226,7 +227,10 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
             child: Text(label,
                 style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
-          Expanded(child: Text(value)),
+          Expanded(
+            child: Text(value,
+                style: isPath ? AppTextStyles.mono : null),
+          ),
         ],
       ),
     );

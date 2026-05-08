@@ -175,7 +175,7 @@ class PlanSummaryPanel extends StatelessWidget {
                       padding:
                           const EdgeInsets.symmetric(horizontal: Insets.s),
                     ),
-                    child: Text('View files',
+                    child: const Text('View files',
                         style: AppTextStyles.caption),
                   ),
               ],
@@ -218,7 +218,7 @@ void _showLongPathDetails(BuildContext context, List<String> samples) {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
+              const Text(
                 'These destination paths exceed Windows MAX_PATH (260 chars).\n'
                 'robocopy will copy them via the long-path-aware API, but '
                 'HandBrake and Explorer-level operations may fail per-file.',
@@ -229,7 +229,7 @@ void _showLongPathDetails(BuildContext context, List<String> samples) {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Text('• $path',
-                      style: AppTextStyles.caption.copyWith(fontSize: 11)),
+                      style: AppTextStyles.mono.copyWith(fontSize: 11)),
                 ),
             ],
           ),

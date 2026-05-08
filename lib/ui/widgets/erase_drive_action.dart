@@ -243,7 +243,7 @@ Future<bool> _showEraseConfirmDialog({
                   Text(identityDesc,
                       style:
                           const TextStyle(fontWeight: FontWeight.bold)),
-                  Text('Path: $drivePath'),
+                  Text('Path: $drivePath', style: AppTextStyles.mono),
                   const SizedBox(height: Insets.m),
                   Text(
                     'This action cannot be undone.',

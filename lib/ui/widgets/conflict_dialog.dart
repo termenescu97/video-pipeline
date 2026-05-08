@@ -92,7 +92,7 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Text(
                           '• $path',
-                          style: AppTextStyles.caption.copyWith(fontSize: 11),
+                          style: AppTextStyles.mono.copyWith(fontSize: 11),
                         ),
                       ),
                     if (more > 0)

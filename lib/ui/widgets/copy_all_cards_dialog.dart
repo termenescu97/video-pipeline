@@ -255,7 +255,7 @@ class _CopyAllCardsDialogState extends State<CopyAllCardsDialog> {
                     },
                     title: Text(
                       '${drive.path}  ${drive.label}',
-                      style: AppTextStyles.body,
+                      style: AppTextStyles.mono,
                     ),
                     subtitle: Text(
                       drive.displaySize,

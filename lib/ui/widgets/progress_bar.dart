@@ -58,7 +58,7 @@ class PipelineProgressBar extends StatelessWidget {
             style: AppTextStyles.caption.copyWith(color: Colors.grey),
             overflow: TextOverflow.ellipsis,
           ),
-        const SizedBox(height: Insets.xxs),
+        const SizedBox(height: Insets.xs),
         // Stats row: files, speed, elapsed, ETA.
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
