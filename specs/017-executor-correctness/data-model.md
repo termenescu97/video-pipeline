@@ -56,6 +56,16 @@ class Jobs extends Table {
   IntColumn get unverifiedFiles => integer()
       .withDefault(const Constant(0))
       .named('unverified_files')();
+
+  /// NEW v8: Set ONLY by `_createChainedCompressionJob` at chain time.
+  /// Points back to the parent `transferAndCompress` job so the chained
+  /// compression's Slack notification (FR-019) can query the parent's
+  /// transfer-phase verify counts. Null for directly-created jobs.
+  /// Never modified after the chain is created — survives parent's
+  /// status changes (operator may delete parent; compression keeps the
+  /// id reference; notification gracefully degrades on missing parent).
+  IntColumn get parentJobId =>
+      integer().nullable().references(Jobs, #id).named('parent_job_id')();
 }
 ```
 
@@ -105,6 +115,7 @@ MigrationStrategy get migration => MigrationStrategy(
         await m.addColumn(jobFiles, jobFiles.verifyStatus);   // default 'pending'
         await m.addColumn(jobFiles, jobFiles.failureKind);    // default 'none'
         await m.addColumn(jobs, jobs.unverifiedFiles);        // default 0
+        await m.addColumn(jobs, jobs.parentJobId);            // nullable; only set at chain time
         await m.addColumn(appSettings, appSettings.sourcesPanelCollapsed); // default false
 
         // ─── Phase 2: backfill verifyStatus for completed rows ──────────
@@ -200,6 +211,7 @@ MigrationStrategy get migration => MigrationStrategy(
 - **Backfill is conservative on ambiguity**: a row that doesn't match any narrow pattern keeps the column default (`pending` / `none` / `0` / `false`). Better to under-classify than misclassify a hash-subsystem failure as real corruption (which would trigger `forceDestDelete=true` retry semantics).
 - **Compression-only jobs** (`Job.type='compression'`): backfill leaves `verifyStatus='pending'` for their `JobFile` rows. UI gates verify counters on `Job.type` to avoid surfacing them.
 - **Pre-feature-011 rows** (jobs created before SHA-256 was a concept): they default to `verificationMode='size'` per the v5 migration default, so they backfill to `verifyStatus='unverified'` — the safe choice (cryptographic trust was never established).
+- **`parentJobId` not backfilled for historical chained jobs**: existing v7 chained compression jobs have no parent link (the column doesn't exist yet). After migration they get `parentJobId = null`. Operators already received Slack notifications for those historical runs; the missing parent link only affects future re-display in the UI (deferred to a v2.6 history-rendering polish if needed).
 
 ## State transition tables
 

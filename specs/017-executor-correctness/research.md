@@ -321,29 +321,66 @@ Future<void> notifyTransferCompleted({
 
 Callers (`job_queue_service.dart::_processTransfer` and `_processCompression`) pass the per-job aggregate counters from the schema v8 fields. Mismatch and unverified counts > 0 trigger the warning prefix.
 
-**Compression-completed notification expansion** (Codex round-2 H3 follow-up): `notifyCompressionCompleted` (`slack_service.dart:106-119`) currently has no verify counts — it just shows files done + duration. For `JobType.transferAndCompress` jobs, the transfer-phase verify state persists across compression; a clean-looking compression Slack ping after a non-clean transfer would violate Principle V again. Expansion:
+**Compression-completed notification expansion** (Codex round-2 H3 + round-3 architectural follow-up): `notifyCompressionCompleted` (`slack_service.dart:106-119`) currently has no verify counts — it just shows files done + duration. For chained compression (auto-chained from a `transferAndCompress` parent), the operator's final Slack ping must surface the parent's transfer-phase verify state, otherwise a clean-looking compression-complete signal could mask a non-clean transfer (Principle V).
+
+**Architectural note**: `_processJob` (`job_queue_service.dart:235-244`) handles `JobType.transferAndCompress` by running `_processTransfer` first, then on success calling `_createChainedCompressionJob` (`job_queue_service.dart:984-1015`) which inserts a NEW `JobType.compression` job. The chained job is a separate Drift row with its own JobFile rows seeded from `FileStatus.pending`. The transfer-phase `verifyStatus` lives on the PARENT's JobFile rows, not the chained compression's. A direct in-memory link is unavailable when `_processCompression` notifies — the chained compression job has no inherent reference to its parent.
+
+**Solution: `Job.parentJobId` column** (added to schema v8, see data-model.md). `_createChainedCompressionJob` sets `parentJobId = transferJob.id` at chain time. At notification finalize time, `_processCompression` reads its own `parentJobId`; if non-null, it queries the parent job's verify counts via DAO and passes them through the new Slack signature.
+
+Expansion:
 
 ```dart
 Future<void> notifyCompressionCompleted({
   required Job job,
   required int completedFiles,
   required int totalFiles,
-  required int verifiedFiles,           // NEW — from transfer phase, persisted
-  required int unverifiedFiles,         // NEW — from transfer phase, persisted
-  required int mismatchedFiles,         // NEW — from transfer phase, persisted
+  // NULLABLE: when the chained-compression job's parent has the verify
+  // counts. Null for directly-created compression jobs (no transfer phase).
+  Job? parentTransferJob,                // NEW — derived via parentJobId
+  int? parentVerifiedFiles,              // NEW
+  int? parentUnverifiedFiles,            // NEW
+  int? parentMismatchedFiles,            // NEW
 }) async {
-  final isTransferAndCompress = job.type == JobType.transferAndCompress;
-  final verifyLine = isTransferAndCompress
-      ? (mismatchedFiles > 0
-          ? '⚠ Transfer verification: $mismatchedFiles file(s) FAILED'
-          : unverifiedFiles > 0
-              ? '⚠ Transfer verification: $unverifiedFiles file(s) UNVERIFIED'
+  final hasParentSnapshot = parentTransferJob != null;
+  final verifyLine = hasParentSnapshot
+      ? ((parentMismatchedFiles ?? 0) > 0
+          ? '⚠ Transfer verification: $parentMismatchedFiles file(s) FAILED'
+          : (parentUnverifiedFiles ?? 0) > 0
+              ? '⚠ Transfer verification: $parentUnverifiedFiles file(s) UNVERIFIED'
               : 'Transfer verification: Passed')
-      : null;  // compression-only: no verify state to surface
+      : null;  // standalone compression job — no transfer to report
   // ... format + send ...
 }
 ```
 
-For `JobType.compression` (compression-only), the verify count params are accepted but not surfaced (no transfer phase happened). Callers pass them defensively from the schema.
+Caller (in `_processCompression` finalize, `job_queue_service.dart:725-735`):
 
-This satisfies FR-016 across both phase boundaries and closes the round-2 ambiguity flagged by the Codex follow-up.
+```dart
+Job? parentJob;
+int verified = 0, unverified = 0, mismatched = 0;
+if (job.parentJobId != null) {
+  parentJob = await _jobDao.getJob(job.parentJobId!);
+  if (parentJob != null) {
+    final files = await _jobFileDao.getFilesForJob(parentJob.id);
+    verified = files.where((f) =>
+        f.verifyStatus == VerifyStatus.verified).length;
+    unverified = files.where((f) =>
+        f.verifyStatus == VerifyStatus.unverified).length;
+    mismatched = files.where((f) =>
+        f.verifyStatus == VerifyStatus.mismatch).length;
+  }
+}
+await _slackService.notifyCompressionCompleted(
+  job: job,
+  completedFiles: completedCount,
+  totalFiles: files.length,
+  parentTransferJob: parentJob,
+  parentVerifiedFiles: parentJob != null ? verified : null,
+  parentUnverifiedFiles: parentJob != null ? unverified : null,
+  parentMismatchedFiles: parentJob != null ? mismatched : null,
+);
+```
+
+Graceful fallback: if `parentJobId` is set but the parent has been deleted before notification fires (rare — operator interaction), all four parent params are passed as null and the Slack body omits the verify line. The compression Slack ping degrades to compression-only metrics — same as a directly-created compression job. No crash.
+
+This satisfies FR-016 + FR-019 across both phase boundaries and closes the round-3 architectural finding.
