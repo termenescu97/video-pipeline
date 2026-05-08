@@ -295,6 +295,11 @@ class _VerifyStatusChip extends StatelessWidget {
           Icons.hourglass_empty,
           'pending'
         ),
+      VerifyStatus.notVerified => (
+          Theme.of(context).colorScheme.onSurfaceVariant,
+          Icons.straighten,
+          'size-only'
+        ),
     };
 
     return InkWell(

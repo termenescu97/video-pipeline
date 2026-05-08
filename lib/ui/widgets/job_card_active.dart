@@ -49,6 +49,11 @@ class _VerifyTally {
           break;
         case VerifyStatus.pending:
           break;
+        case VerifyStatus.notVerified:
+          // Size-mode baseline — counted as completed but neither
+          // verified nor a warning. The active card's verify-axis
+          // section is suppressed for size-mode jobs upstream.
+          break;
       }
     }
     return _VerifyTally(

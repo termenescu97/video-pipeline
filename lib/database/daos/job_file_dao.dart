@@ -148,6 +148,25 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     );
   }
 
+  /// 017B (Codex round-11 P2): size-mode success. Bytes match by size
+  /// but no cryptographic check was performed by design. Sets
+  /// `verifyStatus=notVerified` (the size-mode baseline) so size-mode
+  /// rows are visibly distinct from SHA-256 subsystem failures
+  /// (`unverified`); the legacy `verified` boolean stays true to
+  /// preserve v2.4.0 readers' meaning. failureKind=none — a successful
+  /// size check is not a failure of any kind.
+  Future<void> markFileSizeOnlyVerified(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      JobFilesCompanion(
+        status: const Value(FileStatus.completed),
+        verified: const Value(true),
+        verifyStatus: const Value(VerifyStatus.notVerified),
+        failureKind: const Value(FailureKind.none),
+        completedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
   /// 017B (Codex round-8 P2 #3): operator-accepted mismatch. Transitions
   /// a `verifyStatus=mismatch` row back to `verifyStatus=verified` so
   /// the active-card banner disappears; preserves the audit trail by

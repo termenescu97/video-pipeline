@@ -412,6 +412,10 @@ class JobQueueService {
           case VerifyStatus.pending:
             // Handled by the recovery branch above; shouldn't reach here.
             break;
+          case VerifyStatus.notVerified:
+            // Size-mode baseline — bytes match by size, no SHA-256 was
+            // attempted. Counted neither as verified nor as warning.
+            break;
         }
         continue;
       }
@@ -715,15 +719,18 @@ class JobQueueService {
         } else {
           // Size-based verification (default; v2.4.0 semantics preserved).
           // Per Codex M5: size match does NOT establish cryptographic trust.
-          // verifyStatus stays at default 'pending' for forward-operation
-          // size-mode rows; the legacy `verified` boolean is set true.
+          // 017B Codex round-11: forward operation now writes
+          // verifyStatus=notVerified (matching the v8 migration
+          // backfill) so size-mode rows are visibly distinct from
+          // SHA-256 subsystem failures (`unverified`). HistorySurface
+          // and Slack treat notVerified as the size-mode baseline.
           final verified = await _transferService.verifyTransfer(
             sourceFile: file.sourceFilePath,
             destinationFile: file.destinationFilePath,
           );
           if (verified) {
-            await _safeWrite(() =>
-                _jobFileDao.markFileCompleted(file.id, verified: true));
+            await _safeWrite(
+                () => _jobFileDao.markFileSizeOnlyVerified(file.id));
             completedCount++;
             completedBytes += file.fileSize;
             _logService?.info(

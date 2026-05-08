@@ -107,47 +107,56 @@ class TransferService {
     }
 
     if (needsRename) {
+      // Codex round-8 P2 #1: resumed renamed transfer. If the prior
+      // run successfully renamed the staged file into destinationFile
+      // then crashed before markFileCompleted, the next pass'
+      // pre-robocopy safety section sees everAttempted=true +
+      // isPartial=false (size match) and falls into the "size matches
+      // on resumed file — letting robocopy skip + verification
+      // confirm idempotently" branch. transferFile still runs;
+      // robocopy copies a fresh copy into the staging dir; then this
+      // rename fails on Windows because target already exists. Treat
+      // size-matching pre-existing target as the prior run's
+      // completion and just discard the duplicate staged copy.
+      final staged = File(p.join(robocopyDestDir, sourceBasename));
+      final target = File(destinationFile);
       try {
-        final staged = File(p.join(robocopyDestDir, sourceBasename));
-        final target = File(destinationFile);
-
-        // Codex round-8 P2 #1: resumed renamed transfer. If the prior
-        // run successfully renamed the staged file into destinationFile
-        // then crashed before markFileCompleted, the next pass'
-        // pre-robocopy safety section sees everAttempted=true +
-        // isPartial=false (size match) and falls into the "size matches
-        // on resumed file — letting robocopy skip + verification
-        // confirm idempotently" branch. transferFile still runs;
-        // robocopy copies a fresh copy into the staging dir; then this
-        // rename fails on Windows because target already exists. Treat
-        // size-matching pre-existing target as the prior run's
-        // completion and just discard the duplicate staged copy.
         if (await target.exists() &&
             await target.length() == await staged.length()) {
           await staged.delete();
-          await stagingDir!.delete(recursive: true);
           logService?.info(
             'Resumed renamed transfer: target $destBasename already '
             'matches source size — keeping existing dest, discarding '
             'staged duplicate',
           );
-          return true;
+        } else {
+          await staged.rename(destinationFile);
         }
-
-        await staged.rename(destinationFile);
-        await stagingDir!.delete(recursive: true);
       } on FileSystemException catch (e) {
         logService?.error(
           'Post-copy rename failed: $sourceBasename → $destBasename '
           '(${e.message})',
         );
-        // Best-effort staging cleanup. If rename succeeded but rmdir
-        // failed, the file is at the right place; the empty dir is a
-        // cosmetic leak addressed on the next manual sweep.
+        // Best-effort staging cleanup before returning failure.
         try {
           await stagingDir!.delete(recursive: true);
         } on FileSystemException catch (_) {}
         return false;
+      }
+
+      // Codex round-11 P3: staging-dir cleanup is a separate concern
+      // from the rename's success. The file is already at
+      // destinationFile by now; a failed rmdir leaves a cosmetic
+      // empty dir but does NOT mean the transfer failed. Without this
+      // split, an antivirus lock or transient permission glitch on
+      // the empty dir would mark a successful copy as failed.
+      try {
+        await stagingDir!.delete(recursive: true);
+      } on FileSystemException catch (e) {
+        logService?.warning(
+          'Staging dir cleanup left an empty dir at ${stagingDir!.path} '
+          '(${e.message}) — transfer succeeded; cosmetic leak only',
+        );
       }
     }
     return true;
