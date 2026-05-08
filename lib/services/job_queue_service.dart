@@ -66,23 +66,11 @@ class JobQueueService {
   // inProgress rows on the next launch.
   bool _shutdownAbandoned = false;
 
-  /// Test-only window into [_forceDestDeleteFileIds] so T045a can assert
-  /// the operator-driven retry recorded the fileId without exposing the
-  /// set as a mutable surface to production callers.
-  @visibleForTesting
-  bool isForceDestDeletePending(int fileId) =>
-      _forceDestDeleteFileIds.contains(fileId);
-
-  /// 017 (US2, T040, FR-005, Codex H2): in-memory set of fileIds that
-  /// must bypass the feature-015 delete predicate AND the size-match
-  /// short-circuit on their next pass through `_processTransfer`. Set
-  /// when the operator explicitly retries a verify-mismatch via the
-  /// banner; cleared after the file is consumed by the loop. Lives
-  /// only for the duration of the current process — recovery on next
-  /// launch reads `failureKind=verifyMismatch` from disk and, if the
-  /// operator hasn't re-confirmed, leaves the file alone. Operator-
-  /// driven attribution is the entire point (Constitution Principle I).
-  final Set<int> _forceDestDeleteFileIds = <int>{};
+  // 017 (Codex round-2 P2 #2): the persistent force-delete approval now
+  // lives on `JobFile.forceDestDeleteApproved`. The previous in-memory
+  // _forceDestDeleteFileIds set was lost on app restart between the
+  // operator's Retry click and the executor's consumption — closing
+  // this gap requires durable state, not transient state.
 
   /// Mark the queue as "shutdown abandoned." See [_shutdownAbandoned].
   /// Idempotent. Called from `shell_screen._gracefulShutdown` on Phase
@@ -237,21 +225,26 @@ class JobQueueService {
   ///
   /// Resets the file row's verify axis (verifyStatus/failureKind/hashes)
   /// AND the parent job's status to pending so the queue scheduler can
-  /// pick the job up again. Records the fileId in
-  /// `_forceDestDeleteFileIds` for in-memory consumption by the loop.
+  /// pick the job up again. Persists the operator's force-delete intent
+  /// to `JobFile.forceDestDeleteApproved` so it survives app exit
+  /// between the Retry click and `_processTransfer`'s consumption
+  /// (Codex round-2 P2 #2).
   Future<void> retryFile(int fileId, {bool forceDestDelete = false}) async {
     final file = await _jobFileDao.getFile(fileId);
     if (file == null) return;
     if (forceDestDelete) {
-      _forceDestDeleteFileIds.add(fileId);
       _logService?.warning(
         'Operator retry of ${file.fileName} with forceDestDelete=true '
-        'after verify mismatch',
+        'after verify mismatch — approval persisted to '
+        'JobFile.forceDestDeleteApproved (Codex round-2 P2 #2)',
         jobId: file.jobId,
         phase: LogPhase.recover,
       );
     }
-    await _safeWrite(() => _jobFileDao.resetFileForRetry(fileId));
+    await _safeWrite(() => _jobFileDao.resetFileForRetry(
+          fileId,
+          forceDestDeleteApproved: forceDestDelete,
+        ));
     await _safeWrite(() => _jobDao.resetJobForRetry(file.jobId));
   }
 
@@ -469,14 +462,20 @@ class JobQueueService {
           final destSize = await destFile.length();
           final everAttempted = file.startedAt != null;
           final isPartial = destSize < sourceSize;
-          // 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a
-          // verify-mismatched file. Bypasses the entire feature-015 delete
-          // predicate AND the size-match short-circuit below — even a
-          // dest with `wasOverwriteApproved=false` and identical size to
-          // source is replaced wholesale, because the bytes have already
-          // been verified to differ. Without this, retry on the same-size
-          // corrupt destination loops forever.
-          final forceDestDelete = _forceDestDeleteFileIds.remove(file.id);
+          // 017 (US2, T040, FR-005, Codex H2 + round-2 P2 #2): operator-
+          // driven retry of a verify-mismatched file. Bypasses the entire
+          // feature-015 delete predicate AND the size-match short-circuit
+          // below — even a dest with `wasOverwriteApproved=false` and
+          // identical size to source is replaced wholesale, because the
+          // bytes have already been verified to differ. Without this,
+          // retry on the same-size corrupt destination loops forever.
+          //
+          // The approval now lives on the persisted
+          // `JobFile.forceDestDeleteApproved` column so it survives an
+          // app exit between the operator's Retry click and the
+          // executor's consumption. Single-use: cleared inline below
+          // once the delete + robocopy decision is committed.
+          final forceDestDelete = file.forceDestDeleteApproved;
           final shouldDelete = forceDestDelete ||
               file.wasOverwriteApproved ||
               (everAttempted && isPartial);
@@ -492,6 +491,12 @@ class JobQueueService {
                 jobId: job.id,
                 phase: forceDestDelete ? LogPhase.recover : LogPhase.transfer,
               );
+              if (forceDestDelete) {
+                // Single-use consumption — re-mismatch on the next pass
+                // requires a fresh operator approval via the banner.
+                await _safeWrite(
+                    () => _jobFileDao.clearForceDestDeleteApproved(file.id));
+              }
             } on FileSystemException catch (e) {
               // Permission denied / read-only / locked. Fail this
               // FILE cleanly rather than crashing the whole job via

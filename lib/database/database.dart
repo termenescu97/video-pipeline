@@ -79,6 +79,7 @@ class AppDatabase extends _$AppDatabase {
             // Phase 1: column adds.
             await m.addColumn(jobFiles, jobFiles.verifyStatus);
             await m.addColumn(jobFiles, jobFiles.failureKind);
+            await m.addColumn(jobFiles, jobFiles.forceDestDeleteApproved);
             await m.addColumn(jobs, jobs.unverifiedFiles);
             await m.addColumn(jobs, jobs.parentJobId);
             await m.addColumn(appSettings, appSettings.sourcesPanelCollapsed);

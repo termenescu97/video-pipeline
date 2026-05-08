@@ -69,11 +69,23 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
   /// [markFileVerifyMismatch] / [markFileUnverified].
   ///
   /// Backward-compat: legacy callers passing `verified: true` still work.
+  ///
+  /// Codex round-2 P2 #1: when [verified] is true (size-mode success),
+  /// ALSO set `verifyStatus=verified`. Otherwise size-mode rows would
+  /// stay at `verifyStatus=pending` forever, which the recovery query
+  /// (FR-018) treats as "abandoned mid-verify" — every completed
+  /// size-mode row would be re-rescued on every launch. Forward
+  /// operation now matches the legacy `verified` boolean: "verified"
+  /// means "passed all configured checks for the job's verification
+  /// mode," which for size-mode is byte-size match.
   Future<void> markFileCompleted(int fileId, {bool verified = false}) {
     return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
       JobFilesCompanion(
         status: const Value(FileStatus.completed),
         verified: Value(verified),
+        verifyStatus: verified
+            ? const Value(VerifyStatus.verified)
+            : const Value.absent(),
         completedAt: Value(DateTime.now()),
       ),
     );
@@ -184,17 +196,36 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
   /// failureKind, hashes) so the row re-enters the verify pipeline as
   /// if it had never been verified. `startedAt` is preserved (load-bearing
   /// 015 invariant — distinguishes own /Z partials from intrusions).
-  Future<void> resetFileForRetry(int fileId) {
+  ///
+  /// Codex round-2 P2 #2: when [forceDestDeleteApproved] is true, persist
+  /// the operator's force-delete approval to the column so it survives
+  /// app exit / crash between the Retry click and `_processTransfer`
+  /// consumption. Defaults to false to preserve "no-op for unrelated
+  /// resets" semantics.
+  Future<void> resetFileForRetry(int fileId,
+      {bool forceDestDeleteApproved = false}) {
     return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
-      const JobFilesCompanion(
-        status: Value(FileStatus.pending),
-        completedAt: Value(null),
-        errorMessage: Value(null),
-        verifyStatus: Value(VerifyStatus.pending),
-        failureKind: Value(FailureKind.none),
-        sourceHash: Value(null),
-        destinationHash: Value(null),
+      JobFilesCompanion(
+        status: const Value(FileStatus.pending),
+        completedAt: const Value(null),
+        errorMessage: const Value(null),
+        verifyStatus: const Value(VerifyStatus.pending),
+        failureKind: const Value(FailureKind.none),
+        sourceHash: const Value(null),
+        destinationHash: const Value(null),
+        forceDestDeleteApproved: Value(forceDestDeleteApproved),
       ),
+    );
+  }
+
+  /// 017 (v8, Codex round-2 P2 #2): clear the persisted force-delete
+  /// approval after `_processTransfer` consumes it (post-delete +
+  /// robocopy). Single-use semantics: a re-mismatch on the next pass
+  /// requires the operator to re-approve via the banner, never an
+  /// automatic re-bypass.
+  Future<void> clearForceDestDeleteApproved(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      const JobFilesCompanion(forceDestDeleteApproved: Value(false)),
     );
   }
 

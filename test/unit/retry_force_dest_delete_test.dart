@@ -108,7 +108,7 @@ void main() {
     expect(before.status, FileStatus.completed);
     expect(before.verifyStatus, VerifyStatus.mismatch);
     expect(before.failureKind, FailureKind.verifyMismatch);
-    expect(queue.isForceDestDeletePending(seeded.fileId), isFalse);
+    expect(before.forceDestDeleteApproved, isFalse);
 
     await queue.retryFile(seeded.fileId, forceDestDelete: true);
 
@@ -126,10 +126,11 @@ void main() {
         reason: 'startedAt is the load-bearing 015 "everAttempted" '
             'signal — must be preserved across resets.');
 
-    expect(queue.isForceDestDeletePending(seeded.fileId), isTrue,
-        reason: 'In-memory set must carry the fileId so the next pass '
-            'of _processTransfer bypasses both the feature-015 delete '
-            'predicate AND the size-match short-circuit (Codex H2).');
+    expect(after.forceDestDeleteApproved, isTrue,
+        reason: 'Codex round-2 P2 #2: persisted to the column so the '
+            'approval survives an app exit between the Retry click and '
+            'the executor\'s consumption. A re-mismatch after consumption '
+            'requires fresh operator approval (single-use clear).');
 
     final job = await jobDao.getJob(seeded.jobId);
     expect(job!.status, JobStatus.queued,
@@ -143,22 +144,21 @@ void main() {
 
     await queue.retryFile(seeded.fileId, forceDestDelete: false);
 
-    expect(queue.isForceDestDeletePending(seeded.fileId), isFalse,
+    final after = await jobFileDao.getFile(seeded.fileId);
+    expect(after!.forceDestDeleteApproved, isFalse,
         reason: 'Without explicit operator approval, the same-size '
             'short-circuit must remain active so we do not silently '
             'replace destinations on every retry.');
-
-    final after = await jobFileDao.getFile(seeded.fileId);
-    expect(after!.status, FileStatus.pending,
+    expect(after.status, FileStatus.pending,
         reason: 'Verify axis is still cleared regardless of the flag — '
             'the flag only governs the delete-then-robocopy bypass.');
     expect(after.verifyStatus, VerifyStatus.pending);
   });
 
   test('retryFile is a no-op when the fileId does not exist', () async {
+    // Should not throw, should not write any rows.
     await queue.retryFile(999999, forceDestDelete: true);
-    expect(queue.isForceDestDeletePending(999999), isFalse,
-        reason: 'Missing file must not arm the bypass set — guards '
-            'against a stale UI ID after the row was deleted.');
+    final missing = await jobFileDao.getFile(999999);
+    expect(missing, isNull);
   });
 }
