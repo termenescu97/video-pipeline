@@ -92,18 +92,25 @@ Codex H2: `'%SHA-256%'` alone is too broad — it matches BOTH real mismatches a
 
 ### Decision: Two separate `_safeWrite` calls — copy first, verify second
 
+Reuses existing `markFileCompleted(fileId, {verified: bool})` pattern from `job_file_dao.dart:58` to stay consistent with the v7 dao API. The `verified` parameter becomes optional with default `false`; new code flips it explicitly via the verify-side mark methods below.
+
 ```dart
-// After robocopy success (≈ line 484 of job_queue_service.dart)
-await _safeWrite(() => _jobFileDao.markFileTransferComplete(file.id));
+// After robocopy success (≈ line 484 of job_queue_service.dart).
+// NOTE: verified=false explicitly — the legacy boolean stays false until
+// markFileVerified flips it. Bytes-on-disk semantic, NOT verify done.
+await _safeWrite(() => _jobFileDao.markFileCompleted(file.id, verified: false));
 await _safeWrite(() => _jobDao.updateJobProgress(
   job.id,
   completedFiles: completedCount,
   completedBytes: completedBytes,
 ));
 
-// After hash check (≈ line 488-512)
-await _safeWrite(() => _jobFileDao.markFileVerified(file.id));     // or markFileVerifyMismatch / markFileUnverified
-await _safeWrite(() => _jobDao.incrementVerified(job.id));         // or incrementFailed / incrementUnverified
+// After hash check (≈ line 488-512). New methods on JobFileDao:
+//   markFileVerified(fileId, {sourceHash, destHash}) — sets verified=true, verifyStatus='verified'
+//   markFileVerifyMismatch(fileId, {sourceHash, destHash}) — verifyStatus='mismatch', failureKind='verifyMismatch'
+//   markFileUnverified(fileId) — verifyStatus='unverified', failureKind='verifyUnreliable'
+await _safeWrite(() => _jobFileDao.markFileVerified(file.id, sourceHash: ..., destHash: ...));
+await _safeWrite(() => _jobDao.incrementVerified(job.id));
 ```
 
 ### Rationale

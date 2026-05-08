@@ -232,7 +232,7 @@ There is no `verifiedFiles` column on `Job` because it equals `completedFiles - 
 | Invariant (from CLAUDE.md) | v8 status |
 |----------------------------|-----------|
 | `_safeWrite` wrapper required for all DAO writes inside processing loop | Preserved — new mark/increment methods called inside `_safeWrite`. |
-| `JobFile.startedAt` preserved across resets | Preserved — `markFileTransferComplete` does NOT touch it; `resetFileToPending` continues to leave it. |
+| `JobFile.startedAt` preserved across resets | Preserved — `markFileCompleted(verified: false)` (the v8 post-robocopy call) does NOT touch it; `resetFileToPending` continues to leave it. |
 | `JobFile.wasOverwriteApproved` set only at preflight, survives retry, never cleared | Preserved — A4 changes do not modify this field. |
 | `Job.createdAt` mtime cutoff baseline never modified on retry/resume | Preserved — A4/A7 do not touch `createdAt`. |
 | `robocopyFlags` includes `/XN /XC /XO` | Preserved — A5's `forceDestDelete=true` deletes the dest file BEFORE robocopy, so `/XO`'s "skip on size match" doesn't fire. |

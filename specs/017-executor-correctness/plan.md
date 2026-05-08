@@ -69,7 +69,7 @@ lib/
 │   ├── database.dart                   # A3 — schema v8 migration with backfill
 │   └── daos/
 │       ├── job_dao.dart                # A4 — incrementVerified/Unverified/Failed; A7 — recovery counter re-derivation
-│       └── job_file_dao.dart           # A4 — markFileTransferComplete, markFileVerified, markFileVerifyMismatch, markFileUnverified
+│       └── job_file_dao.dart           # A4 — modify markFileCompleted(verified: bool=false default); add markFileVerified, markFileVerifyMismatch, markFileUnverified
 └── ui/
     └── widgets/
         ├── job_card_active.dart        # surfaces verify-mismatch banner (Investigate / Retry / Skip per FR-005)
