@@ -1053,6 +1053,20 @@ class JobQueueService {
       ));
     }
 
+    // 017 (T058, FR-008, Codex H3): NTFS is case-insensitive. Two source
+    // files with paths that differ only in case (e.g., `DCIM/IMG_001.MOV`
+    // and `dcim/img_001.MOV` from a case-sensitive source like exFAT or
+    // a network share) collapse to the same destination NTFS file and
+    // silently overwrite one another mid-batch. `File.existsSync()` in
+    // _applyResolution only catches collisions against pre-existing
+    // disk state, NOT collisions WITHIN the planned set.
+    //
+    // Walk the planned set with a case-insensitive Set<String> of claimed
+    // destinations; on duplicate, route the second-and-later occurrences
+    // through a suffixed rename whose candidate is also checked against
+    // the claimed set so generated suffixes don't re-collide.
+    _normalizeCaseCollisionsAcrossPlans(cardPlans);
+
     // Phase 2: global conflict preflight across all cards. T103/FR-046:
     // also stat the destination size so the resolution dialog can
     // render side-by-side sizes with an "identical"/"very different"
@@ -1218,6 +1232,82 @@ class JobQueueService {
       final candidate = p.join(dir, '${stem}_$i$ext');
       if (!File(candidate).existsSync()) return candidate;
       i++;
+    }
+  }
+
+  /// 017 (T058, FR-008, Codex H3): suffixed-rename variant that ALSO
+  /// rejects candidates whose lowercased form is already claimed in
+  /// [takenLower]. Without this check, two case-only-conflicting sources
+  /// (`IMG_001.MOV` vs `img_001.mov`) could both rename to `IMG_001_1.mov`
+  /// vs `img_001_1.mov` and re-collide on NTFS.
+  String _suffixedPathAgainst(String path, Set<String> takenLower) {
+    final dir = p.dirname(path);
+    final ext = p.extension(path);
+    final stem = p.basenameWithoutExtension(path);
+    var i = 1;
+    while (true) {
+      final candidate = p.join(dir, '${stem}_$i$ext');
+      final candidateLower = candidate.toLowerCase();
+      if (!takenLower.contains(candidateLower) &&
+          !File(candidate).existsSync()) {
+        return candidate;
+      }
+      i++;
+    }
+  }
+
+  /// 017 (T058, FR-008, Codex H3): in-place rewrite of any planned
+  /// destination that case-only-conflicts with another already-claimed
+  /// destination in the same batch. Walks every plan, every file, in
+  /// order; the first occurrence keeps its destination, subsequent
+  /// occurrences are rerouted via [_suffixedPathAgainst].
+  ///
+  /// The detector + rewriter is a single pass to keep the implementation
+  /// simple; the [takenLower] set is mutated as we go so generated
+  /// suffixes account for prior renames.
+  void _normalizeCaseCollisionsAcrossPlans(List<_CardTransferPlan> plans) {
+    final flatLists = plans.map((plan) => plan.files).toList();
+    normalizeCaseCollisions(
+      flatLists,
+      onRename: (original, renamed) {
+        _logService?.warning(
+          'Case-only destination collision: $original collapses to '
+          'existing NTFS key — renaming to $renamed',
+          phase: LogPhase.preflight,
+        );
+      },
+    );
+  }
+
+  /// 017 (T058, FR-008, Codex H3, T060): pure algorithm extracted from
+  /// [_normalizeCaseCollisionsAcrossPlans] so it's unit-testable without
+  /// a real drive/filesystem setup. Mutates the lists in [plans] in place
+  /// to break case-only NTFS collisions.
+  ///
+  /// First occurrence of each case-folded destination keeps the original
+  /// path; later occurrences are rerouted via the same suffixed-rename
+  /// pattern used elsewhere ([_suffixedPathAgainst]). The [onRename]
+  /// callback fires once per rewrite for telemetry/logging.
+  @visibleForTesting
+  void normalizeCaseCollisions(
+    List<List<PlannedFile>> plans, {
+    void Function(String original, String renamed)? onRename,
+  }) {
+    final takenLower = <String>{};
+    for (final files in plans) {
+      for (var i = 0; i < files.length; i++) {
+        final file = files[i];
+        final lower = file.destinationPath.toLowerCase();
+        if (!takenLower.contains(lower)) {
+          takenLower.add(lower);
+          continue;
+        }
+        final renamed =
+            _suffixedPathAgainst(file.destinationPath, takenLower);
+        files[i] = file.copyWith(destinationPath: renamed);
+        takenLower.add(renamed.toLowerCase());
+        onRename?.call(file.destinationPath, renamed);
+      }
     }
   }
 
