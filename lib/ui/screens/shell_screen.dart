@@ -159,7 +159,7 @@ class _ShellScreenState extends State<ShellScreen>
     exit(0);
   }
 
-  /// Phased graceful shutdown (016).
+  /// Phased graceful shutdown (feature 016).
   ///
   /// Replaces the v2.4.0 single-30s-timeout-around-everything pattern,
   /// which would skip cleanup entirely if `stopProcessing` blocked on a
@@ -169,16 +169,15 @@ class _ShellScreenState extends State<ShellScreen>
   ///   - Phase A: signal stop + send subprocess kill (non-blocking).
   ///   - Phase B: bounded 10 s wait for the queue drain. On timeout,
   ///     mark the queue abandoned so any late writes from the loop
-  ///     short-circuit cleanly instead of hitting a closed DB.
-  ///   - Phase C: independent cleanup steps. ALWAYS run regardless of
-  ///     Phase B outcome. Order: DB close → lock release → log close
-  ///     (with 2 s timeout on log close as belt-and-suspenders against
-  ///     a hung disk).
+  ///     short-circuit cleanly via JobQueueService._safeWrite instead
+  ///     of throwing into a closed DB.
+  ///   - Phase C: independent cleanup steps with per-step timeouts.
+  ///     ALWAYS run regardless of Phase B outcome. Order: DB close
+  ///     (5 s) → lock release → log close (2 s). Each timeout-bounded
+  ///     so a hung step can't starve the rest.
   ///
   /// `recoverStaleJobs` on the next launch picks up any inProgress
   /// rows whose post-cancel `resetFileToPending` was abandoned.
-  ///
-  /// Plan: ~/.claude/plans/playful-brewing-peach.md (016).
   Future<void> _gracefulShutdown() async {
     if (_shuttingDown) return;
     _shuttingDown = true;
@@ -217,9 +216,18 @@ class _ShellScreenState extends State<ShellScreen>
     // Phase C — independent cleanup steps. Each guarded so a failure
     // in one does NOT skip the rest. Order: DB close FIRST (load-
     // bearing for data integrity), lock release SECOND, log close
-    // LAST (best-effort, time-bounded).
+    // LAST (best-effort).
+    //
+    // 5 s timeout on database.close() — Codex review fix (MEDIUM):
+    // without a timeout, a hung close would block lock release and
+    // log close indefinitely, defeating the v2 reorder's intent.
+    // Drift's close awaits in-flight statements, which under normal
+    // conditions resolves in milliseconds; 5 s is generous for a
+    // genuine kernel-level disk hang.
     try {
-      await database.close();
+      await database.close().timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      stderr.writeln('[shutdown] database.close timed out after 5s');
     } catch (e) {
       stderr.writeln('[shutdown] database.close failed: $e');
     }

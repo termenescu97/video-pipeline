@@ -72,6 +72,35 @@ class JobQueueService {
     _shutdownAbandoned = true;
   }
 
+  /// Centralized abandonment-aware DAO write wrapper. Use for EVERY
+  /// DB-mutating call inside `_processJob`, `_processTransfer`,
+  /// `_processCompression` — including terminal completion/failure
+  /// writes and the outer catch's `markJobFailed`. Without this wrap,
+  /// any post-Phase-B writes (after shell_screen abandoned the drain
+  /// and Phase C closed the DB) would throw a `ConnectionClosedException`
+  /// or `StateError` and surface as noisy unhandled errors.
+  ///
+  /// Semantics:
+  ///  - If `_shutdownAbandoned` is true on entry: silently skip (do
+  ///    not call op). Returns immediately.
+  ///  - Else: run op. If it throws AND `_shutdownAbandoned` flipped
+  ///    to true during the await (Phase C closed the DB under us):
+  ///    silently swallow. Otherwise rethrow — real bugs (schema,
+  ///    constraint, disk-full, etc.) surface to the outer catch chain
+  ///    instead of being hidden by an over-broad `catch (_)`.
+  ///
+  /// Codex 016 implementation review fixed three HIGH unguarded-write
+  /// gaps; the wrapper is the centralized fix.
+  Future<void> _safeWrite(Future<void> Function() op) async {
+    if (_shutdownAbandoned) return;
+    try {
+      await op();
+    } catch (_) {
+      if (_shutdownAbandoned) return;
+      rethrow;
+    }
+  }
+
   /// Real-time progress data for UI consumption.
   final ValueNotifier<ProgressData?> progressNotifier = ValueNotifier(null);
 
@@ -181,13 +210,14 @@ class JobQueueService {
 
   Future<void> _processJob(Job job) async {
     _logService?.info('Job #${job.id} started — ${job.type.name} ${job.sourcePath} → ${job.destinationPath}');
-    await _jobDao.markJobStarted(job.id);
+    await _safeWrite(() => _jobDao.markJobStarted(job.id));
 
     try {
       // Validate source exists before processing.
       final sourceDir = Directory(job.sourcePath);
       if (!await sourceDir.exists()) {
-        await _jobDao.markJobFailed(job.id, 'Source path not found: ${job.sourcePath}');
+        await _safeWrite(() => _jobDao.markJobFailed(
+            job.id, 'Source path not found: ${job.sourcePath}'));
         await _slackService.notifyJobFailed(
           jobId: job.id,
           phase: 'Pre-check',
@@ -220,7 +250,7 @@ class JobQueueService {
       _logService?.error(
         'Job #${job.id} (${job.type.name}) crashed: $e\n${st.toString().split('\n').take(3).join('\n')}',
       );
-      await _jobDao.markJobFailed(job.id, e.toString());
+      await _safeWrite(() => _jobDao.markJobFailed(job.id, e.toString()));
       await _slackService.notifyJobFailed(
         jobId: job.id,
         phase: job.type == JobType.compression ? 'Compression' : 'Transfer',
@@ -276,8 +306,8 @@ class JobQueueService {
         final entityKind = destEntityType == FileSystemEntityType.link
             ? 'symlink/junction'
             : 'non-regular entity';
-        await _jobFileDao.markFileFailed(file.id,
-            'Refused to overwrite $entityKind at destination: $destPath');
+        await _safeWrite(() => _jobFileDao.markFileFailed(file.id,
+            'Refused to overwrite $entityKind at destination: $destPath'));
         failedCount++;
         _logService?.error(
           'Job #${job.id} file ${file.fileName}: dest is a $entityKind '
@@ -306,8 +336,8 @@ class JobQueueService {
               // Permission denied / read-only / locked. Fail this
               // FILE cleanly rather than crashing the whole job via
               // the outer catch in _processJob.
-              await _jobFileDao.markFileFailed(file.id,
-                  'Could not remove existing destination file: ${e.message}');
+              await _safeWrite(() => _jobFileDao.markFileFailed(file.id,
+                  'Could not remove existing destination file: ${e.message}'));
               failedCount++;
               _logService?.error(
                 'Job #${job.id} file ${file.fileName}: pre-robocopy '
@@ -347,11 +377,11 @@ class JobQueueService {
             // could mark completed wrongly. Fail loudly here.
             final destMtime = await destFile.lastModified();
             if (destMtime.isAfter(job.createdAt)) {
-              await _jobFileDao.markFileFailed(file.id,
+              await _safeWrite(() => _jobFileDao.markFileFailed(file.id,
                   'Destination modified after job creation '
                   '(mtime=${destMtime.toIso8601String()} > '
                   'createdAt=${job.createdAt.toIso8601String()}). '
-                  'Refusing to overwrite without explicit approval.');
+                  'Refusing to overwrite without explicit approval.'));
               failedCount++;
               _logService?.warning(
                 'Job #${job.id} file ${file.fileName}: mtime cutoff '
@@ -363,8 +393,8 @@ class JobQueueService {
           }
         } on FileSystemException catch (e) {
           // length() / lastModified() failed. Fail conservatively.
-          await _jobFileDao.markFileFailed(file.id,
-              'Could not read destination metadata: ${e.message}');
+          await _safeWrite(() => _jobFileDao.markFileFailed(file.id,
+              'Could not read destination metadata: ${e.message}'));
           failedCount++;
           _logService?.error(
             'Job #${job.id} file ${file.fileName}: dest metadata read '
@@ -374,7 +404,7 @@ class JobQueueService {
         }
       }
 
-      await _jobFileDao.markFileStarted(file.id);
+      await _safeWrite(() => _jobFileDao.markFileStarted(file.id));
 
       // Wire progress callback for real-time UI updates.
       _transferService.onProgress = (event) {
@@ -415,17 +445,11 @@ class JobQueueService {
       // was killed and `success` is false — but this is NOT a real
       // failure. Reset the file to pending so robocopy /Z resumes
       // cleanly when the operator restarts the queue.
-      // 016: guarded by `_shutdownAbandoned` + try/catch — if Phase C
-      // already closed the DB before this drain Future resolved, skip
-      // the write rather than throwing.
+      // 016: routed through _safeWrite — if Phase C already closed the
+      // DB before this drain Future resolved, the write is silently
+      // skipped; recoverStaleJobs handles next launch.
       if (!_isProcessing) {
-        if (!_shutdownAbandoned) {
-          try {
-            await _jobFileDao.resetFileToPending(file.id);
-          } catch (_) {
-            // DB closed mid-drain. recoverStaleJobs handles next launch.
-          }
-        }
+        await _safeWrite(() => _jobFileDao.resetFileToPending(file.id));
         break;
       }
 
@@ -446,43 +470,38 @@ class JobQueueService {
           // Same cancellation guard for the hashing subprocesses: if the
           // operator stopped during hashing, the hash runners were
           // killed. Reset the file to pending; recovery will re-verify.
-          // 016: same shutdown-abandonment guard.
+          // 016: routed through _safeWrite.
           if (!_isProcessing) {
-            if (!_shutdownAbandoned) {
-              try {
-                await _jobFileDao.resetFileToPending(file.id);
-              } catch (_) {
-                // DB closed mid-drain. recoverStaleJobs handles it.
-              }
-            }
+            await _safeWrite(() => _jobFileDao.resetFileToPending(file.id));
             break;
           }
 
-          await _jobFileDao.updateFileHashes(
-            file.id,
-            sourceHash: sourceHash,
-            destinationHash: destHash,
-          );
+          await _safeWrite(() => _jobFileDao.updateFileHashes(
+                file.id,
+                sourceHash: sourceHash,
+                destinationHash: destHash,
+              ));
 
           if (sourceHash == null || destHash == null) {
             // Hash computation failed (not cancelled — that case is
             // handled above). Real failure path.
-            await _jobFileDao.markFileFailed(
-              file.id,
-              'SHA-256 verification failed: could not compute hash',
-            );
+            await _safeWrite(() => _jobFileDao.markFileFailed(
+                  file.id,
+                  'SHA-256 verification failed: could not compute hash',
+                ));
             failedCount++;
             _logService?.error('Job #${job.id} file ${file.fileName} — SHA-256 hash computation failed: source=$sourceHash dest=$destHash');
           } else if (sourceHash == destHash) {
-            await _jobFileDao.markFileCompleted(file.id, verified: true);
+            await _safeWrite(() =>
+                _jobFileDao.markFileCompleted(file.id, verified: true));
             completedCount++;
             completedBytes += file.fileSize;
             _logService?.info('Job #${job.id} file ${file.fileName} — SHA-256 verified: source=$sourceHash dest=$destHash MATCH');
           } else {
-            await _jobFileDao.markFileFailed(
-              file.id,
-              'SHA-256 hash mismatch',
-            );
+            await _safeWrite(() => _jobFileDao.markFileFailed(
+                  file.id,
+                  'SHA-256 hash mismatch',
+                ));
             failedCount++;
             _logService?.warning('Job #${job.id} file ${file.fileName} — SHA-256 MISMATCH: source=$sourceHash dest=$destHash');
           }
@@ -493,26 +512,28 @@ class JobQueueService {
             destinationFile: file.destinationFilePath,
           );
           if (verified) {
-            await _jobFileDao.markFileCompleted(file.id, verified: true);
+            await _safeWrite(() =>
+                _jobFileDao.markFileCompleted(file.id, verified: true));
             completedCount++;
             completedBytes += file.fileSize;
             _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
           } else {
-            await _jobFileDao.markFileFailed(
-              file.id,
-              'Verification failed: size mismatch',
-            );
+            await _safeWrite(() => _jobFileDao.markFileFailed(
+                  file.id,
+                  'Verification failed: size mismatch',
+                ));
             failedCount++;
             _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
           }
         }
-        await _jobDao.updateJobProgress(
-          job.id,
-          completedFiles: completedCount,
-          completedBytes: completedBytes,
-        );
+        await _safeWrite(() => _jobDao.updateJobProgress(
+              job.id,
+              completedFiles: completedCount,
+              completedBytes: completedBytes,
+            ));
       } else {
-        await _jobFileDao.markFileFailed(file.id, 'Transfer failed');
+        await _safeWrite(() =>
+            _jobFileDao.markFileFailed(file.id, 'Transfer failed'));
         failedCount++;
         _logService?.error('Job #${job.id} file transfer failed: ${file.fileName}');
         // Codex review fix (MEDIUM): persist final progress before the
@@ -524,12 +545,13 @@ class JobQueueService {
         // last per-file success persisted, which can lag the actual
         // on-disk state if the prior run crashed between markFile-
         // Completed and updateJobProgress.
-        await _jobDao.updateJobProgress(
-          job.id,
-          completedFiles: completedCount,
-          completedBytes: completedBytes,
-        );
-        await _jobDao.markJobFailed(job.id, 'File transfer failed: ${file.fileName}');
+        await _safeWrite(() => _jobDao.updateJobProgress(
+              job.id,
+              completedFiles: completedCount,
+              completedBytes: completedBytes,
+            ));
+        await _safeWrite(() => _jobDao.markJobFailed(
+            job.id, 'File transfer failed: ${file.fileName}'));
         await _slackService.notifyTransferFailed(
           job: job,
           fileName: file.fileName,
@@ -541,17 +563,11 @@ class JobQueueService {
     }
 
     // Check if interrupted by stop.
-    // 016: guard the late status flip so an abandoned drain doesn't
-    // write into a closed DB if Phase C already ran. recoverStaleJobs
-    // on next launch handles the inProgress→paused transition.
+    // 016: routed through _safeWrite — if Phase C already closed the
+    // DB, the write is silently skipped; recoverStaleJobs handles it.
     if (!_isProcessing) {
-      if (!_shutdownAbandoned) {
-        try {
-          await _jobDao.updateJobStatus(job.id, JobStatus.paused);
-        } catch (_) {
-          // DB closed mid-drain. recoverStaleJobs handles it.
-        }
-      }
+      await _safeWrite(
+          () => _jobDao.updateJobStatus(job.id, JobStatus.paused));
       return;
     }
 
@@ -561,22 +577,22 @@ class JobQueueService {
     // whose file rows were already completed pre-crash would
     // otherwise carry stale `jobs.completedFiles` and
     // `jobs.completedBytes` into history.
-    await _jobDao.updateJobProgress(
-      job.id,
-      completedFiles: completedCount,
-      completedBytes: completedBytes,
-    );
+    await _safeWrite(() => _jobDao.updateJobProgress(
+          job.id,
+          completedFiles: completedCount,
+          completedBytes: completedBytes,
+        ));
 
     final allVerified = failedCount == 0;
     if (failedCount > 0) {
       _logService?.error('Job #${job.id} failed — $completedCount transferred, $failedCount failed verification');
-      await _jobDao.markJobFailed(
-        job.id,
-        '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed verification',
-      );
+      await _safeWrite(() => _jobDao.markJobFailed(
+            job.id,
+            '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed verification',
+          ));
     } else {
       _logService?.info('Job #${job.id} completed — $completedCount files transferred');
-      await _jobDao.markJobCompleted(job.id);
+      await _safeWrite(() => _jobDao.markJobCompleted(job.id));
     }
     await _slackService.notifyTransferCompleted(
       job: job,
@@ -601,7 +617,7 @@ class JobQueueService {
         continue;
       }
 
-      await _jobFileDao.markFileStarted(file.id);
+      await _safeWrite(() => _jobFileDao.markFileStarted(file.id));
 
       // Wire progress callback for real-time UI updates.
       _compressionService.onProgress = (progress) {
@@ -636,32 +652,28 @@ class JobQueueService {
       // Cancellation guard: if HandBrake was killed by stopProcessing,
       // `success` is false but this is not a real failure — reset to
       // pending so the file can be re-processed on resume.
-      // 016: same shutdown-abandonment guard as the transfer branch.
+      // 016: routed through _safeWrite (was an explicit guard block).
       if (!_isProcessing) {
-        if (!_shutdownAbandoned) {
-          try {
-            await _jobFileDao.resetFileToPending(file.id);
-          } catch (_) {
-            // DB closed mid-drain. recoverStaleJobs handles next launch.
-          }
-        }
+        await _safeWrite(() => _jobFileDao.resetFileToPending(file.id));
         break;
       }
 
       if (success) {
-        await _jobFileDao.markFileCompleted(file.id, verified: true);
+        await _safeWrite(
+            () => _jobFileDao.markFileCompleted(file.id, verified: true));
         completedCount++;
         completedBytes += file.fileSize;
         _logService?.info(
           'Job #${job.id} compressed: ${file.fileName}',
         );
-        await _jobDao.updateJobProgress(
-          job.id,
-          completedFiles: completedCount,
-          completedBytes: completedBytes,
-        );
+        await _safeWrite(() => _jobDao.updateJobProgress(
+              job.id,
+              completedFiles: completedCount,
+              completedBytes: completedBytes,
+            ));
       } else {
-        await _jobFileDao.markFileFailed(file.id, 'Compression failed');
+        await _safeWrite(
+            () => _jobFileDao.markFileFailed(file.id, 'Compression failed'));
         failedCount++;
         // Final-review fix #2: compression branch was silent on file
         // failure. Mirror the transfer branch and write to the log so
@@ -674,15 +686,11 @@ class JobQueueService {
     }
 
     // Check if interrupted by stop.
-    // 016: same shutdown-abandonment guard as the transfer branch.
+    // 016: routed through _safeWrite — same pattern as the transfer
+    // branch.
     if (!_isProcessing) {
-      if (!_shutdownAbandoned) {
-        try {
-          await _jobDao.updateJobStatus(job.id, JobStatus.paused);
-        } catch (_) {
-          // DB closed mid-drain. recoverStaleJobs handles it.
-        }
-      }
+      await _safeWrite(
+          () => _jobDao.updateJobStatus(job.id, JobStatus.paused));
       return;
     }
 
@@ -692,21 +700,21 @@ class JobQueueService {
     // whose file rows were already completed pre-crash would
     // otherwise reach completion with stale jobs.completedFiles +
     // jobs.completedBytes. This guarantees the row reflects reality.
-    await _jobDao.updateJobProgress(
-      job.id,
-      completedFiles: completedCount,
-      completedBytes: completedBytes,
-    );
+    await _safeWrite(() => _jobDao.updateJobProgress(
+          job.id,
+          completedFiles: completedCount,
+          completedBytes: completedBytes,
+        ));
 
     if (failedCount > 0) {
       // Final-review fix #2: log the job-level failure summary too.
       _logService?.error(
         'Job #${job.id} compression FAILED — $completedCount/${files.length} compressed, $failedCount failed',
       );
-      await _jobDao.markJobFailed(
-        job.id,
-        '$completedCount/${files.length} files compressed, $failedCount failed',
-      );
+      await _safeWrite(() => _jobDao.markJobFailed(
+            job.id,
+            '$completedCount/${files.length} files compressed, $failedCount failed',
+          ));
       // Final-review fix #1: when compression has any failures, do NOT
       // send the green-checkmark "Compression Complete" Slack message.
       // notifyJobFailed gives the operator an honest signal.
@@ -719,7 +727,7 @@ class JobQueueService {
       _logService?.info(
         'Job #${job.id} compression completed — $completedCount files',
       );
-      await _jobDao.markJobCompleted(job.id);
+      await _safeWrite(() => _jobDao.markJobCompleted(job.id));
       await _slackService.notifyCompressionCompleted(
         job: job,
         completedFiles: completedCount,
