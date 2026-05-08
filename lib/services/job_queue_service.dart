@@ -1436,8 +1436,27 @@ class JobQueueService {
     if (outputPath == null) return;
 
     final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
+    // Codex round-15 P1: filter on the v8 verify axis, not the legacy
+    // `verified` boolean. acceptMismatch / acceptUnverified
+    // intentionally leave `verified=false` (so it doesn't lie about
+    // cryptographic trust) but flip verifyStatus to verified /
+    // notVerified — meaning the operator approved the file for
+    // downstream compression. Filtering by `verified=true` would
+    // silently exclude every accepted file from the compression
+    // child even though the operator's intent was the opposite.
+    //
+    // Compression-ready ≡ status=completed AND verifyStatus is one
+    // the operator considers acceptable: `verified` (SHA-256 match),
+    // `notVerified` (size-mode baseline OR operator-accepted
+    // unverified). `mismatch` and `unverified` are still excluded
+    // because they're unresolved warnings; maybeChainCompression
+    // already gated on those upstream, but the defense-in-depth
+    // filter here ensures a stray re-call can't sneak them through.
     final ready = transferFiles
-        .where((f) => f.status == FileStatus.completed && f.verified)
+        .where((f) =>
+            f.status == FileStatus.completed &&
+            (f.verifyStatus == VerifyStatus.verified ||
+                f.verifyStatus == VerifyStatus.notVerified))
         .toList();
 
     if (ready.isEmpty) return;
