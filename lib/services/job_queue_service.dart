@@ -267,6 +267,11 @@ class JobQueueService {
     var completedCount = 0;
     var completedBytes = 0;
     var failedCount = 0;
+    // 017 (US1+US2): Slack expansion (FR-016) needs per-state counts.
+    // Tracked locally during the loop; passed to notifyTransferCompleted.
+    var verifiedCount = 0;
+    var unverifiedCount = 0;
+    var mismatchedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
@@ -456,6 +461,28 @@ class JobQueueService {
 
       if (success) {
         if (job.verificationMode == VerificationMode.sha256) {
+          // 017 (US1, FR-002, T034): credit bytes to overall progress
+          // IMMEDIATELY upon robocopy success, regardless of subsequent
+          // verify outcome. The legacy `verified` boolean stays false
+          // until markFileVerified flips it; verifyStatus stays 'pending'
+          // until the hash check resolves it. Two _safeWrite calls per
+          // Codex H1 — gating-the-bug-back is now structurally impossible.
+          await _safeWrite(() => _jobFileDao.markFileCompleted(file.id, verified: false));
+          completedCount++;
+          completedBytes += file.fileSize;
+          await _safeWrite(() => _jobDao.updateJobProgress(
+                job.id,
+                completedFiles: completedCount,
+                completedBytes: completedBytes,
+              ));
+          _logService?.info(
+            'Copied ${file.fileName}',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.transfer,
+          );
+
           // SHA-256 hash verification — parallel since source and dest are on different drives.
           progressNotifier.value = ProgressData(
             currentFileName: 'Verifying: computing hashes...',
@@ -468,46 +495,68 @@ class JobQueueService {
           final destHash = results[1];
           progressNotifier.value = null;
 
-          // Same cancellation guard for the hashing subprocesses: if the
-          // operator stopped during hashing, the hash runners were
-          // killed. Reset the file to pending; recovery will re-verify.
-          // 016: routed through _safeWrite.
+          // 017 (T046): cancellation mid-verify leaves file at
+          // status=completed + verifyStatus=pending. recoverStaleJobs
+          // detects this and routes to verify-only on next launch
+          // (FR-006). DO NOT reset to pending — that would re-trigger
+          // robocopy on resume and double-credit bytes.
           if (!_isProcessing) {
-            await _safeWrite(() => _jobFileDao.resetFileToPending(file.id));
             break;
           }
 
-          await _safeWrite(() => _jobFileDao.updateFileHashes(
-                file.id,
-                sourceHash: sourceHash,
-                destinationHash: destHash,
-              ));
-
           if (sourceHash == null || destHash == null) {
-            // Hash computation failed (not cancelled — that case is
-            // handled above). Real failure path.
-            await _safeWrite(() => _jobFileDao.markFileFailed(
-                  file.id,
-                  'SHA-256 verification failed: could not compute hash',
-                ));
-            failedCount++;
-            _logService?.error('Job #${job.id} file ${file.fileName} — SHA-256 hash computation failed: source=$sourceHash dest=$destHash');
+            // 017 (US1, FR-003 unverified): hash subsystem failed (PS
+            // broken, etc.). Bytes are on disk but cryptographic trust
+            // is NOT established. Soft failure — operator sees ⚠ chip.
+            await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
+            await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+            unverifiedCount++;
+            _logService?.warning(
+              'SHA-256 subsystem failed for ${file.fileName}: could not compute hash',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.verify,
+            );
           } else if (sourceHash == destHash) {
-            await _safeWrite(() =>
-                _jobFileDao.markFileCompleted(file.id, verified: true));
-            completedCount++;
-            completedBytes += file.fileSize;
-            _logService?.info('Job #${job.id} file ${file.fileName} — SHA-256 verified: source=$sourceHash dest=$destHash MATCH');
-          } else {
-            await _safeWrite(() => _jobFileDao.markFileFailed(
+            // 017 (US1, FR-003 verified): cryptographic trust established.
+            await _safeWrite(() => _jobFileDao.markFileVerified(
                   file.id,
-                  'SHA-256 hash mismatch',
+                  sourceHash: sourceHash,
+                  destHash: destHash,
                 ));
-            failedCount++;
-            _logService?.warning('Job #${job.id} file ${file.fileName} — SHA-256 MISMATCH: source=$sourceHash dest=$destHash');
+            verifiedCount++;
+            _logService?.info(
+              'SHA-256 verified ${file.fileName}',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.verify,
+            );
+          } else {
+            // 017 (US2, FR-003 mismatch + FR-005): real corruption — bytes
+            // on disk differ from source. Soft failure (FR-004 — copy
+            // succeeded; verify failed); operator decides via banner.
+            // Retry routes through forceDestDelete=true (Codex H2).
+            await _safeWrite(() => _jobFileDao.markFileVerifyMismatch(
+                  file.id,
+                  sourceHash: sourceHash,
+                  destHash: destHash,
+                ));
+            mismatchedCount++;
+            _logService?.warning(
+              'SHA-256 hash mismatch for ${file.fileName}: source=$sourceHash dest=$destHash',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.verify,
+            );
           }
         } else {
-          // Size-based verification (default).
+          // Size-based verification (default; v2.4.0 semantics preserved).
+          // Per Codex M5: size match does NOT establish cryptographic trust.
+          // verifyStatus stays at default 'pending' for forward-operation
+          // size-mode rows; the legacy `verified` boolean is set true.
           final verified = await _transferService.verifyTransfer(
             sourceFile: file.sourceFilePath,
             destinationFile: file.destinationFilePath,
@@ -517,21 +566,31 @@ class JobQueueService {
                 _jobFileDao.markFileCompleted(file.id, verified: true));
             completedCount++;
             completedBytes += file.fileSize;
-            _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
+            _logService?.info(
+              'Copied ${file.fileName} (size-verified)',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.transfer,
+            );
           } else {
             await _safeWrite(() => _jobFileDao.markFileFailed(
                   file.id,
                   'Verification failed: size mismatch',
                 ));
             failedCount++;
-            _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
+            _logService?.warning(
+              'Size mismatch for ${file.fileName}',
+              jobId: job.id,
+              phase: LogPhase.verify,
+            );
           }
+          await _safeWrite(() => _jobDao.updateJobProgress(
+                job.id,
+                completedFiles: completedCount,
+                completedBytes: completedBytes,
+              ));
         }
-        await _safeWrite(() => _jobDao.updateJobProgress(
-              job.id,
-              completedFiles: completedCount,
-              completedBytes: completedBytes,
-            ));
       } else {
         await _safeWrite(() =>
             _jobFileDao.markFileFailed(file.id, 'Transfer failed'));
@@ -584,21 +643,38 @@ class JobQueueService {
           completedBytes: completedBytes,
         ));
 
-    final allVerified = failedCount == 0;
     if (failedCount > 0) {
-      _logService?.error('Job #${job.id} failed — $completedCount transferred, $failedCount failed verification');
+      _logService?.error(
+        'Job failed — $completedCount transferred, $failedCount failed copy',
+        jobId: job.id,
+        phase: LogPhase.finalize,
+      );
       await _safeWrite(() => _jobDao.markJobFailed(
             job.id,
-            '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed verification',
+            '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed copy',
           ));
     } else {
-      _logService?.info('Job #${job.id} completed — $completedCount files transferred');
+      // 017 (FR-004): mismatchedCount > 0 does NOT fail the job — bytes
+      // are on disk, just not trusted. Soft fail surfaced via banner +
+      // Slack warning prefix below. Operator decides next action.
+      _logService?.info(
+        'Job completed — $completedCount transferred, '
+        '$verifiedCount verified, $unverifiedCount unverified, '
+        '$mismatchedCount mismatch',
+        jobId: job.id,
+        phase: LogPhase.finalize,
+      );
       await _safeWrite(() => _jobDao.markJobCompleted(job.id));
     }
+    // 017 (T043, FR-016): Slack call expanded with per-state verify
+    // counts. Warning prefix fires automatically when
+    // mismatchedCount > 0 or unverifiedCount > 0.
     await _slackService.notifyTransferCompleted(
       job: job,
       completedFiles: completedCount,
-      allVerified: allVerified,
+      verifiedFiles: verifiedCount,
+      unverifiedFiles: unverifiedCount,
+      mismatchedFiles: mismatchedCount,
     );
   }
 
@@ -726,13 +802,43 @@ class JobQueueService {
       );
     } else {
       _logService?.info(
-        'Job #${job.id} compression completed — $completedCount files',
+        'Compression completed — $completedCount files',
+        jobId: job.id,
+        phase: LogPhase.finalize,
       );
       await _safeWrite(() => _jobDao.markJobCompleted(job.id));
+
+      // 017 (T045, FR-019): for chained compression, query parent's
+      // transfer-phase verify counts and pass them through to Slack so
+      // the final ping surfaces transfer-side outcomes (Codex H3 closure).
+      Job? parentTransferJob;
+      int? parentVerifiedFiles;
+      int? parentUnverifiedFiles;
+      int? parentMismatchedFiles;
+      if (job.parentJobId != null) {
+        parentTransferJob = await _jobDao.getJob(job.parentJobId!);
+        if (parentTransferJob != null) {
+          final parentFiles =
+              await _jobFileDao.getFilesForJob(parentTransferJob.id);
+          parentVerifiedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.verified)
+              .length;
+          parentUnverifiedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.unverified)
+              .length;
+          parentMismatchedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.mismatch)
+              .length;
+        }
+      }
       await _slackService.notifyCompressionCompleted(
         job: job,
         completedFiles: completedCount,
         totalFiles: files.length,
+        parentTransferJob: parentTransferJob,
+        parentVerifiedFiles: parentVerifiedFiles,
+        parentUnverifiedFiles: parentUnverifiedFiles,
+        parentMismatchedFiles: parentMismatchedFiles,
       );
     }
   }
@@ -992,6 +1098,10 @@ class JobQueueService {
         presetName: Value(transferJob.presetName),
         sortOrder: Value(baseOrder + 1),
         createdAt: DateTime.now(),
+        // 017 (T045, FR-019): link this chained compression to its
+        // transferAndCompress parent so notifyCompressionCompleted can
+        // surface the parent's verify counts (Constitution V).
+        parentJobId: Value(transferJob.id),
       ),
       buildFiles: (newJobId) => ready
           .map((f) => JobFilesCompanion.insert(

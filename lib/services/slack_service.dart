@@ -59,22 +59,37 @@ class SlackService {
     );
   }
 
+  /// 017 (T043, FR-016): expanded with per-state verify counts. Warning
+  /// prefix when mismatchedFiles > 0 OR unverifiedFiles > 0; clean
+  /// checkmark only when both are zero. Constitution Principle V —
+  /// operators walking away receive actionable detail about non-clean
+  /// completions rather than a misleading green check.
   Future<void> notifyTransferCompleted({
     required Job job,
     required int completedFiles,
-    bool allVerified = true,
+    required int verifiedFiles,
+    required int unverifiedFiles,
+    required int mismatchedFiles,
   }) async {
     final totalGb = formatBytes(job.totalBytes);
     final duration = job.startedAt != null
         ? DateTime.now().difference(job.startedAt!).inMinutes
         : 0;
+    final mode = job.verificationMode == VerificationMode.sha256 ? 'SHA-256' : 'Size';
+    final verdict = mismatchedFiles > 0
+        ? '⚠ $mismatchedFiles file(s) FAILED verification'
+        : unverifiedFiles > 0
+            ? '⚠ $unverifiedFiles file(s) copied but UNVERIFIED'
+            : 'Verification: $mode — Passed';
+    final emoji = (mismatchedFiles > 0 || unverifiedFiles > 0) ? '⚠' : '✅';
     await _send(
-      '✅ *Transfer Complete*\n'
+      '$emoji *Transfer Complete*\n'
       'Job: ${job.id}${_operatorLine(job)}\n'
       'Files: $completedFiles/${job.totalFiles}\n'
+      'Verified: $verifiedFiles · Unverified: $unverifiedFiles · Mismatch: $mismatchedFiles\n'
       'Size: $totalGb\n'
       'Duration: $duration min\n'
-      'Verification: ${job.verificationMode == VerificationMode.sha256 ? "SHA-256" : "Size"} — ${allVerified ? "Passed" : "FAILED — some files did not match"}',
+      '$verdict',
     );
   }
 
@@ -103,20 +118,45 @@ class SlackService {
     );
   }
 
+  /// 017 (T044, FR-019): expanded with parent transfer-phase verify
+  /// counts. For chained compression jobs (created by
+  /// `_createChainedCompressionJob` from a transferAndCompress parent),
+  /// pass the parent's verify counts so the operator's final Slack ping
+  /// surfaces transfer-side outcomes — closes the cross-phase notification
+  /// gap (Constitution Principle V).
+  ///
+  /// Standalone compression jobs (no parent) pass null for all 4 parent
+  /// params; the verify line is omitted.
   Future<void> notifyCompressionCompleted({
     required Job job,
     required int completedFiles,
     required int totalFiles,
+    Job? parentTransferJob,
+    int? parentVerifiedFiles,
+    int? parentUnverifiedFiles,
+    int? parentMismatchedFiles,
   }) async {
     final duration = job.startedAt != null
         ? DateTime.now().difference(job.startedAt!).inMinutes
         : 0;
-    await _send(
-      '✅ *Compression Complete*\n'
-      'Job: ${job.id}${_operatorLine(job)}\n'
-      'Files: $completedFiles/$totalFiles\n'
-      'Duration: $duration min',
-    );
+    final hasParent = parentTransferJob != null;
+    final mismatched = parentMismatchedFiles ?? 0;
+    final unverified = parentUnverifiedFiles ?? 0;
+    final verifyLine = hasParent
+        ? (mismatched > 0
+            ? '⚠ Transfer verification: $mismatched file(s) FAILED'
+            : unverified > 0
+                ? '⚠ Transfer verification: $unverified file(s) UNVERIFIED'
+                : 'Transfer verification: ${parentVerifiedFiles ?? 0} verified · Passed')
+        : null;
+    final emoji = (mismatched > 0 || unverified > 0) ? '⚠' : '✅';
+    final body = StringBuffer()
+      ..writeln('$emoji *Compression Complete*')
+      ..writeln('Job: ${job.id}${_operatorLine(job)}')
+      ..writeln('Files: $completedFiles/$totalFiles')
+      ..writeln('Duration: $duration min');
+    if (verifyLine != null) body.writeln(verifyLine);
+    await _send(body.toString().trimRight());
   }
 
   Future<void> notifyJobFailed({
