@@ -215,6 +215,40 @@ class JobQueueService {
     return completer.future;
   }
 
+  /// 017B (Codex round-14 P2 #2): after the operator resolves verify
+  /// warnings on a transferAndCompress parent (Retry or Accept), the
+  /// auto-chain that was suppressed at finalize time needs a way to
+  /// fire. This helper:
+  ///   - returns false if [parentJobId] isn't a transferAndCompress
+  ///     OR if a chained child already exists OR if files still have
+  ///     unresolved mismatch/unverified rows.
+  ///   - otherwise creates the chained compression job and returns
+  ///     true.
+  /// Operator-attribution: only called from explicit "Resume
+  /// compression" / "Accept" UI handlers, never from the executor.
+  Future<bool> maybeChainCompression(int parentJobId) async {
+    final parent = await _jobDao.getJob(parentJobId);
+    if (parent == null) return false;
+    if (parent.type != JobType.transferAndCompress) return false;
+    if (await _jobDao.hasChainedChild(parentJobId)) return false;
+
+    final files = await _jobFileDao.getFilesForJob(parentJobId);
+    final hasNonClean = files.any((f) =>
+        f.verifyStatus == VerifyStatus.mismatch ||
+        f.verifyStatus == VerifyStatus.unverified);
+    if (hasNonClean) return false;
+
+    await _createChainedCompressionJob(parent);
+    _logService?.info(
+      'Operator-resumed compression chain for transferAndCompress '
+      'parent #${parent.id}',
+      jobId: parent.id,
+      phase: LogPhase.finalize,
+    );
+    await startProcessing();
+    return true;
+  }
+
   /// 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a single
   /// file (typically after a verify mismatch). When [forceDestDelete] is
   /// true, the next pass through `_processTransfer` will delete the

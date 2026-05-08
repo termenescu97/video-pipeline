@@ -167,6 +167,24 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     );
   }
 
+  /// 017B (Codex round-14 P2 #1+#2): operator-accepted unverified.
+  /// Bytes on disk are kept; verifyStatus flips from `unverified`
+  /// (SHA-256 subsystem failure) to `notVerified` (size-mode baseline)
+  /// so the auto-chain gate in JobQueueService stops blocking
+  /// transferAndCompress parents. failureKind cleared. errorMessage
+  /// preserves the operator override for audit.
+  Future<void> acceptUnverified(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      const JobFilesCompanion(
+        verifyStatus: Value(VerifyStatus.notVerified),
+        failureKind: Value(FailureKind.none),
+        errorMessage: Value(
+            'Operator accepted SHA-256 subsystem failure — bytes on disk '
+            'retained without cryptographic verification.'),
+      ),
+    );
+  }
+
   /// 017B (Codex round-8 P2 #3): operator-accepted mismatch. Transitions
   /// a `verifyStatus=mismatch` row back to `verifyStatus=verified` so
   /// the active-card banner disappears; preserves the audit trail by

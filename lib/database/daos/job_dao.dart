@@ -410,6 +410,18 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.isIn(jobIds))).get();
   }
 
+  /// 017B (Codex round-14 P2 #2): does any compression job already
+  /// link back to [parentJobId] via Job.parentJobId? Used to suppress
+  /// duplicate auto-chain attempts after the operator resolves
+  /// mismatch/unverified warnings on a transferAndCompress parent.
+  Future<bool> hasChainedChild(int parentJobId) async {
+    final row = await (select(jobs)
+          ..where((t) => t.parentJobId.equals(parentJobId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row != null;
+  }
+
   /// Get completed and failed jobs as a one-time list (for CSV export).
   Future<List<Job>> getCompletedJobsList() {
     return (select(jobs)

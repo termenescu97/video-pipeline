@@ -40,6 +40,13 @@ class JobCardDone extends StatelessWidget {
     // attention-state dot AND a Retry menu entry — without this, a job
     // whose ONLY failure mode was verify mismatch would land in
     // history with no recovery path (only failed jobs get Retry).
+    //
+    // 017B (Codex round-14 P2 #1): unverified rows (SHA-256 subsystem
+    // failure, bytes might be fine) get the same treatment — without
+    // it, an unverified-only job has no way to either re-attempt the
+    // hash check or accept the warning, and a transferAndCompress
+    // parent with such a job is stuck because the auto-chain is
+    // suppressed but the warning can't be cleared.
     return StreamBuilder<List<JobFile>>(
       stream: jobFileDao.watchFilesForJob(job.id),
       builder: (context, snapshot) {
@@ -48,18 +55,26 @@ class JobCardDone extends StatelessWidget {
             .where((f) => f.verifyStatus == VerifyStatus.mismatch)
             .map((f) => f.id)
             .toList();
-        return _buildCard(context, mismatchedIds);
+        final unverifiedIds = files
+            .where((f) => f.verifyStatus == VerifyStatus.unverified)
+            .map((f) => f.id)
+            .toList();
+        return _buildCard(context, mismatchedIds, unverifiedIds);
       },
     );
   }
 
-  Widget _buildCard(BuildContext context, List<int> mismatchedIds) {
+  Widget _buildCard(
+      BuildContext context, List<int> mismatchedIds, List<int> unverifiedIds) {
     final hasMismatch = mismatchedIds.isNotEmpty;
+    final hasUnverified = unverifiedIds.isNotEmpty;
     final scheme = Theme.of(context).colorScheme;
     final statusColors = Theme.of(context).extension<StatusColors>()!;
     final dotColor = (job.status == JobStatus.failed || hasMismatch)
         ? statusColors.dotAttention
-        : statusColors.dotRecentDone;
+        : (hasUnverified
+            ? statusColors.dotWarning
+            : statusColors.dotRecentDone);
     final src = p.basename(job.sourcePath.replaceAll(RegExp(r'[/\\]$'), ''));
     final dst =
         p.basename(job.destinationPath.replaceAll(RegExp(r'[/\\]$'), ''));
@@ -68,8 +83,8 @@ class JobCardDone extends StatelessWidget {
         : '';
 
     return GestureDetector(
-      onSecondaryTapDown: (details) =>
-          _showContextMenu(context, details.globalPosition, mismatchedIds),
+      onSecondaryTapDown: (details) => _showContextMenu(
+          context, details.globalPosition, mismatchedIds, unverifiedIds),
       child: Card(
         clipBehavior: Clip.antiAlias,
         // Use a slightly muted surface for the "dimmed" look.
@@ -120,6 +135,14 @@ class JobCardDone extends StatelessWidget {
                         size: 16, color: statusColors.error),
                   ),
                   const SizedBox(width: Insets.xs),
+                ] else if (hasUnverified) ...[
+                  Tooltip(
+                    message: '${unverifiedIds.length} file(s) unverified '
+                        '(hash subsystem failure) — right-click to Retry verify',
+                    child: Icon(Icons.help_outline,
+                        size: 16, color: statusColors.warning),
+                  ),
+                  const SizedBox(width: Insets.xs),
                 ],
                 Builder(
                   builder: (btnContext) => IconButton(
@@ -130,7 +153,8 @@ class JobCardDone extends StatelessWidget {
                       final box = btnContext.findRenderObject() as RenderBox?;
                       final pos = box?.localToGlobal(Offset.zero) ??
                           Offset.zero;
-                      _showContextMenu(context, pos, mismatchedIds);
+                      _showContextMenu(
+                          context, pos, mismatchedIds, unverifiedIds);
                     },
                   ),
                 ),
@@ -155,8 +179,9 @@ class JobCardDone extends StatelessWidget {
   }
 
   void _showContextMenu(BuildContext context, Offset position,
-      List<int> mismatchedIds) {
+      List<int> mismatchedIds, List<int> unverifiedIds) {
     final hasMismatch = mismatchedIds.isNotEmpty;
+    final hasUnverified = unverifiedIds.isNotEmpty;
     showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -182,6 +207,23 @@ class JobCardDone extends StatelessWidget {
             child: Text(
                 'Accept ${mismatchedIds.length} mismatch(es) (skip retry)'),
           ),
+        // 017B (Codex round-14 P2 #1): unverified rows need their own
+        // retry/accept paths. Retry re-runs hash verification only;
+        // Accept marks the file as accepted-baseline so a
+        // transferAndCompress parent can resume its compression chain
+        // via maybeChainCompression below.
+        if (hasUnverified)
+          PopupMenuItem(
+            value: 'retry-unverified',
+            child: Text(
+                'Retry verify on ${unverifiedIds.length} unverified file(s)'),
+          ),
+        if (hasUnverified)
+          PopupMenuItem(
+            value: 'accept-unverified',
+            child: Text(
+                'Accept ${unverifiedIds.length} unverified (compress as-is)'),
+          ),
         const PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
     ).then((value) {
@@ -194,8 +236,78 @@ class JobCardDone extends StatelessWidget {
       if (value == 'accept-mismatched') {
         _acceptMismatchedFiles(context, mismatchedIds);
       }
+      if (value == 'retry-unverified') {
+        _retryUnverifiedFiles(context, unverifiedIds);
+      }
+      if (value == 'accept-unverified') {
+        _acceptUnverifiedFiles(context, unverifiedIds);
+      }
       if (value == 'delete') onDelete?.call();
     });
+  }
+
+  /// 017B (Codex round-14 P2 #1): re-run hash verification on rows
+  /// that previously hit a SHA-256 subsystem failure. Bytes on disk
+  /// are believed correct; we just couldn't compute the hash. No
+  /// forceDestDelete — the dest is kept and re-hashed.
+  Future<void> _retryUnverifiedFiles(
+      BuildContext context, List<int> ids) async {
+    final messenger = ScaffoldMessenger.of(context);
+    for (final id in ids) {
+      await jobQueueService.retryFile(id, forceDestDelete: false);
+    }
+    await jobQueueService.startProcessing();
+    messenger.showSnackBar(
+      SnackBar(
+          content: Text('Re-running SHA-256 verify on ${ids.length} file(s)')),
+    );
+  }
+
+  /// 017B (Codex round-14 P2 #1+#2): operator accepts the unverified
+  /// state — bytes on disk are kept; the file rows transition from
+  /// `unverified` to `notVerified` (size-mode baseline) so the
+  /// auto-chain gate stops blocking. After flipping the rows,
+  /// maybeChainCompression checks whether THIS job is a
+  /// transferAndCompress parent with no chained child yet AND no
+  /// remaining warnings; if so, the chained compression job is
+  /// created and the queue resumes.
+  Future<void> _acceptUnverifiedFiles(
+      BuildContext context, List<int> ids) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Accept unverified files?'),
+        content: Text(
+          '${ids.length} file(s) on disk could not be hashed (SHA-256 '
+          'subsystem failed). Accepting treats them as size-only '
+          'verified — the bytes are kept; future verification will '
+          'not re-run on this batch.\n\n'
+          'Only proceed if you have already confirmed the bytes are '
+          'the version you want to keep.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Accept unverified')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    for (final id in ids) {
+      await jobFileDao.acceptUnverified(id);
+    }
+    final chained = await jobQueueService.maybeChainCompression(job.id);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(chained
+            ? '${ids.length} unverified accepted — compression chain resumed'
+            : '${ids.length} unverified accepted'),
+      ),
+    );
   }
 
   /// 017B (Codex round-12 P2): operator accepts the mismatch from
@@ -232,10 +344,16 @@ class JobCardDone extends StatelessWidget {
     for (final id in ids) {
       await jobFileDao.acceptMismatch(id);
     }
+    // 017B (Codex round-14 P2 #2): if this is a transferAndCompress
+    // parent whose auto-chain was suppressed, the operator's Accept
+    // may have cleared the last blocker — try to resume the chain.
+    final chained = await jobQueueService.maybeChainCompression(job.id);
     messenger.showSnackBar(
       SnackBar(
-        content: Text('${ids.length} mismatch(es) accepted by operator '
-            '— audit trail preserved'),
+        content: Text(chained
+            ? '${ids.length} mismatch(es) accepted — compression chain resumed'
+            : '${ids.length} mismatch(es) accepted by operator '
+                '— audit trail preserved'),
       ),
     );
   }
