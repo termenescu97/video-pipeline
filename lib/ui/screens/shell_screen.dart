@@ -159,32 +159,85 @@ class _ShellScreenState extends State<ShellScreen>
     exit(0);
   }
 
-  /// Stop the queue, await state persistence, then close log/lock/DB.
-  /// Wrapped in a 30-second outer safety timeout so a stuck subprocess
-  /// can't keep the app alive indefinitely.
+  /// Phased graceful shutdown (016).
+  ///
+  /// Replaces the v2.4.0 single-30s-timeout-around-everything pattern,
+  /// which would skip cleanup entirely if `stopProcessing` blocked on a
+  /// subprocess that wouldn't die (kernel-pinned I/O, stuck network
+  /// share). The phased structure splits shutdown into:
+  ///
+  ///   - Phase A: signal stop + send subprocess kill (non-blocking).
+  ///   - Phase B: bounded 10 s wait for the queue drain. On timeout,
+  ///     mark the queue abandoned so any late writes from the loop
+  ///     short-circuit cleanly instead of hitting a closed DB.
+  ///   - Phase C: independent cleanup steps. ALWAYS run regardless of
+  ///     Phase B outcome. Order: DB close → lock release → log close
+  ///     (with 2 s timeout on log close as belt-and-suspenders against
+  ///     a hung disk).
+  ///
+  /// `recoverStaleJobs` on the next launch picks up any inProgress
+  /// rows whose post-cancel `resetFileToPending` was abandoned.
+  ///
+  /// Plan: ~/.claude/plans/playful-brewing-peach.md (016).
   Future<void> _gracefulShutdown() async {
+    if (_shuttingDown) return;
     _shuttingDown = true;
+
+    // Phase A — signal stop + send subprocess kill (non-blocking).
+    final drain = jobQueueService.stopProcessing();
+
+    // Phase B — bounded wait for queue drain. 10 s is generous for
+    // normal cancellation (the loop's last DB writes are millisecond-
+    // scale) and short enough that the operator's window-close gesture
+    // feels responsive when a subprocess is actually stuck.
     try {
-      await Future(() async {
-        // Wait for the queue to actually stop. No timeout here — state
-        // persistence MUST complete to prevent DB corruption.
-        await jobQueueService.stopProcessing();
-        logService.info('App closed');
-        await logService.close();
-        await instanceLock.release();
-        await database.close();
-      }).timeout(
-        const Duration(seconds: 30),
-        onTimeout: () {
-          // Last-resort: shutdown sequence stuck. Close what we can and
-          // proceed; the OS will reap any remaining handles on exit.
-          stderr.writeln(
-            '[shutdown] Timed out after 30s — forcing close.',
-          );
-        },
+      await drain.timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      jobQueueService.markShutdownAbandoned();
+      stderr.writeln(
+        '[shutdown] Queue drain timed out after 10s — abandoning '
+        'drain and proceeding to cleanup. recoverStaleJobs handles '
+        'stale rows on next launch.',
       );
+      logService.warning(
+        'Shutdown drain timed out — drain Future may resolve later '
+        'but will write against a closed DB; markShutdownAbandoned '
+        'was called to short-circuit. recoverStaleJobs on next '
+        'launch picks up any inProgress rows.',
+      );
+    } catch (e, st) {
+      jobQueueService.markShutdownAbandoned();
+      stderr.writeln('[shutdown] Drain wait threw: $e');
+      logService.error(
+        'Shutdown drain threw: $e\n'
+        '${st.toString().split("\n").take(3).join("\n")}',
+      );
+    }
+
+    // Phase C — independent cleanup steps. Each guarded so a failure
+    // in one does NOT skip the rest. Order: DB close FIRST (load-
+    // bearing for data integrity), lock release SECOND, log close
+    // LAST (best-effort, time-bounded).
+    try {
+      await database.close();
     } catch (e) {
-      stderr.writeln('[shutdown] Error during shutdown: $e');
+      stderr.writeln('[shutdown] database.close failed: $e');
+    }
+    try {
+      await instanceLock.release();
+    } catch (e) {
+      stderr.writeln('[shutdown] instanceLock.release failed: $e');
+    }
+    try {
+      logService.info('App closed');
+      // 2 s timeout on log close. The DB is already closed by this
+      // point, so even if log close hangs we don't lose data
+      // integrity — just a final log line.
+      await logService.close().timeout(const Duration(seconds: 2));
+    } on TimeoutException {
+      stderr.writeln('[shutdown] logService.close timed out after 2s');
+    } catch (e) {
+      stderr.writeln('[shutdown] logService.close failed: $e');
     }
   }
 

@@ -56,6 +56,21 @@ class JobQueueService {
   // Stop (operator action, tray quit, window close) versus draining
   // naturally. Used to decide whether to emit the queue-all-done event.
   bool _stoppedByUser = false;
+  // 016: set by shell_screen's _gracefulShutdown when the Phase B drain
+  // wait times out and we proceed to Phase C without the loop having
+  // finished. Once true, any late-arriving DB writes from the loop
+  // (e.g., a `resetFileToPending` after a slow subprocess finally
+  // exits) are short-circuited so they don't throw into a closed
+  // Drift connection. recoverStaleJobs picks up any remaining
+  // inProgress rows on the next launch.
+  bool _shutdownAbandoned = false;
+
+  /// Mark the queue as "shutdown abandoned." See [_shutdownAbandoned].
+  /// Idempotent. Called from `shell_screen._gracefulShutdown` on Phase
+  /// B timeout or unexpected throw; safe to call any number of times.
+  void markShutdownAbandoned() {
+    _shutdownAbandoned = true;
+  }
 
   /// Real-time progress data for UI consumption.
   final ValueNotifier<ProgressData?> progressNotifier = ValueNotifier(null);
@@ -400,8 +415,17 @@ class JobQueueService {
       // was killed and `success` is false — but this is NOT a real
       // failure. Reset the file to pending so robocopy /Z resumes
       // cleanly when the operator restarts the queue.
+      // 016: guarded by `_shutdownAbandoned` + try/catch — if Phase C
+      // already closed the DB before this drain Future resolved, skip
+      // the write rather than throwing.
       if (!_isProcessing) {
-        await _jobFileDao.resetFileToPending(file.id);
+        if (!_shutdownAbandoned) {
+          try {
+            await _jobFileDao.resetFileToPending(file.id);
+          } catch (_) {
+            // DB closed mid-drain. recoverStaleJobs handles next launch.
+          }
+        }
         break;
       }
 
@@ -422,8 +446,15 @@ class JobQueueService {
           // Same cancellation guard for the hashing subprocesses: if the
           // operator stopped during hashing, the hash runners were
           // killed. Reset the file to pending; recovery will re-verify.
+          // 016: same shutdown-abandonment guard.
           if (!_isProcessing) {
-            await _jobFileDao.resetFileToPending(file.id);
+            if (!_shutdownAbandoned) {
+              try {
+                await _jobFileDao.resetFileToPending(file.id);
+              } catch (_) {
+                // DB closed mid-drain. recoverStaleJobs handles it.
+              }
+            }
             break;
           }
 
@@ -510,8 +541,17 @@ class JobQueueService {
     }
 
     // Check if interrupted by stop.
+    // 016: guard the late status flip so an abandoned drain doesn't
+    // write into a closed DB if Phase C already ran. recoverStaleJobs
+    // on next launch handles the inProgress→paused transition.
     if (!_isProcessing) {
-      await _jobDao.updateJobStatus(job.id, JobStatus.paused);
+      if (!_shutdownAbandoned) {
+        try {
+          await _jobDao.updateJobStatus(job.id, JobStatus.paused);
+        } catch (_) {
+          // DB closed mid-drain. recoverStaleJobs handles it.
+        }
+      }
       return;
     }
 
@@ -596,8 +636,15 @@ class JobQueueService {
       // Cancellation guard: if HandBrake was killed by stopProcessing,
       // `success` is false but this is not a real failure — reset to
       // pending so the file can be re-processed on resume.
+      // 016: same shutdown-abandonment guard as the transfer branch.
       if (!_isProcessing) {
-        await _jobFileDao.resetFileToPending(file.id);
+        if (!_shutdownAbandoned) {
+          try {
+            await _jobFileDao.resetFileToPending(file.id);
+          } catch (_) {
+            // DB closed mid-drain. recoverStaleJobs handles next launch.
+          }
+        }
         break;
       }
 
@@ -627,8 +674,15 @@ class JobQueueService {
     }
 
     // Check if interrupted by stop.
+    // 016: same shutdown-abandonment guard as the transfer branch.
     if (!_isProcessing) {
-      await _jobDao.updateJobStatus(job.id, JobStatus.paused);
+      if (!_shutdownAbandoned) {
+        try {
+          await _jobDao.updateJobStatus(job.id, JobStatus.paused);
+        } catch (_) {
+          // DB closed mid-drain. recoverStaleJobs handles it.
+        }
+      }
       return;
     }
 
