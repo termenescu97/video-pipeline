@@ -96,14 +96,23 @@ class AppDatabase extends _$AppDatabase {
                 )
             ''');
             // Size-only verification does NOT establish cryptographic
-            // trust (Codex M5). Map to unverified.
+            // trust (Codex M5). Map to unverified — but ONLY for
+            // transfer-type jobs. Compression jobs also have
+            // verification_mode='size' (default) and verified=true,
+            // but the verify axis doesn't apply to them at all
+            // (FR-017 hide-rule). Backfilling them as unverified
+            // would inflate jobs.unverified_files and surface
+            // misleading warnings on history compression jobs.
+            // Codex round-3 P2 #1 fix.
             await customStatement('''
               UPDATE job_files
               SET verify_status = 'unverified'
               WHERE status = 'completed'
                 AND verified = 1
                 AND job_id IN (
-                  SELECT id FROM jobs WHERE verification_mode = 'size'
+                  SELECT id FROM jobs
+                  WHERE verification_mode = 'size'
+                    AND type IN ('transfer', 'transferAndCompress')
                 )
             ''');
             // status=completed + verified=false: rare (recovery edge);

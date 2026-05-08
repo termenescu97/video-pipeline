@@ -436,7 +436,28 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           completedBytes: Value(0),
         ),
       );
-      // Reset failed files to pending.
+      // 017 (Codex round-3 P2 #2): files that previously failed with
+      // failureKind='verifyMismatch' (either v8 forward-operation or
+      // v7→v8 migrated) get forceDestDeleteApproved=true on this
+      // retry pass. Without it, the same-size corrupt destination
+      // would be skipped by the size-match short-circuit and re-
+      // verify the same bad bytes — infinite loop. Set BEFORE the
+      // axis-clear below so the column update lands on the same row.
+      await (update(db.jobFiles)
+            ..where(
+              (t) =>
+                  t.jobId.equals(jobId) &
+                  t.failureKind.equalsValue(FailureKind.verifyMismatch),
+            ))
+          .write(
+        const JobFilesCompanion(
+          forceDestDeleteApproved: Value(true),
+        ),
+      );
+      // Reset failed files to pending. Verify axis cleared so re-run
+      // produces fresh hashes; failureKind reset to none so a
+      // subsequent retry without a fresh mismatch doesn't keep
+      // arming forceDestDeleteApproved.
       await (update(db.jobFiles)
             ..where(
               (t) =>
@@ -449,6 +470,10 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           status: Value(FileStatus.pending),
           errorMessage: Value(null),
           completedAt: Value(null),
+          verifyStatus: Value(VerifyStatus.pending),
+          failureKind: Value(FailureKind.none),
+          sourceHash: Value(null),
+          destinationHash: Value(null),
         ),
       );
     });
