@@ -270,6 +270,65 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     );
   }
 
+  /// 017 (T031, FR-003): bump Job.unverifiedFiles by 1 when a file's
+  /// hash subsystem failed (verifyStatus=unverified). Verified and
+  /// mismatched counts are derived from JobFile rows on read — no
+  /// stored column for those.
+  Future<void> incrementUnverified(int jobId) async {
+    await customStatement(
+      'UPDATE jobs SET unverified_files = unverified_files + 1 WHERE id = ?',
+      [jobId],
+    );
+  }
+
+  /// 017 (T032, FR-007/FR-018): re-derive Job-level aggregate counters
+  /// from per-file state. Called once per rescued job at the END of
+  /// recoverStaleJobs (after all stale-row mutations) so counters
+  /// match the persisted truth, regardless of which stale states were
+  /// detected. Single statement — Drift transaction is the caller's
+  /// responsibility if multi-job batching is needed.
+  Future<void> recomputeCountersFromFiles(int jobId) async {
+    await customStatement('''
+      UPDATE jobs
+      SET
+        completed_files = (
+          SELECT COUNT(*) FROM job_files
+          WHERE job_id = ? AND status = 'completed'
+        ),
+        completed_bytes = COALESCE((
+          SELECT SUM(file_size) FROM job_files
+          WHERE job_id = ? AND status = 'completed'
+        ), 0),
+        unverified_files = (
+          SELECT COUNT(*) FROM job_files
+          WHERE job_id = ? AND verify_status = 'unverified'
+        )
+      WHERE id = ?
+    ''', [jobId, jobId, jobId, jobId]);
+  }
+
+  /// 017 (T033, FR-018): the rescued-job set for recovery. Union of:
+  ///   (a) Job.status='inProgress' (existing v2.4.0 path)
+  ///   (b) jobs with at least one JobFile in inProgress state (existing)
+  ///   (c) jobs with at least one JobFile in completed+verifyStatus=pending
+  ///       (NEW v8 — abandoned shutdown mid-verify)
+  ///
+  /// Returns deduplicated job IDs. Caller iterates and calls
+  /// recomputeCountersFromFiles per ID after stale-row mutations.
+  Future<Set<int>> getRescuedJobIds() async {
+    final rows = await customSelect(
+      '''
+      SELECT DISTINCT id AS job_id FROM jobs WHERE status = 'inProgress'
+      UNION
+      SELECT DISTINCT job_id FROM job_files WHERE status = 'inProgress'
+      UNION
+      SELECT DISTINCT job_id FROM job_files
+        WHERE status = 'completed' AND verify_status = 'pending'
+      ''',
+    ).get();
+    return rows.map((r) => r.read<int>('job_id')).toSet();
+  }
+
   /// Get a single job by ID.
   Future<Job?> getJob(int jobId) {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();

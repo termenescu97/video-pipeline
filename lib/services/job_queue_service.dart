@@ -12,6 +12,7 @@ import '../database/tables.dart';
 import '../utils/constants.dart';
 import 'drive_service.dart';
 import 'log_service.dart';
+import 'planned_file.dart';
 import 'queue_state_notifier.dart';
 import 'slack_service.dart';
 import 'transfer_service.dart';
@@ -778,11 +779,11 @@ class JobQueueService {
 
       final subfolder = await buildCardSubfolder(drive);
       final cardDest = p.join(destination, subfolder);
-      final entries = <_PlannedFile>[];
+      final entries = <PlannedFile>[];
       for (final entity in files) {
         final size = await File(entity.path).length();
         final relativePath = p.relative(entity.path, from: drivePath);
-        entries.add(_PlannedFile(
+        entries.add(PlannedFile(
           sourcePath: entity.path,
           destinationPath: p.join(cardDest, relativePath),
           fileName: p.basename(entity.path),
@@ -909,9 +910,12 @@ class JobQueueService {
       // from triggering the executor's delete branch on the basis of
       // group approval that was never granted for this specific path.
       for (final plan in plans) {
-        for (final file in plan.files) {
+        for (var i = 0; i < plan.files.length; i++) {
+          final file = plan.files[i];
           if (File(file.destinationPath).existsSync()) {
-            file.wasOverwriteApproved = true;
+            // PlannedFile is immutable post-T024 consolidation — copyWith
+            // produces a new instance; in-place mutation no longer works.
+            plan.files[i] = file.copyWith(wasOverwriteApproved: true);
           }
         }
       }
@@ -919,7 +923,7 @@ class JobQueueService {
     }
 
     for (final plan in plans) {
-      final kept = <_PlannedFile>[];
+      final kept = <PlannedFile>[];
       for (final file in plan.files) {
         final exists = File(file.destinationPath).existsSync();
         if (!exists) {
@@ -1045,43 +1049,16 @@ class ConflictEntry {
   });
 }
 
-/// Internal: a planned file destination prior to job creation.
-class _PlannedFile {
-  String sourcePath;
-  String destinationPath;
-  String fileName;
-  int fileSize;
-
-  /// 015: stamped `true` by `_applyResolution` when the operator chose
-  /// `Overwrite` AND this file's dest existed at preflight time. The
-  /// executor honors the flag absolutely (delete dest pre-robocopy
-  /// regardless of size). Default `false` is the safe baseline.
-  /// TODO(refactor): consolidate with create_job_screen._PlannedFile —
-  /// see specs/014-ui-redesign Codex Phase 14 review.
-  bool wasOverwriteApproved;
-
-  _PlannedFile({
-    required this.sourcePath,
-    required this.destinationPath,
-    required this.fileName,
-    required this.fileSize,
-    this.wasOverwriteApproved = false,
-  });
-
-  _PlannedFile copyWith({String? destinationPath}) => _PlannedFile(
-        sourcePath: sourcePath,
-        destinationPath: destinationPath ?? this.destinationPath,
-        fileName: fileName,
-        fileSize: fileSize,
-        wasOverwriteApproved: wasOverwriteApproved,
-      );
-}
+/// 017 (T025): the duplicate `_PlannedFile` definition that lived here
+/// has been consolidated into `lib/services/planned_file.dart` per Codex
+/// M7 + R-A9. Both this file and `create_job_screen.dart` now import
+/// the shared `PlannedFile` class.
 
 /// Internal: the planned transfer for a single card in a batch.
 class _CardTransferPlan {
   final DetectedDrive drive;
   final String cardDestination;
-  final List<_PlannedFile> files;
+  final List<PlannedFile> files;
 
   _CardTransferPlan({
     required this.drive,
@@ -1092,6 +1069,6 @@ class _CardTransferPlan {
   factory _CardTransferPlan.empty(DetectedDrive drive) => _CardTransferPlan(
         drive: drive,
         cardDestination: '',
-        files: <_PlannedFile>[],
+        files: <PlannedFile>[],
       );
 }

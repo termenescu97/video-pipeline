@@ -118,12 +118,14 @@ class TransferService {
         },
       );
       if (exitCode != 0) {
-        // Final-review fix #7: surface the failure cause to the log
-        // so post-mortem can distinguish "permission denied" from
-        // "PowerShell missing" from "OOM".
+        // 017 (FR-012): pass raw stderr via subprocessStderr; LogService
+        // handles single-line truncation to 200 grapheme clusters.
+        // Distinguishes "permission denied" from "PS missing" without
+        // dumping a 6-line parser error.
         logService?.error(
-          'computeFileHash exit=$exitCode for "$filePath"'
-          '${stderr.isEmpty ? '' : ' — stderr: ${stderr.toString().trim()}'}',
+          'computeFileHash exit=$exitCode for "$filePath"',
+          phase: LogPhase.verify,
+          subprocessStderr: stderr.isEmpty ? null : stderr.toString(),
         );
         return null;
       }
@@ -133,17 +135,21 @@ class TransferService {
         logService?.error(
           'computeFileHash returned malformed output for "$filePath" '
           '(length=${hash.length}, expected 64)',
+          phase: LogPhase.verify,
         );
         return null;
       }
       return hash;
     } catch (e, st) {
       // Final-review fix #7: catch the exception detail (was `catch (_)`
-      // which lost the root cause). Log first three frames of stack so
-      // operator can hand the log to support without re-running.
+      // which lost the root cause). Stack frames passed via subprocessStderr
+      // so LogService truncates to one line — full stack would still be
+      // a multi-line dump otherwise.
+      final stackPreview = st.toString().split('\n').take(3).join(' | ');
       logService?.error(
-        'computeFileHash threw for "$filePath": $e\n'
-        '${st.toString().split('\n').take(3).join('\n')}',
+        'computeFileHash threw for "$filePath": $e',
+        phase: LogPhase.verify,
+        subprocessStderr: stackPreview,
       );
       return null;
     } finally {

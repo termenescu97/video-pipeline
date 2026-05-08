@@ -611,6 +611,8 @@ class _NoJob {
     autoChain: false,
     verificationMode: VerificationMode.size,
     createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+    unverifiedFiles: 0,
+    // parentJobId omitted — nullable, defaults to null.
   );
 }
 
