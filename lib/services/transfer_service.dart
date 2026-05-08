@@ -109,6 +109,31 @@ class TransferService {
     if (needsRename) {
       try {
         final staged = File(p.join(robocopyDestDir, sourceBasename));
+        final target = File(destinationFile);
+
+        // Codex round-8 P2 #1: resumed renamed transfer. If the prior
+        // run successfully renamed the staged file into destinationFile
+        // then crashed before markFileCompleted, the next pass'
+        // pre-robocopy safety section sees everAttempted=true +
+        // isPartial=false (size match) and falls into the "size matches
+        // on resumed file — letting robocopy skip + verification
+        // confirm idempotently" branch. transferFile still runs;
+        // robocopy copies a fresh copy into the staging dir; then this
+        // rename fails on Windows because target already exists. Treat
+        // size-matching pre-existing target as the prior run's
+        // completion and just discard the duplicate staged copy.
+        if (await target.exists() &&
+            await target.length() == await staged.length()) {
+          await staged.delete();
+          await stagingDir!.delete(recursive: true);
+          logService?.info(
+            'Resumed renamed transfer: target $destBasename already '
+            'matches source size — keeping existing dest, discarding '
+            'staged duplicate',
+          );
+          return true;
+        }
+
         await staged.rename(destinationFile);
         await stagingDir!.delete(recursive: true);
       } on FileSystemException catch (e) {

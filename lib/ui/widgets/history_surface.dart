@@ -11,7 +11,11 @@ import 'job_card_done.dart';
 
 /// 017B (FR-B06/B07/B08): cross-job history surface. Replaces the
 /// previous right-column ActivityPanel as the home for completed +
-/// failed history, but with three new affordances:
+/// failed history, but with three new affordances.
+///
+/// The shell hands us the same `expandedJobIds` set used by the active
+/// queue so a job's expansion state survives the queue → history
+/// transition (matches the v2.4.0 ActivityPanel behavior).
 ///
 ///   1. Search box filters by source path AND operator name (case-
 ///      insensitive substring) — Ctrl+H focuses the search box.
@@ -27,7 +31,17 @@ import 'job_card_done.dart';
 /// pipeline in-memory; performance is fine for the operator's
 /// expected scale (hundreds, not millions).
 class HistorySurface extends StatefulWidget {
-  const HistorySurface({super.key});
+  /// Shared expansion set — same one HomeScreen passes to its active
+  /// queue list, so a job that was expanded while in the active queue
+  /// stays expanded after it completes (Codex round-8 P2 #2 fix).
+  final Set<int> expandedJobIds;
+  final ValueChanged<int> onToggleExpanded;
+
+  const HistorySurface({
+    super.key,
+    required this.expandedJobIds,
+    required this.onToggleExpanded,
+  });
 
   @override
   State<HistorySurface> createState() => _HistorySurfaceState();
@@ -175,6 +189,8 @@ class _HistorySurfaceState extends State<HistorySurface> {
                   jobs: allJobs,
                   matchesFilter: _matchesFilter,
                   matchesQuery: _matchesQuery,
+                  expandedJobIds: widget.expandedJobIds,
+                  onToggleExpanded: widget.onToggleExpanded,
                 );
               },
             ),
@@ -204,11 +220,15 @@ class _FilteredHistoryList extends StatelessWidget {
   final List<Job> jobs;
   final bool Function(Job, _JobVerifyTally?) matchesFilter;
   final bool Function(Job) matchesQuery;
+  final Set<int> expandedJobIds;
+  final ValueChanged<int> onToggleExpanded;
 
   const _FilteredHistoryList({
     required this.jobs,
     required this.matchesFilter,
     required this.matchesQuery,
+    required this.expandedJobIds,
+    required this.onToggleExpanded,
   });
 
   @override
@@ -242,8 +262,8 @@ class _FilteredHistoryList extends StatelessWidget {
             final job = filtered[index];
             return JobCardDone(
               job: job,
-              isExpanded: false,
-              onTap: null,
+              isExpanded: expandedJobIds.contains(job.id),
+              onTap: () => onToggleExpanded(job.id),
               onRetry: job.status == JobStatus.failed
                   ? () => jobDao.resetJobForRetry(job.id)
                   : null,

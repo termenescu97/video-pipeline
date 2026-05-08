@@ -551,11 +551,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   // Sliver-form embed so it scrolls together with the
                   // active queue above; the history surface owns its
                   // own search box, status filters, and CSV export.
-                  const SliverToBoxAdapter(
+                  // Expansion state shared with the active queue so a
+                  // job that was expanded above stays expanded when it
+                  // transitions to history (Codex round-8 P2 #2).
+                  SliverToBoxAdapter(
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(
+                      padding: const EdgeInsets.fromLTRB(
                           Insets.s, Insets.l, Insets.s, Insets.s),
-                      child: HistorySurface(),
+                      child: HistorySurface(
+                        expandedJobIds: _expandedJobIds,
+                        onToggleExpanded: (id) =>
+                            widget.onToggleExpanded?.call(id),
+                      ),
                     ),
                   ),
                 ],

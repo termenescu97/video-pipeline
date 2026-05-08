@@ -148,6 +148,26 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     );
   }
 
+  /// 017B (Codex round-8 P2 #3): operator-accepted mismatch. Transitions
+  /// a `verifyStatus=mismatch` row back to `verifyStatus=verified` so
+  /// the active-card banner disappears; preserves the audit trail by
+  /// stamping errorMessage with the operator override and keeping the
+  /// stored hashes (sourceHash != destinationHash). The legacy
+  /// `verified` boolean is NOT flipped to true — it would lie about
+  /// cryptographic trust. Requires explicit operator action via the
+  /// banner Skip button (Constitution Principle I).
+  Future<void> acceptMismatch(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      const JobFilesCompanion(
+        verifyStatus: Value(VerifyStatus.verified),
+        failureKind: Value(FailureKind.none),
+        errorMessage: Value(
+            'Operator accepted SHA-256 mismatch — bytes on disk differ '
+            'from source but were retained by explicit operator approval.'),
+      ),
+    );
+  }
+
   /// 017 (T030, FR-006/FR-007): used by `recoverStaleJobs` to detect
   /// `status=completed && verifyStatus=pending` rows — files where
   /// robocopy succeeded before shutdown but the SHA-256 check never
