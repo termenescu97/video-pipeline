@@ -1226,6 +1226,20 @@ class JobQueueService {
       return;
     }
 
+    // Codex round-12 P1: the rename branch must check against the
+    // lowercased PLANNED-set, not just disk. After case-collision
+    // normalization, the planned set may contain `foo_1.mov` as the
+    // second occurrence of a case-collision; a naive disk-only
+    // _suffixedPath for the original `FOO.mov` would happily pick
+    // `FOO_1.mov` (lowercased = same NTFS key) and re-collide. Build
+    // the lowercased claimed set from EVERY plan in this batch, then
+    // route renames through _suffixedPathAgainst.
+    final claimedLower = <String>{};
+    for (final plan in plans) {
+      for (final file in plan.files) {
+        claimedLower.add(file.destinationPath.toLowerCase());
+      }
+    }
     for (final plan in plans) {
       final kept = <PlannedFile>[];
       for (final file in plan.files) {
@@ -1236,11 +1250,18 @@ class JobQueueService {
         }
         switch (resolution) {
           case ConflictResolution.skip:
-            // drop
+            // drop — release the claimed key so a later rename can use it.
+            claimedLower.remove(file.destinationPath.toLowerCase());
             break;
           case ConflictResolution.rename:
-            kept.add(file.copyWith(
-                destinationPath: _suffixedPath(file.destinationPath)));
+            // Drop the original claimed key (we're about to relocate
+            // the file), then mint a suffix that's free both on disk
+            // AND across the rest of the planned set.
+            claimedLower.remove(file.destinationPath.toLowerCase());
+            final renamed =
+                _suffixedPathAgainst(file.destinationPath, claimedLower);
+            claimedLower.add(renamed.toLowerCase());
+            kept.add(file.copyWith(destinationPath: renamed));
             break;
           case ConflictResolution.overwrite:
           case ConflictResolution.cancel:
@@ -1255,19 +1276,9 @@ class JobQueueService {
     }
   }
 
-  /// Append `_1`, `_2`, ... before the file extension until a free path
-  /// is found.
-  String _suffixedPath(String path) {
-    final dir = p.dirname(path);
-    final ext = p.extension(path);
-    final stem = p.basenameWithoutExtension(path);
-    var i = 1;
-    while (true) {
-      final candidate = p.join(dir, '${stem}_$i$ext');
-      if (!File(candidate).existsSync()) return candidate;
-      i++;
-    }
-  }
+  // _suffixedPath retired — _applyResolution now uses
+  // _suffixedPathAgainst with the lowercased planned-set so suffix
+  // generation can't re-collide on NTFS (Codex round-12 P1 fix).
 
   /// 017 (T058, FR-008, Codex H3): suffixed-rename variant that ALSO
   /// rejects candidates whose lowercased form is already claimed in

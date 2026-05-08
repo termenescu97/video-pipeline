@@ -155,7 +155,14 @@ class JobCardActive extends StatelessWidget {
                     // banner. Reads JobFile snapshots and computes tally
                     // once per build. Hidden for compression-only jobs
                     // (FR-017) — verify is a transfer-side concern.
-                    if (job.type != JobType.compression)
+                    // 017B (Codex round-12 P2): the verify-axis stats +
+                    // mismatch banner are SHA-256 concerns. Size-mode
+                    // jobs would render "0 / N verified" forever (rows
+                    // are notVerified by design, not verified) — that's
+                    // misleading. Hide for compression jobs (FR-017)
+                    // AND for size-mode jobs.
+                    if (job.type != JobType.compression &&
+                        job.verificationMode == VerificationMode.sha256)
                       StreamBuilder<List<JobFile>>(
                         stream: jobFileDao.watchFilesForJob(job.id),
                         builder: (context, snapshot) {

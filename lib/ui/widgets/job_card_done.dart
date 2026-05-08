@@ -173,6 +173,15 @@ class JobCardDone extends StatelessWidget {
             value: 'retry-mismatched',
             child: Text('Retry ${mismatchedIds.length} mismatched file(s)'),
           ),
+        // 017B (Codex round-12 P2): accept the mismatch path. Mirrors the
+        // active-card banner's Skip button: operator explicitly retains
+        // the on-disk bytes, audit trail preserved.
+        if (hasMismatch)
+          PopupMenuItem(
+            value: 'accept-mismatched',
+            child: Text(
+                'Accept ${mismatchedIds.length} mismatch(es) (skip retry)'),
+          ),
         const PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
     ).then((value) {
@@ -182,8 +191,53 @@ class JobCardDone extends StatelessWidget {
       if (value == 'retry-mismatched') {
         _retryMismatchedFiles(context, mismatchedIds);
       }
+      if (value == 'accept-mismatched') {
+        _acceptMismatchedFiles(context, mismatchedIds);
+      }
       if (value == 'delete') onDelete?.call();
     });
+  }
+
+  /// 017B (Codex round-12 P2): operator accepts the mismatch from
+  /// history. Same typed-confirmation gate as the active-card banner's
+  /// Skip; verifyStatus flips from `mismatch` to `verified` so the
+  /// attention chip clears, but the audit trail (sourceHash,
+  /// destinationHash, errorMessage) is preserved.
+  Future<void> _acceptMismatchedFiles(
+      BuildContext context, List<int> ids) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Accept SHA-256 mismatch?'),
+        content: Text(
+          '${ids.length} file(s) on disk differ from source — '
+          'verification confirmed corruption. Accepting retains the '
+          'corrupted bytes and clears the warning. The audit trail '
+          'records this as an operator override.\n\n'
+          'Only proceed if you have already confirmed the bytes on '
+          'disk are the version you want to keep.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Accept mismatch')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    for (final id in ids) {
+      await jobFileDao.acceptMismatch(id);
+    }
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('${ids.length} mismatch(es) accepted by operator '
+            '— audit trail preserved'),
+      ),
+    );
   }
 
   Future<void> _retryMismatchedFiles(
