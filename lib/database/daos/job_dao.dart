@@ -119,8 +119,18 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// (crash, power loss, kill). Moves them and their in-progress files back
   /// to a resumable state so the operator can review and manually resume.
   ///
-  /// Per the spec, recovery moves to [JobStatus.paused] (not [JobStatus.queued])
-  /// so the operator must explicitly resume after reviewing.
+  /// 017 (T046-T048, FR-006/FR-007/FR-018): also detects
+  /// `status=completed && verifyStatus=pending` rows (NEW v8 stale state —
+  /// abandoned shutdown mid-verify). These stay at `status=completed`;
+  /// `_processTransfer`'s recovery branch (T046) re-enters verify-only
+  /// on next launch — bytes are NOT re-credited.
+  ///
+  /// After all stale-row mutations, re-derives Job aggregate counters
+  /// once per rescued job from per-row state (FR-018).
+  ///
+  /// Per the spec, recovery moves to [JobStatus.paused] (not
+  /// [JobStatus.queued]) so the operator must explicitly resume after
+  /// reviewing.
   Future<void> recoverStaleJobs() async {
     // Capture the rows BEFORE the update so we know which jobs we
     // touched (and so the log entry has source/dest paths). Reading
@@ -129,6 +139,12 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     final rescuedJobs = await (select(jobs)
           ..where((t) => t.status.equalsValue(JobStatus.inProgress)))
         .get();
+
+    // 017 (T046, FR-018): the rescued-job set per the spec's union
+    // definition — jobs.status=inProgress UNION jobs with files in
+    // inProgress UNION jobs with files in completed+verifyStatus=pending.
+    // Used at the end for per-job counter re-derivation.
+    final rescuedJobIdSet = await getRescuedJobIds();
 
     await transaction(() async {
       await (update(jobs)
@@ -145,6 +161,20 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           status: Value(FileStatus.pending),
         ),
       );
+
+      // 017 (T046, FR-006): copied+pending verify rows stay at
+      // status=completed — don't reset (would lose copy progress).
+      // _processTransfer's loop has a recovery branch that re-runs
+      // verify-only for these. We don't mutate them here.
+
+      // 017 (T048, FR-018): re-derive Job-level counters once per
+      // rescued job after all stale-row mutations. Iterates the
+      // union set; safe to call recomputeCountersFromFiles inside
+      // the same transaction (Drift uses SAVEPOINT semantics so
+      // nested transaction calls do not deadlock).
+      for (final jobId in rescuedJobIdSet) {
+        await recomputeCountersFromFiles(jobId);
+      }
     });
 
     _recoveredJobIds
@@ -159,13 +189,26 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
       logService?.warning(
         'Crash recovery: rescued ${rescuedJobs.length} in-progress '
         'job(s) to paused state',
+        phase: LogPhase.recover,
       );
       for (final job in rescuedJobs) {
         logService?.warning(
           '  Recovered job #${job.id}: '
           '${job.sourcePath} → ${job.destinationPath}',
+          jobId: job.id,
+          phase: LogPhase.recover,
         );
       }
+    }
+    // 017 (T046): summary of the broader rescued set (includes the
+    // copied+pending case which doesn't appear in `rescuedJobs`).
+    final extraRescued = rescuedJobIdSet.length - rescuedJobs.length;
+    if (extraRescued > 0) {
+      logService?.info(
+        'Recovery: re-derived counters for $extraRescued additional job(s) '
+        'with copied-but-unverified files (FR-018)',
+        phase: LogPhase.recover,
+      );
     }
   }
 

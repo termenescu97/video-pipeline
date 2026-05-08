@@ -275,9 +275,101 @@ class JobQueueService {
 
     for (final file in files) {
       if (!_isProcessing) break;
+
+      // 017 (T046, FR-006): copied-but-unverified recovery. The file
+      // was copied to disk in a prior run, then shutdown fired before
+      // verify could complete. Bytes are already on disk; do NOT
+      // re-copy. Re-enter the verify phase only.
+      if (file.status == FileStatus.completed &&
+          file.verifyStatus == VerifyStatus.pending) {
+        // Bytes already credited in the prior run's updateJobProgress;
+        // re-tallying matches what the persisted counters say.
+        completedCount++;
+        completedBytes += file.fileSize;
+
+        if (job.verificationMode != VerificationMode.sha256) {
+          // Size-mode files leave verifyStatus at default 'pending'
+          // forever (Codex M5). Nothing to do beyond tallying.
+          continue;
+        }
+
+        // SHA-256 mode: re-run the hash check, nothing else.
+        progressNotifier.value = ProgressData(
+          currentFileName: 'Verifying (recovered): ${file.fileName}',
+        );
+        final results = await Future.wait([
+          _transferService.computeFileHash(file.sourceFilePath),
+          _transferService.computeFileHash(file.destinationFilePath),
+        ]);
+        final sourceHash = results[0];
+        final destHash = results[1];
+        progressNotifier.value = null;
+
+        if (!_isProcessing) break;
+
+        if (sourceHash == null || destHash == null) {
+          await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
+          await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+          unverifiedCount++;
+          _logService?.warning(
+            'Recovered ${file.fileName}: SHA-256 subsystem failed',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.recover,
+          );
+        } else if (sourceHash == destHash) {
+          await _safeWrite(() => _jobFileDao.markFileVerified(
+                file.id,
+                sourceHash: sourceHash,
+                destHash: destHash,
+              ));
+          verifiedCount++;
+          _logService?.info(
+            'Recovered ${file.fileName} verified',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.recover,
+          );
+        } else {
+          await _safeWrite(() => _jobFileDao.markFileVerifyMismatch(
+                file.id,
+                sourceHash: sourceHash,
+                destHash: destHash,
+              ));
+          mismatchedCount++;
+          _logService?.warning(
+            'Recovered ${file.fileName} MISMATCH',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.recover,
+          );
+        }
+        continue;
+      }
+
       if (file.status == FileStatus.completed) {
         completedCount++;
         completedBytes += file.fileSize;
+        // 017 (US1+US2): tally per-state verify counts for the Slack
+        // expansion (FR-016). On a job that resumes after the verify
+        // phase already completed, we still need accurate aggregates.
+        switch (file.verifyStatus) {
+          case VerifyStatus.verified:
+            verifiedCount++;
+            break;
+          case VerifyStatus.unverified:
+            unverifiedCount++;
+            break;
+          case VerifyStatus.mismatch:
+            mismatchedCount++;
+            break;
+          case VerifyStatus.pending:
+            // Handled by the recovery branch above; shouldn't reach here.
+            break;
+        }
         continue;
       }
 
