@@ -21,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration {
@@ -57,6 +57,13 @@ class AppDatabase extends _$AppDatabase {
               appSettings, appSettings.defaultVerificationMode);
           await m.addColumn(
               appSettings, appSettings.defaultConflictResolution);
+        }
+        if (from < 7) {
+          // 015: operator-approved overwrite gets stamped per-file at
+          // preflight so the executor can honor intent absolutely
+          // without losing /Z resume on cancellation/recovery. See
+          // specs handoff in feature 015 plan.
+          await m.addColumn(jobFiles, jobFiles.wasOverwriteApproved);
         }
       },
     );

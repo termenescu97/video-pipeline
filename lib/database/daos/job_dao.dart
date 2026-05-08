@@ -138,9 +138,11 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
       await (update(db.jobFiles)
             ..where((t) => t.status.equalsValue(FileStatus.inProgress)))
           .write(
+        // 015: preserve `startedAt` so the executor can distinguish
+        // our own /Z partial fragments (deletable on resume) from
+        // never-attempted-file TOCTOU intrusions (leave alone).
         const JobFilesCompanion(
           status: Value(FileStatus.pending),
-          startedAt: Value(null),
         ),
       );
     });
@@ -299,6 +301,19 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
 
   /// Reset a failed job for retry — set status to queued, clear error.
   /// Also resets failed files to pending.
+  ///
+  /// 015 invariants preserved across retry:
+  ///   - `JobFile.wasOverwriteApproved` is NOT cleared. The operator
+  ///     approved overwrite for the same set of conflicts at the
+  ///     original conflict-preflight; a retry doesn't re-prompt.
+  ///   - `JobFile.startedAt` is NOT cleared. The executor uses it to
+  ///     distinguish our own /Z partial fragments from TOCTOU
+  ///     intrusions; clearing on retry would re-arm partials as
+  ///     unknown intrusions and refuse to delete them.
+  ///   - `Job.createdAt` is NOT modified. Used as the mtime cutoff
+  ///     for the same-size dest guard at executor time.
+  /// Filter is `failed | pending` — completed files are deliberately
+  /// preserved (operator's verified work is not thrown away on retry).
   Future<void> resetJobForRetry(int jobId) async {
     await transaction(() async {
       await (update(jobs)..where((t) => t.id.equals(jobId))).write(
@@ -322,7 +337,6 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         const JobFilesCompanion(
           status: Value(FileStatus.pending),
           errorMessage: Value(null),
-          startedAt: Value(null),
           completedAt: Value(null),
         ),
       );

@@ -1069,6 +1069,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
                 fileName: f.fileName,
                 fileSize: f.fileSize,
                 status: FileStatus.pending,
+                wasOverwriteApproved: Value(f.wasOverwriteApproved),
               ))
           .toList(),
       totalBytes: resolvedTotalBytes,
@@ -1092,9 +1093,22 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   /// Apply a conflict resolution to a planned file list. Mirrors the
   /// equivalent helper in [JobQueueService]; kept local to avoid
   /// exposing private types across the service boundary.
+  ///
+  /// 015: `overwrite` stamps `wasOverwriteApproved` for files whose
+  /// dest exists at preflight (was a no-op pre-015). The executor
+  /// honors that flag absolutely so /XN /XC /XO can be always-on.
   List<_PlannedFile> _applyResolution(
       List<_PlannedFile> files, ConflictResolution resolution) {
-    if (resolution == ConflictResolution.overwrite) return files;
+    if (resolution == ConflictResolution.overwrite) {
+      // Stamp every file whose dest currently exists; leave the rest
+      // unchanged so a TOCTOU intrusion onto a previously-empty dest
+      // does NOT inherit group-level approval.
+      return files
+          .map((f) => File(f.destinationPath).existsSync()
+              ? f.copyWith(wasOverwriteApproved: true)
+              : f)
+          .toList();
+    }
     final kept = <_PlannedFile>[];
     for (final f in files) {
       final exists = File(f.destinationPath).existsSync();
@@ -1124,24 +1138,37 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
 }
 
 /// Internal: a single planned destination prior to job creation.
+/// TODO(refactor): consolidate with job_queue_service._PlannedFile —
+/// see specs/014-ui-redesign Codex Phase 14 review.
 class _PlannedFile {
   final String sourcePath;
   final String destinationPath;
   final String fileName;
   final int fileSize;
 
+  /// 015: stamped `true` by `_applyResolution` when the operator chose
+  /// `Overwrite` AND this file's dest existed at preflight time.
+  final bool wasOverwriteApproved;
+
   const _PlannedFile({
     required this.sourcePath,
     required this.destinationPath,
     required this.fileName,
     required this.fileSize,
+    this.wasOverwriteApproved = false,
   });
 
-  _PlannedFile copyWith({String? destinationPath}) => _PlannedFile(
+  _PlannedFile copyWith({
+    String? destinationPath,
+    bool? wasOverwriteApproved,
+  }) =>
+      _PlannedFile(
         sourcePath: sourcePath,
         destinationPath: destinationPath ?? this.destinationPath,
         fileName: fileName,
         fileSize: fileSize,
+        wasOverwriteApproved:
+            wasOverwriteApproved ?? this.wasOverwriteApproved,
       );
 }
 

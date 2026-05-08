@@ -81,10 +81,14 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
   /// resume cleanly via robocopy `/Z` on next start, NOT be reported as
   /// a permanent failure.
   Future<void> resetFileToPending(int fileId) {
+    // 015: deliberately PRESERVE `startedAt` across resets. The
+    // executor uses `startedAt != null` as the "ever attempted"
+    // signal — distinguishes our own /Z partial fragments (deletable)
+    // from never-attempted-file dest intrusions (leave alone).
+    // Clearing it would re-arm the partial as a TOCTOU rogue.
     return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
       const JobFilesCompanion(
         status: Value(FileStatus.pending),
-        startedAt: Value(null),
         completedAt: Value(null),
         errorMessage: Value(null),
       ),

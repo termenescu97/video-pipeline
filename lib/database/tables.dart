@@ -54,6 +54,16 @@ class JobFiles extends Table {
   DateTimeColumn get completedAt => dateTime().nullable()();
   TextColumn get sourceHash => text().nullable()();
   TextColumn get destinationHash => text().nullable()();
+
+  /// 015 (v7): operator explicitly approved overwrite for THIS file at
+  /// conflict-preflight time. The executor honors this flag absolutely:
+  /// dest is deleted before robocopy regardless of size, so /XN/XC/XO
+  /// can be always-on without losing operator-approved overwrites.
+  /// Default `false` means "no preflight conflict on this path" — the
+  /// safe default. Set to `true` only by `_applyResolution` when the
+  /// operator chose `Overwrite` AND the file's dest already existed.
+  BoolColumn get wasOverwriteApproved =>
+      boolean().withDefault(const Constant(false))();
 }
 
 /// User-saved folder paths for quick reuse.

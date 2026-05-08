@@ -219,13 +219,112 @@ class JobQueueService {
 
     final files = await _jobFileDao.getFilesForJob(job.id);
     var completedCount = 0;
+    var completedBytes = 0;
     var failedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
       if (file.status == FileStatus.completed) {
         completedCount++;
+        completedBytes += file.fileSize;
         continue;
+      }
+
+      // 015 — pre-robocopy safety + cleanup. Runs BEFORE markFileStarted
+      // because we read file.startedAt to detect "ever attempted" and
+      // we want the local view to reflect the pre-call DB state. The
+      // local `file` variable is a snapshot from getFilesForJob, so
+      // markFileStarted's row mutation does not change it; ordering
+      // here is for explicit reader semantics.
+      // Plan: ~/.claude/plans/playful-brewing-peach.md
+      final destPath = file.destinationFilePath;
+      final destEntityType =
+          await FileSystemEntity.type(destPath, followLinks: false);
+
+      if (destEntityType == FileSystemEntityType.notFound) {
+        // Lonely dest — robocopy creates fresh. No cleanup needed.
+      } else if (destEntityType != FileSystemEntityType.file) {
+        // Symlink, junction, or directory at dest. Refuse to touch:
+        // a junction could redirect into anywhere (system path or
+        // network share), and File.delete() on a non-regular entity
+        // is unsafe. Mark failed; operator resolves manually.
+        final entityKind = destEntityType == FileSystemEntityType.link
+            ? 'symlink/junction'
+            : 'non-regular entity';
+        await _jobFileDao.markFileFailed(file.id,
+            'Refused to overwrite $entityKind at destination: $destPath');
+        failedCount++;
+        _logService?.error(
+          'Job #${job.id} file ${file.fileName}: dest is a $entityKind '
+          '($destPath) — resolve manually before retry',
+        );
+        continue;
+      } else {
+        final destFile = File(destPath);
+        try {
+          final sourceSize = await File(file.sourceFilePath).length();
+          final destSize = await destFile.length();
+          final everAttempted = file.startedAt != null;
+          final isPartial = destSize < sourceSize;
+          final shouldDelete = file.wasOverwriteApproved ||
+              (everAttempted && isPartial);
+
+          if (shouldDelete) {
+            try {
+              await destFile.delete();
+              _logService?.info(
+                'Pre-robocopy cleanup of destination $destPath '
+                '(approved=${file.wasOverwriteApproved}, '
+                'attempted=$everAttempted, partial=$isPartial)',
+              );
+            } on FileSystemException catch (e) {
+              // Permission denied / read-only / locked. Fail this
+              // FILE cleanly rather than crashing the whole job via
+              // the outer catch in _processJob.
+              await _jobFileDao.markFileFailed(file.id,
+                  'Could not remove existing destination file: ${e.message}');
+              failedCount++;
+              _logService?.error(
+                'Job #${job.id} file ${file.fileName}: pre-robocopy '
+                'delete failed at $destPath — ${e.message}',
+              );
+              continue;
+            }
+          } else {
+            // Dest exists and we are NOT deleting — Option 4 mtime
+            // cutoff guard. If dest was modified after the job was
+            // created (i.e., after conflict-preflight saw it), this
+            // is a TOCTOU intrusion or post-attempt external
+            // replacement we cannot trust. /XN /XC /XO would let
+            // robocopy skip silently and size-only verification
+            // could mark completed wrongly. Fail loudly here.
+            final destMtime = await destFile.lastModified();
+            if (destMtime.isAfter(job.createdAt)) {
+              await _jobFileDao.markFileFailed(file.id,
+                  'Destination modified after job creation '
+                  '(mtime=${destMtime.toIso8601String()} > '
+                  'createdAt=${job.createdAt.toIso8601String()}). '
+                  'Refusing to overwrite without explicit approval.');
+              failedCount++;
+              _logService?.warning(
+                'Job #${job.id} file ${file.fileName}: mtime cutoff '
+                'guard tripped at $destPath '
+                '(mtime=$destMtime > createdAt=${job.createdAt})',
+              );
+              continue;
+            }
+          }
+        } on FileSystemException catch (e) {
+          // length() / lastModified() failed. Fail conservatively.
+          await _jobFileDao.markFileFailed(file.id,
+              'Could not read destination metadata: ${e.message}');
+          failedCount++;
+          _logService?.error(
+            'Job #${job.id} file ${file.fileName}: dest metadata read '
+            'failed at $destPath — ${e.message}',
+          );
+          continue;
+        }
       }
 
       await _jobFileDao.markFileStarted(file.id);
@@ -314,6 +413,7 @@ class JobQueueService {
           } else if (sourceHash == destHash) {
             await _jobFileDao.markFileCompleted(file.id, verified: true);
             completedCount++;
+            completedBytes += file.fileSize;
             _logService?.info('Job #${job.id} file ${file.fileName} — SHA-256 verified: source=$sourceHash dest=$destHash MATCH');
           } else {
             await _jobFileDao.markFileFailed(
@@ -332,6 +432,7 @@ class JobQueueService {
           if (verified) {
             await _jobFileDao.markFileCompleted(file.id, verified: true);
             completedCount++;
+            completedBytes += file.fileSize;
             _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
           } else {
             await _jobFileDao.markFileFailed(
@@ -342,7 +443,11 @@ class JobQueueService {
             _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
           }
         }
-        await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
+        await _jobDao.updateJobProgress(
+          job.id,
+          completedFiles: completedCount,
+          completedBytes: completedBytes,
+        );
       } else {
         await _jobFileDao.markFileFailed(file.id, 'Transfer failed');
         failedCount++;
@@ -364,12 +469,17 @@ class JobQueueService {
       return;
     }
 
-    // Final-review fix #9: stamp the final counter explicitly before
-    // markJobCompleted/markJobFailed. The per-file updateJobProgress
-    // only fires on SUCCESS, so a recovered job whose file rows were
-    // already completed pre-crash would otherwise carry stale
-    // jobs.completedFiles into history.
-    await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
+    // Final-review fix #9 + 015-S6: stamp the final counters
+    // explicitly before markJobCompleted/markJobFailed. The per-file
+    // updateJobProgress only fires on SUCCESS, so a recovered job
+    // whose file rows were already completed pre-crash would
+    // otherwise carry stale `jobs.completedFiles` and
+    // `jobs.completedBytes` into history.
+    await _jobDao.updateJobProgress(
+      job.id,
+      completedFiles: completedCount,
+      completedBytes: completedBytes,
+    );
 
     final allVerified = failedCount == 0;
     if (failedCount > 0) {
@@ -394,12 +504,14 @@ class JobQueueService {
 
     final files = await _jobFileDao.getFilesForJob(job.id);
     var completedCount = 0;
+    var completedBytes = 0;
     var failedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
       if (file.status == FileStatus.completed) {
         completedCount++;
+        completedBytes += file.fileSize;
         continue;
       }
 
@@ -446,10 +558,15 @@ class JobQueueService {
       if (success) {
         await _jobFileDao.markFileCompleted(file.id, verified: true);
         completedCount++;
+        completedBytes += file.fileSize;
         _logService?.info(
           'Job #${job.id} compressed: ${file.fileName}',
         );
-        await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
+        await _jobDao.updateJobProgress(
+          job.id,
+          completedFiles: completedCount,
+          completedBytes: completedBytes,
+        );
       } else {
         await _jobFileDao.markFileFailed(file.id, 'Compression failed');
         failedCount++;
@@ -469,12 +586,17 @@ class JobQueueService {
       return;
     }
 
-    // Final-review fix #9: stamp the final counter explicitly before
-    // markJobCompleted. The per-file updateJobProgress only fires on
-    // SUCCESS, so a recovered job whose file rows were already
-    // completed pre-crash would otherwise reach completion with stale
-    // jobs.completedFiles. This guarantees the row reflects reality.
-    await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
+    // Final-review fix #9 + 015-S6: stamp the final counters
+    // explicitly before markJobCompleted. The per-file
+    // updateJobProgress only fires on SUCCESS, so a recovered job
+    // whose file rows were already completed pre-crash would
+    // otherwise reach completion with stale jobs.completedFiles +
+    // jobs.completedBytes. This guarantees the row reflects reality.
+    await _jobDao.updateJobProgress(
+      job.id,
+      completedFiles: completedCount,
+      completedBytes: completedBytes,
+    );
 
     if (failedCount > 0) {
       // Final-review fix #2: log the job-level failure summary too.
@@ -642,6 +764,8 @@ class JobQueueService {
                     fileName: f.fileName,
                     fileSize: f.fileSize,
                     status: FileStatus.pending,
+                    wasOverwriteApproved:
+                        Value(f.wasOverwriteApproved),
                   ))
               .toList(),
           totalBytes: totalBytes,
@@ -663,12 +787,28 @@ class JobQueueService {
 
   /// Apply a conflict resolution to the planned file list. `skip` removes
   /// conflicting entries; `rename` rewrites their destination path with
-  /// an auto-suffix (`_1`, `_2`, ...). `overwrite` is a no-op (callers
-  /// proceed with original paths). `cancel`/`newFolder` are handled by
-  /// the caller and never reach this method.
+  /// an auto-suffix (`_1`, `_2`, ...). `overwrite` stamps the per-file
+  /// `wasOverwriteApproved` flag for files whose dest exists at
+  /// preflight time (015 — replaces the v2.4.0 no-op). `cancel`/
+  /// `newFolder` are handled by the caller and never reach this
+  /// method.
   void _applyResolution(
       List<_CardTransferPlan> plans, ConflictResolution resolution) {
-    if (resolution == ConflictResolution.overwrite) return;
+    if (resolution == ConflictResolution.overwrite) {
+      // 015: mark every file whose dest currently exists as approved.
+      // Files without an existing dest stay `false` — that prevents a
+      // post-preflight TOCTOU intrusion onto a previously-empty dest
+      // from triggering the executor's delete branch on the basis of
+      // group approval that was never granted for this specific path.
+      for (final plan in plans) {
+        for (final file in plan.files) {
+          if (File(file.destinationPath).existsSync()) {
+            file.wasOverwriteApproved = true;
+          }
+        }
+      }
+      return;
+    }
 
     for (final plan in plans) {
       final kept = <_PlannedFile>[];
@@ -804,11 +944,20 @@ class _PlannedFile {
   String fileName;
   int fileSize;
 
+  /// 015: stamped `true` by `_applyResolution` when the operator chose
+  /// `Overwrite` AND this file's dest existed at preflight time. The
+  /// executor honors the flag absolutely (delete dest pre-robocopy
+  /// regardless of size). Default `false` is the safe baseline.
+  /// TODO(refactor): consolidate with create_job_screen._PlannedFile —
+  /// see specs/014-ui-redesign Codex Phase 14 review.
+  bool wasOverwriteApproved;
+
   _PlannedFile({
     required this.sourcePath,
     required this.destinationPath,
     required this.fileName,
     required this.fileSize,
+    this.wasOverwriteApproved = false,
   });
 
   _PlannedFile copyWith({String? destinationPath}) => _PlannedFile(
@@ -816,6 +965,7 @@ class _PlannedFile {
         destinationPath: destinationPath ?? this.destinationPath,
         fileName: fileName,
         fileSize: fileSize,
+        wasOverwriteApproved: wasOverwriteApproved,
       );
 }
 
