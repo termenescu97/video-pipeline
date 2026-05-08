@@ -50,7 +50,7 @@ No setup tasks — project is established (CLAUDE.md, Drift, Flutter, GitHub Act
 ### F-A2 PowerShell migration in services
 
 - [ ] **T011** [F] Replace the broken pattern in `lib/services/transfer_service.dart::computeFileHash` (lines 87-101). New body uses `escapePsLiteral(filePath)` + `runPowerShellInlineScript({script: "(Get-FileHash -LiteralPath '${escapePsLiteral(filePath)}' -Algorithm SHA256).Hash", tag: 'computeFileHash'})`. Path validation: `if (filePath.isEmpty) throw ArgumentError('path empty')`. Long-path probe: log a `WARNING` (with `phase: LogPhase.preflight`) once per job if `filePath.length > 260`.
-- [ ] **T012** [F] Replace the broken pattern in `lib/services/drive_service.dart::getDiskFreeSpace` (line ~141-148). Validate `dirPath`: reject empty, detect UNC via `dirPath.startsWith(r'\\')` (return null + log warning "free space check skipped for UNC path; v3.0 NAS feature adds support"). Drive-letter regex tightened to `^[A-Za-z]:` (caller passes `E:` not `E`). Use inline script `Get-PSDrive -Name <validatedLetter> | Select-Object -ExpandProperty Free` (single ASCII letter — no escape needed).
+- [ ] **T012** [F] Replace the broken pattern in `lib/services/drive_service.dart::getDiskFreeSpace` (line ~141-148). Validate `dirPath`: reject empty, detect UNC via `dirPath.startsWith(r'\\')` (return null + log warning "free space check skipped for UNC path; v3.0 NAS feature adds support"). Drive-letter regex tightened to `^[A-Za-z]:` (caller passes `E:` not `E`). Use inline script `Get-PSDrive -Name <validatedLetter> | Select-Object -ExpandProperty Free` (single ASCII letter — no escape needed). Additionally implement the preflight long-path warning (FR-013 + R-A1): when `dirPath.length > 260` (or any planned destination > 260), log `WARNING` once at `phase=preflight` ("path exceeds Windows MAX_PATH; PS 5.1 may fail without `\\?\` prefix — surfacing only, not blocking job creation"). The warning does NOT block job creation.
 - [ ] **T013** [F] Replace the broken pattern in `lib/services/drive_service.dart::getDriveIdentity` (lines ~172-184) using single-quote-escaped `-LiteralPath` for the WMI query parameter.
 - [ ] **T014** [F] Replace the broken pattern in `lib/services/drive_service.dart::eraseDrive` (lines ~217-220) using single-quote-escaped `-LiteralPath` for `Remove-Item`.
 - [ ] **T015** [F] [P] Audit other PowerShell call sites: `grep -n 'Get-FileHash\|Get-PSDrive\|Get-CimInstance\|Get-Volume\|Remove-Item\|Test-Path' lib/services/`. Migrate any survivors to inline-script + escape pattern. Document zero remaining `\$args\[` matches in the commit message.
@@ -64,7 +64,7 @@ No setup tasks — project is established (CLAUDE.md, Drift, Flutter, GitHub Act
 - [ ] **T020** [F] [P] Migrate existing call sites of `logService.info/warning/error` to named-param API. Touch every file in `lib/` that imports `log_service.dart`. Mechanical migration: where the call already concatenates `Job #${job.id}`, extract to `jobId: job.id` and shorten the message. Where no useful context exists (e.g. `info('App started')`), leave one-arg.
 - [ ] **T021** [F] [P] Replace the existing manual stderr-with-stack truncation in `lib/services/transfer_service.dart::computeFileHash` (lines 116-118, 125-128, 136-139) with `logService.error(..., subprocessStderr: stderr)` / `subprocessStderr: e.toString()` calls. Remove the multi-line stderr concatenation.
 - [ ] **T022** [F] [P] Add INFO-level events at every phase boundary in `lib/services/job_queue_service.dart`. Specifically: phase=enqueue (job created), phase=preflight start/end, phase=transfer start/end + per-file copy success, phase=verify start/end + per-file verify success, phase=compress start/end + per-file compression success, phase=finalize (Slack sent), phase=recover (per rescued file), phase=shutdown (Phase A/B/C transitions in `lib/ui/screens/shell_screen.dart`).
-- [ ] **T023** [F] [P] Add golden tests at `test/unit/log_format_test.dart`. Cover: 4 levels × 9 phases (36 lines) for full-context calls; 8 partial-context combinations from `research.md` R-A6 table; truncation cases (empty / CRLF / > 200 char single line / multi-line / emoji + surrogate pair).
+- [ ] **T023** [F] [P] Add golden tests at `test/unit/log_format_test.dart`. Cover: (a) the no-context one-arg case explicitly: `info('App started')` → `[2026-05-08 14:00:00] [INFO] App started` (no bracket, backward-compat) — Codex round-1 L8 acceptance; (b) 4 levels × 9 phases (36 lines) for full-context calls; (c) 8 partial-context combinations from `research.md` R-A6 table; (d) truncation cases: empty stderr (skip the colon entirely), Windows CRLF, > 200-char single line (ellipsis suffix), multi-line (take first), emoji or surrogate-pair stderr (no mojibake — verify via `characters.length`).
 
 ### F-A9 `_PlannedFile` consolidation
 
@@ -90,14 +90,14 @@ No setup tasks — project is established (CLAUDE.md, Drift, Flutter, GitHub Act
 
 **Goal**: Operator sees progress bar advance, file counter increment, phase indicator transition during a transfer — even if downstream verify is broken.
 
+**Requires**: T028-T033 (DAO additions for `markFileVerified`/`markFileVerifyMismatch`/`markFileUnverified`/`incrementVerified`/`incrementUnverified`). T034 also depends on T028 (`markFileCompleted` made `verified: false` default).
+
 **Independent Test**: Start a transferAndCompress with verbose logging. Watch the progress bar move within 5 s of the first file copy completing; counter increments; phase pill transitions. No need to wait for entire job.
 
 - [ ] **T034** [US1] In `lib/services/job_queue_service.dart::_processTransfer` (lines 436-540), split the post-robocopy `_safeWrite` into two calls per `research.md` R-A4. After robocopy success: first `_safeWrite(() => _jobFileDao.markFileCompleted(file.id, verified: false))`, then `_safeWrite(() => _jobDao.updateJobProgress(job.id, completedFiles: completedCount, completedBytes: completedBytes))`. **Do NOT gate either on verify outcome** — bytes credit immediately when bytes are on disk.
 - [ ] **T035** [US1] After hash check (lines ~488-512 in `_processTransfer`): on hash MATCH, call `_jobFileDao.markFileVerified(file.id, sourceHash, destHash)` + `_jobDao.incrementVerified(job.id)` (each in its own `_safeWrite`). On hash MISMATCH: `markFileVerifyMismatch` + `incrementFailed`. On hash subsystem error: `markFileUnverified` + `incrementUnverified`. **Never decrement** `completedFiles`/`completedBytes` from any verify outcome.
-- [ ] **T036** [US1] [P] Add `JobType.compression` UI hide-rule for verify counters in `lib/ui/widgets/job_card_active.dart`: when `job.type == JobType.compression`, suppress the verify-axis stats line (FR-017). Show only `12 / 27 files · 38 GB / 161 GB` style header for compression-only jobs.
-- [ ] **T037** [US1] [P] In `lib/ui/widgets/job_card_active.dart`, promote phase indicator to top of the card. For `transfer` and `transferAndCompress` jobs: pills `[Transfer] → [Verify] → [Compress?]` with active-phase highlighted in primary, completed in muted, upcoming in outline. For `compression`-only jobs: single `[Compress]` pill.
-- [ ] **T038** [US1] [P] In `lib/ui/widgets/job_card_active.dart`, add second-line stats: `verified / total` plus `unverified` count with warning color when > 0. Use tabular figures so digit changes don't reflow.
-- [ ] **T039** [US1] [P] Add unit test at `test/unit/progress_decouple_test.dart`. Mock `TransferService.computeFileHash` to throw on every call (simulate broken hash subsystem). Run a 3-file `_processTransfer`. Assert: `Job.completedFiles == 3`, `Job.completedBytes == sum(fileSize)`, `Job.unverifiedFiles == 3`, `Job.status` NOT failed. Each file has `status=completed`, `verifyStatus=unverified`.
+- [ ] **T036** [US1] In `lib/ui/widgets/job_card_active.dart`, perform all three card UI changes in sequence within a single PR slice (NOT [P] — same file): (a) `JobType.compression` UI hide-rule for verify counters per FR-017 — when `job.type == JobType.compression`, suppress the verify-axis stats line and show only `12 / 27 files · 38 GB / 161 GB`; (b) promote phase indicator to top of the card with `[Transfer] → [Verify] → [Compress?]` pills (active-phase primary, completed muted, upcoming outline; for `compression`-only show single `[Compress]` pill); (c) add second-line stats `verified / total · unverified` with warning color when `unverified > 0`, tabular figures on numerics so digit changes don't reflow. *(Codex tasks-review M5: original split into T036/T037/T038 [P] was unsafe — same file. Consolidated.)*
+- [ ] **T037** [US1] [P] Add unit test at `test/unit/progress_decouple_test.dart`. Mock `TransferService.computeFileHash` to throw on every call (simulate broken hash subsystem). Run a 3-file `_processTransfer`. Assert: `Job.completedFiles == 3`, `Job.completedBytes == sum(fileSize)`, `Job.unverifiedFiles == 3`, `Job.status` NOT failed. Each file has `status=completed`, `verifyStatus=unverified`.
 
 ---
 
@@ -105,20 +105,25 @@ No setup tasks — project is established (CLAUDE.md, Drift, Flutter, GitHub Act
 
 **Goal**: SHA-256 verification works on all real Windows path shapes; mismatch surfaces actionable banner; Retry forces re-copy.
 
+**Requires**: T028-T033 (DAO methods); T036 (active card UI) for the banner integration in T041.
+
 **Independent Test**: Stage 27 files with varied path special chars. Run a transferAndCompress with SHA-256 enabled. All 27 files end at `verifyStatus=verified`. No PS parser errors in log.
 
-- [ ] **T040** [US2] [P] Wire `forceDestDelete: bool = false` parameter through `JobQueueService.retryFile(int fileId, {bool forceDestDelete = false})` and downstream `_processTransfer` (when called for a single retried file). When `forceDestDelete=true`: delete dest before robocopy regardless of size match. Log loudly with `phase=recover`.
-- [ ] **T041** [US2] [P] In `lib/ui/widgets/job_card_active.dart`, add verify-mismatch banner (FR-005). When job has any file at `verifyStatus=mismatch`: show banner with file count + actions `[Investigate]` (opens detail tabs) / `[Retry]` (calls `retryFile(forceDestDelete: true)` for each mismatched file) / `[Skip]` (marks file as skipped, removes from "needs attention"). Banner visible until all mismatch files resolve.
+- [ ] **T040** [US2] Wire `forceDestDelete: bool = false` parameter through `JobQueueService.retryFile(int fileId, {bool forceDestDelete = false})` and downstream `_processTransfer` (when called for a single retried file). When `forceDestDelete=true`: **bypass the entire feature-015 delete predicate** `wasOverwriteApproved || (everAttempted && isPartial)` AND short-circuit the size-match "skip robocopy" path. Concretely: at the dest-delete decision in `_processTransfer`, the gating expression becomes `forceDestDelete || wasOverwriteApproved || (everAttempted && isPartial)`. Even when `wasOverwriteApproved=false` and the dest size matches the source, `forceDestDelete=true` forces the delete-then-robocopy sequence so corrupt-but-same-size dests are actually replaced (Codex H2 closure, FR-005, SC-004). Log loudly with `phase=recover` and operator-driven attribution.
+- [ ] **T041** [US2] [P] In `lib/ui/widgets/job_card_active.dart`, add verify-mismatch banner (FR-005). When job has any file at `verifyStatus=mismatch`: show banner with file count + actions `[Investigate]` (opens detail tabs) / `[Retry]` (calls `retryFile(forceDestDelete: true)` for each mismatched file — explicit `forceDestDelete=true` is operator-attribution per Constitution I) / `[Skip]` (marks file as skipped, removes from "needs attention"). Banner visible until all mismatch files resolve. *(Sequenced after T036 by Requires note above; safe to mark [P] vs T040, T042, T043, T044, T045 — different files.)*
 - [ ] **T042** [US2] [P] In `lib/ui/widgets/files_tab.dart`, add per-file verifyStatus chip: ✓ verified (green), ⚠ unverified (yellow warning), ✗ mismatch (red), pending (no chip — show only if status != completed).
-- [ ] **T043** [US2] In `lib/services/slack_service.dart::notifyTransferCompleted`, expand signature with `int verifiedFiles, int unverifiedFiles, int mismatchedFiles` per `research.md` Slack expansion section. Body shows `Verified: N · Unverified: N · Mismatch: N`. Verdict line: warning prefix when `mismatched > 0` or `unverified > 0`; clean checkmark only when both zero. Update caller in `_processTransfer` to pass aggregate counts.
-- [ ] **T044** [US2] In `lib/services/slack_service.dart::notifyCompressionCompleted`, add 4 nullable params `Job? parentTransferJob, int? parentVerifiedFiles, int? parentUnverifiedFiles, int? parentMismatchedFiles`. When non-null: show "Transfer verification: …" line per `research.md` snippet. When all null: omit the line (standalone compression).
+- [ ] **T043** [US2] [P] In `lib/services/slack_service.dart::notifyTransferCompleted`, expand signature with `int verifiedFiles, int unverifiedFiles, int mismatchedFiles` per `research.md` Slack expansion section. Body shows `Verified: N · Unverified: N · Mismatch: N`. Verdict line: warning prefix when `mismatched > 0` or `unverified > 0`; clean checkmark only when both zero. Update caller in `_processTransfer` to pass aggregate counts.
+- [ ] **T044** [US2] [P] In `lib/services/slack_service.dart::notifyCompressionCompleted`, add 4 nullable params `Job? parentTransferJob, int? parentVerifiedFiles, int? parentUnverifiedFiles, int? parentMismatchedFiles`. When non-null: show "Transfer verification: …" line per `research.md` snippet. When all null: omit the line (standalone compression). *(Same file as T043 — these MUST be sequenced together in one PR slice; both edit `slack_service.dart`. Marked [P] vs all NON-slack-service tasks.)*
 - [ ] **T045** [US2] In `lib/services/job_queue_service.dart::_createChainedCompressionJob` (line ~984), set `parentJobId: Value(transferJob.id)` in the `JobsCompanion.insert` call. Single-line addition. In `_processCompression` finalize (line ~725), if `job.parentJobId != null`: query parent via `_jobDao.getJob(job.parentJobId!)`, query parent's JobFile rows, count by verifyStatus, pass through to `notifyCompressionCompleted`. Graceful fallback if parent deleted: pass nulls.
+- [ ] **T045a** [US2] [P] Add SC-004 acceptance test at `test/unit/retry_force_dest_delete_test.dart`. Seed: 1 file `status=completed`, `verifyStatus=mismatch`, `failureKind=verifyMismatch`, `wasOverwriteApproved=false`, dest exists with same size as source but different bytes (e.g., source: "abc", dest: "xyz", both 3 bytes). Call `JobQueueService.retryFile(fileId, forceDestDelete: true)`. Assert: dest is deleted before robocopy is invoked (mock robocopy and observe call order via `ProcessRunner` spy); after robocopy completes, file has `verifyStatus=verified`. **Crucial**: assert the loop does NOT short-circuit on size match.
 
 ---
 
 ## Phase 5: User Story 3 — Reliable recovery from abandoned shutdown (Priority: P1)
 
 **Goal**: Job killed mid-verify resumes verify-only on relaunch. No double-credited bytes, no stranded files. Counters accurate.
+
+**Requires**: T028-T033 (DAO methods, especially `getRescuedJobIds` and `recomputeCountersFromFiles`).
 
 **Independent Test**: Start a job, kill the app between robocopy success and SHA-256 finish for one file. Relaunch. That file is verify-only on next run.
 
@@ -133,16 +138,25 @@ No setup tasks — project is established (CLAUDE.md, Drift, Flutter, GitHub Act
 
 **Goal**: Operator can reconstruct any successful run from the log alone. Errors are concise.
 
+**Requires**: T017-T023 (LogService API + LogPhase + truncation + goldens).
+
+**Note on parallelism**: T050-T056 ALL edit `lib/services/job_queue_service.dart` (or its single-file callers within `_processJob`). Codex tasks-review HIGH 2 — these CANNOT run in parallel; same-file edits would conflict. Consolidated into ONE task (T050) covering every log boundary in `job_queue_service.dart`. Only T057 (different file) is left separate.
+
 **Independent Test**: Run a successful 27-file job. Open log. INFO entries at every phase boundary + per-file copy + per-file verify success.
 
-- [ ] **T050** [US4] [P] Add INFO log at `JobQueueService` start (`phase=enqueue`): `'Job queued — type=$type, files=$totalFiles, bytes=$totalBytes'`.
-- [ ] **T051** [US4] [P] Add INFO log at `_processTransfer` start (`phase=preflight` → `phase=transfer`) and end with totals: `'Transfer phase complete — copied=N/total, bytes=N/total, verified=N, unverified=N, mismatch=N, duration=Xm'`.
-- [ ] **T052** [US4] [P] Add INFO log per file in `_processTransfer` after robocopy success (`phase=transfer`): `'Copied $fileName ($formatBytes(fileSize) in ${elapsed}s)'` with `jobId, fileIndex, totalFiles` set.
-- [ ] **T053** [US4] [P] Add INFO log per file after verify match (`phase=verify`): `'$fileName verified (SHA-256 match)'`.
-- [ ] **T054** [US4] [P] Add INFO log at `_processCompression` boundaries (`phase=compress`).
-- [ ] **T055** [US4] [P] Add INFO log at `_finalize` (Slack sent, audit row inserted) with `phase=finalize`.
-- [ ] **T056** [US4] [P] Add INFO log per rescued file in `recoverStaleJobs` (`phase=recover`).
-- [ ] **T057** [US4] [P] Add INFO log at each shutdown phase transition in `lib/ui/screens/shell_screen.dart::_gracefulShutdown` (`phase=shutdown`): Phase A start/end, Phase B start/timeout, Phase C start/end.
+- [ ] **T050** [US4] In `lib/services/job_queue_service.dart`, add INFO-level structured log entries at ALL phase boundaries and per-file successes within `_processJob`/`_processTransfer`/`_processCompression`/`recoverStaleJobs`/`_finalize`. Single sweep, single file:
+   - **enqueue** (job created): `'Job queued — type=$type, files=$totalFiles, bytes=$totalBytes'`
+   - **preflight** start/end: include verdict (free space, conflicts, long-path warnings)
+   - **transfer** start: `'Transfer phase started — N files, $bytes'`
+   - **transfer** per-file success: `'Copied $fileName ($formatBytes(fileSize) in ${elapsed}s)'` with `jobId, fileIndex, totalFiles` set
+   - **transfer** end: `'Transfer phase complete — copied=N/total, bytes=N/total, verified=N, unverified=N, mismatch=N, duration=Xm'`
+   - **verify** start: `'Verify phase started — $verifyMode mode, N files'`
+   - **verify** per-file success: `'$fileName verified (SHA-256 match)'`
+   - **verify** end: `'Verify phase complete — verified=N, mismatch=N, unverified=N'`
+   - **compress** start/per-file/end (analogous)
+   - **finalize** (Slack sent, audit row inserted): `'Job $jobId finalized — Slack notified, audit row written'`
+   - **recover** per rescued file: from T046's existing `phase=recover` warning, add an INFO companion when verify-only resume succeeds
+- [ ] **T051** [US4] [P] In `lib/ui/screens/shell_screen.dart::_gracefulShutdown`, add INFO logs at each phase transition with `phase=shutdown`: Phase A start/end ("acquire shutdown flag"), Phase B start ("queue drain — timeout 10s") and end (success or timeout), Phase C start/end ("DB close, instance lock release, log close"). Different file from T050 — safe to mark [P].
 
 ---
 
@@ -166,7 +180,16 @@ No setup tasks — project is established (CLAUDE.md, Drift, Flutter, GitHub Act
 - [ ] **T064** [P] Update `CLAUDE.md` "Load-Bearing Conventions" section to add the v8 invariants: `verifyStatus` × `failureKind` axes; `Job.parentJobId` set only at chain time; `markFileCompleted(verified: false)` is the post-robocopy signal; counter re-derivation must run once per rescued job at end of recovery.
 - [ ] **T065** [P] Update `CLAUDE.md` "Current State" + "What Works" sections to reflect v2.5.0-pending state for 017A.
 - [ ] **T066** Run a Codex adversarial review of the implementation (`gpt-5.5 effort=high`). Address findings; iterate until clean.
-- [ ] **T067** Operator runs Windows acceptance scenario from `quickstart.md` "Operator's Windows acceptance scenario" — or the Verification plan in `i-just-did-a-glistening-lake.md`. All steps pass.
+- [ ] **T067** Operator runs Windows acceptance scenario on the workstation. Concrete checklist (must all pass; tag `v2.5.0-pre` is the test build):
+   1. **SC-001 / FR-001 — hash path fixed**: insert SD card with 27 files / 161 GB containing paths with spaces, apostrophes, and special chars (`Tibi's reels.mp4` style). Start a transferAndCompress with SHA-256 enabled. Open log: zero `[ERROR]` lines containing `Unexpected token` or PowerShell parser dumps. All 27 files end with `verifyStatus=verified`.
+   2. **SC-002 / FR-002 — progress bar unfrozen**: while transfer phase runs, the active job card shows progress bar advancing (bytes change visibly at least every 5 s) and file counter incrementing (`1 / 27 → 2 / 27 → …`) within 5 s of each file completing.
+   3. **SC-002 / FR-003 — verify column / status visible**: per-file detail tabs show ✓ verified chip on completed files; mid-job, files show pending; on simulated mismatch (rename one source file mid-copy), affected file shows ✗ mismatch chip.
+   4. **SC-004 / FR-005 — mismatch retry replaces destination**: rename a source file mid-copy to force a real mismatch (3 bytes differ at same total size). Operator clicks Retry on the file. Confirm via log + filesystem: dest file is deleted before robocopy runs. After robocopy + verify, file ends `verifyStatus=verified`.
+   5. **SC-008 / FR-016 / FR-019 — Slack payloads include verify counts**: inspect the actual Slack webhook payloads (operator can replay via dev webhook). `notifyTransferCompleted` body includes `Verified: 27 · Unverified: 0 · Mismatch: 0`. For transferAndCompress, `notifyCompressionCompleted` body includes a `Transfer verification: Passed` line.
+   6. **SC-005 / FR-010-FR-012 — log readable**: open `copiatorul3000.log`. INFO entries for every phase boundary + per-file copy success + per-file verify success with `[job=N file=K/27 phase=…]` prefix. ERROR entries (if any) are one line each; no multi-line PS parser dumps.
+   7. **SC-003 / FR-006-FR-007 — recovery**: kill the app via Task Manager between copy and verify of one file. Relaunch. Job resumes; that file enters verify-only state on next run; bytes are NOT double-credited. Counter re-derivation matches expected per-row state.
+   8. **SC-006 / FR-008-FR-009 — case-only collision**: stage source with `DCIM/IMG_001.MOV` + `dcim/img_001.mov`. Start a transfer. Preflight detects the collision and offers a rename option. Operator confirms; both files end at distinct destination paths.
+   9. **SC-007 / FR-014-FR-015 — schema migration**: confirm via `sqlite3 video_pipeline.db .schema` that v8 columns are present and historical rows backfilled correctly (size-only completed → `unverified`; sha256-completed + `verified=1` → `verified`).
 
 ---
 
@@ -186,6 +209,16 @@ Polish phase (T061-T065) can interleave with US4 and US5; T066-T067 are end-to-e
 
 ---
 
-## Estimated tasks: 67
+## Estimated tasks: 62
 
-5 user stories × ~8 tasks each + 33 foundational + 7 polish ≈ 80 actions; consolidation reduces parallel-test tasks to 67. Aligns with plan.md Phase 2 estimate of "~50–60 tasks". Slight expansion attributed to Codex round-3 + round-4 fixes (Slack expansion, parentJobId, log goldens).
+After Codex tasks-review consolidations:
+- T036/T037/T038 (active-card UI) → consolidated to T036 (same file)
+- T050-T056 (job_queue_service.dart logging) → consolidated to T050 (same file)
+- T040 amended with explicit predicate-bypass language
+- T012 extended with FR-013 long-path warning
+- T023 extended with no-bracket backward-compat fixture
+- T045a added (SC-004 force-dest-delete acceptance test)
+- T067 expanded to enumerated 9-step operator checklist
+- US1, US2, US3 headers gain explicit `Requires` annotations
+
+5 user stories + 33 foundational + 7 polish + 1 added test (T045a) = 62 tasks. Aligns with plan.md Phase 2 estimate. The consolidations reduce parallel-execution risk without changing scope coverage.
