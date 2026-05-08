@@ -55,8 +55,10 @@ class KeyboardCheatSheet extends StatelessWidget {
               _ShortcutGroup(title: 'Job management', items: [
                 ('Ctrl+N', 'New job'),
                 ('Ctrl+Shift+C', 'Copy all detected cards'),
-                ('Delete', 'Remove selected job (with confirmation)'),
                 ('Ctrl+R', 'Retry selected failed job'),
+                // Delete shortcut deferred until typed-confirmation
+                // gate is wired across destructive flows (Phase 14
+                // T101). Use right-click → Delete on a card for now.
               ]),
               _ShortcutGroup(title: 'Queue control', items: [
                 ('Ctrl+Enter', 'Pause / resume queue'),
@@ -137,8 +139,11 @@ class _KeyChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 110px width fits "Ctrl+Shift+C" at 12px JetBrains Mono with
+    // horizontal padding to spare; the previous 100px ellipsized
+    // that chord (Codex Phase 13 NIT).
     return Container(
-      width: 100,
+      width: 110,
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(
           horizontal: Insets.s, vertical: Insets.xxs),
