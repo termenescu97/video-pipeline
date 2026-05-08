@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../utils/constants.dart';
 import '../utils/process_runner.dart';
 import '../utils/robocopy_parser.dart';
+import 'log_service.dart';
 
 /// Callback for reporting transfer progress.
 typedef TransferProgressCallback = void Function(FileProgressEvent event);
@@ -13,6 +14,13 @@ typedef TransferProgressCallback = void Function(FileProgressEvent event);
 /// Uses /Z flag for resumable transfers.
 class TransferService {
   TransferProgressCallback? onProgress;
+
+  /// Optional logger for subprocess errors that would otherwise be
+  /// invisible (final-review fix #7). When wired by main.dart, hash
+  /// computation exceptions are persisted to copiatorul3000.log with
+  /// their root cause instead of being swallowed.
+  LogService? logService;
+
   final _processRunner = ProcessRunner();
   // Active SHA-256 hash subprocesses. We track every concurrent hash so
   // [cancel] can kill all of them — source/destination hashes commonly
@@ -82,6 +90,7 @@ class TransferService {
     final runner = ProcessRunner();
     _activeHashRunners.add(runner);
     final captured = StringBuffer();
+    final stderr = StringBuffer();
     try {
       final exitCode = await runner.run(
         executable: 'powershell',
@@ -95,13 +104,39 @@ class TransferService {
           final t = line.trim();
           if (t.isNotEmpty) captured.writeln(t);
         },
+        onStderrLine: (line) {
+          final t = line.trim();
+          if (t.isNotEmpty) stderr.writeln(t);
+        },
       );
-      if (exitCode != 0) return null;
+      if (exitCode != 0) {
+        // Final-review fix #7: surface the failure cause to the log
+        // so post-mortem can distinguish "permission denied" from
+        // "PowerShell missing" from "OOM".
+        logService?.error(
+          'computeFileHash exit=$exitCode for "$filePath"'
+          '${stderr.isEmpty ? '' : ' — stderr: ${stderr.toString().trim()}'}',
+        );
+        return null;
+      }
       final hash = captured.toString().trim();
       // SHA-256 hex is 64 chars; reject anything else as malformed.
-      if (hash.length != 64) return null;
+      if (hash.length != 64) {
+        logService?.error(
+          'computeFileHash returned malformed output for "$filePath" '
+          '(length=${hash.length}, expected 64)',
+        );
+        return null;
+      }
       return hash;
-    } catch (_) {
+    } catch (e, st) {
+      // Final-review fix #7: catch the exception detail (was `catch (_)`
+      // which lost the root cause). Log first three frames of stack so
+      // operator can hand the log to support without re-running.
+      logService?.error(
+        'computeFileHash threw for "$filePath": $e\n'
+        '${st.toString().split('\n').take(3).join('\n')}',
+      );
       return null;
     } finally {
       _activeHashRunners.remove(runner);

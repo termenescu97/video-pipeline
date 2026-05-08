@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
 import '../utils/format_utils.dart';
+import 'log_service.dart';
 
 /// Represents a detected removable storage device.
 class DetectedDrive {
@@ -28,14 +29,43 @@ class DetectedDrive {
 ///
 /// On non-Windows platforms, returns an empty list (development fallback).
 class DriveService {
+  /// Optional logger for PowerShell helper failures (final-review fix
+  /// #8). Without it, every disk identity / free-space / erase /
+  /// prep-cards probe that fails collapses silently to `null`.
+  final LogService? _logService;
+
+  DriveService({LogService? logService}) : _logService = logService;
+
   /// Run a PowerShell command safely. Returns null if PowerShell is
   /// unavailable, throws an unexpected error, or exits non-zero.
-  Future<ProcessResult?> _runPowerShell(List<String> args) async {
+  ///
+  /// [tag] is a short label written to the log on failure so post-mortem
+  /// can tell which call site failed (identity vs free-space vs erase).
+  Future<ProcessResult?> _runPowerShell(
+    List<String> args, {
+    required String tag,
+  }) async {
     try {
       final result = await Process.run('powershell', ['-NoProfile', ...args]);
-      if (result.exitCode != 0) return null;
+      if (result.exitCode != 0) {
+        // Final-review fix #8: write a log line for every non-zero
+        // PowerShell exit so erase / identity / disk probes that fail
+        // leave a paper trail. The stderr field is captured by
+        // Process.run; first 200 chars give us the cause without
+        // dumping a screenful.
+        final stderr = result.stderr.toString().trim();
+        _logService?.error(
+          'PowerShell helper "$tag" exit=${result.exitCode}'
+          '${stderr.isEmpty ? '' : ' — stderr: ${stderr.substring(0, stderr.length.clamp(0, 200))}'}',
+        );
+        return null;
+      }
       return result;
-    } catch (_) {
+    } catch (e, st) {
+      _logService?.error(
+        'PowerShell helper "$tag" threw: $e\n'
+        '${st.toString().split('\n').take(3).join('\n')}',
+      );
       return null;
     }
   }
@@ -52,7 +82,7 @@ class DriveService {
       r"Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | "
           r"Select-Object DeviceID, VolumeName, Size, FreeSpace | "
           r"ConvertTo-Json -Compress",
-    ]);
+    ], tag: 'getRemovableDrives');
 
     if (result == null) return [];
 
@@ -116,7 +146,7 @@ class DriveService {
       '-Command',
       r'Get-PSDrive -Name $args[0] | Select-Object -ExpandProperty Free',
       driveLetter,
-    ]);
+    ], tag: 'getDiskFreeSpace($driveLetter)');
 
     if (result == null) return -1;
     return int.tryParse(result.stdout.toString().trim()) ?? -1;
@@ -152,7 +182,7 @@ $disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Wi
 } | ConvertTo-Json -Compress
 ''',
       deviceId,
-    ]);
+    ], tag: 'getDriveIdentity($deviceId)');
 
     if (result == null) return null;
     final output = result.stdout.toString().trim();
@@ -188,14 +218,29 @@ $disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Wi
       '-Command',
       r'Get-ChildItem -LiteralPath $args[0] -Force | Remove-Item -Recurse -Force',
       drivePath,
-    ]);
+    ], tag: 'eraseDrive($drivePath)');
 
     return result != null;
   }
 
-  /// Prep test cards by copying test video files to DCIM/100TEST/ on each drive.
+  /// Prep test cards by copying test video files to DCIM/100TEST/ on
+  /// each drive.
+  ///
+  /// [expectedSerials] is a `path → serial` map captured at typed-
+  /// confirmation time. Before deleting `DCIM/100TEST` on a card, the
+  /// drive's current SerialNumber is fetched and compared against
+  /// the expected one (final-review fix #10). If the serial changed
+  /// (card swap mid-confirm) or cannot be re-read, the card is
+  /// skipped with an explanatory error — same identity-gate the
+  /// erase flow uses. A `null` expected serial means "could not read
+  /// at confirm time" and disables the gate for that card; pass an
+  /// empty map to skip the gate entirely (back-compat).
   Future<({int cardsPrepped, int filesCopied, List<String> errors})>
-      prepTestCards(String sourceFolder, List<DetectedDrive> drives) async {
+      prepTestCards(
+    String sourceFolder,
+    List<DetectedDrive> drives, {
+    Map<String, String?> expectedSerials = const {},
+  }) async {
     // Find video files in source folder.
     final sourceDir = Directory(sourceFolder);
     if (!await sourceDir.exists()) {
@@ -218,6 +263,34 @@ $disk = if ($partition) { $partition | Get-CimAssociatedInstance -Association Wi
 
     for (final drive in drives) {
       try {
+        // Final-review fix #10: re-verify card identity before any
+        // destructive action. If we recorded a serial at confirm time
+        // and it doesn't match now, refuse to prep — the operator may
+        // have swapped this slot's card between confirming and the
+        // file picker returning. Mirrors the eraseDrive serial gate.
+        final expected = expectedSerials[drive.path];
+        if (expected != null) {
+          final current = await getDriveIdentity(drive.path);
+          if (current == null || current.serialNumber == null) {
+            errors.add(
+              '${drive.label} (${drive.path}): could not re-read drive '
+              'identity — skipping (was the card removed?)',
+            );
+            continue;
+          }
+          if (current.serialNumber != expected) {
+            errors.add(
+              '${drive.label} (${drive.path}): drive serial changed '
+              'since confirmation — skipping (card swap detected)',
+            );
+            _logService?.warning(
+              'prepTestCards aborted for ${drive.path}: '
+              'expected serial $expected, found ${current.serialNumber}',
+            );
+            continue;
+          }
+        }
+
         final testDir = Directory(p.join(drive.path, 'DCIM', '100TEST'));
 
         // Clean existing test folder.

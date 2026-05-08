@@ -196,7 +196,15 @@ class JobQueueService {
           }
           break;
       }
-    } catch (e) {
+    } catch (e, st) {
+      // Final-review fix #3: top-level _processJob catch must reach the
+      // persistent log. Without this, an uncaught exception inside the
+      // transfer/compression pipelines leaves no on-disk trace — only
+      // the DB error message and Slack ping. The log is the only
+      // post-mortem channel for non-Slack-watching operators.
+      _logService?.error(
+        'Job #${job.id} (${job.type.name}) crashed: $e\n${st.toString().split('\n').take(3).join('\n')}',
+      );
       await _jobDao.markJobFailed(job.id, e.toString());
       await _slackService.notifyJobFailed(
         jobId: job.id,
@@ -356,6 +364,13 @@ class JobQueueService {
       return;
     }
 
+    // Final-review fix #9: stamp the final counter explicitly before
+    // markJobCompleted/markJobFailed. The per-file updateJobProgress
+    // only fires on SUCCESS, so a recovered job whose file rows were
+    // already completed pre-crash would otherwise carry stale
+    // jobs.completedFiles into history.
+    await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
+
     final allVerified = failedCount == 0;
     if (failedCount > 0) {
       _logService?.error('Job #${job.id} failed — $completedCount transferred, $failedCount failed verification');
@@ -431,10 +446,20 @@ class JobQueueService {
       if (success) {
         await _jobFileDao.markFileCompleted(file.id, verified: true);
         completedCount++;
+        _logService?.info(
+          'Job #${job.id} compressed: ${file.fileName}',
+        );
         await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
       } else {
         await _jobFileDao.markFileFailed(file.id, 'Compression failed');
         failedCount++;
+        // Final-review fix #2: compression branch was silent on file
+        // failure. Mirror the transfer branch and write to the log so
+        // post-mortem has the per-file failure trail (preset issues,
+        // codec problems are diagnosed from these lines).
+        _logService?.error(
+          'Job #${job.id} compression failed: ${file.fileName}',
+        );
       }
     }
 
@@ -444,19 +469,41 @@ class JobQueueService {
       return;
     }
 
+    // Final-review fix #9: stamp the final counter explicitly before
+    // markJobCompleted. The per-file updateJobProgress only fires on
+    // SUCCESS, so a recovered job whose file rows were already
+    // completed pre-crash would otherwise reach completion with stale
+    // jobs.completedFiles. This guarantees the row reflects reality.
+    await _jobDao.updateJobProgress(job.id, completedFiles: completedCount);
+
     if (failedCount > 0) {
+      // Final-review fix #2: log the job-level failure summary too.
+      _logService?.error(
+        'Job #${job.id} compression FAILED — $completedCount/${files.length} compressed, $failedCount failed',
+      );
       await _jobDao.markJobFailed(
         job.id,
         '$completedCount/${files.length} files compressed, $failedCount failed',
       );
+      // Final-review fix #1: when compression has any failures, do NOT
+      // send the green-checkmark "Compression Complete" Slack message.
+      // notifyJobFailed gives the operator an honest signal.
+      await _slackService.notifyJobFailed(
+        jobId: job.id,
+        phase: 'Compression',
+        error: '$completedCount/${files.length} files compressed, $failedCount failed',
+      );
     } else {
+      _logService?.info(
+        'Job #${job.id} compression completed — $completedCount files',
+      );
       await _jobDao.markJobCompleted(job.id);
+      await _slackService.notifyCompressionCompleted(
+        job: job,
+        completedFiles: completedCount,
+        totalFiles: files.length,
+      );
     }
-    await _slackService.notifyCompressionCompleted(
-      job: job,
-      completedFiles: completedCount,
-      totalFiles: files.length,
-    );
   }
 
   /// Create transfer jobs for multiple drives in batch.

@@ -235,7 +235,9 @@ Full report: `specs/006-review-findings/review-report-v2.md`
 
 ### Open Bugs
 
-None — all known data-safety bugs resolved as of v2.3.0.
+None blocking v2.4.0. The pre-merge final review (Opus + Codex parallel pass) cleared 8 of 9 accepted findings. Deferred to v2.4.1:
+
+- **robocopy execution-time overwrite guard (Codex CRITICAL #4)** — robocopy is invoked without `/XN /XC /XO`, so a destination file appearing between conflict-preflight and execution is silently overwritten with source content. Severity is lower in practice than first framed: the file at dest after the overwrite IS the operator's source data (no operator data loss); SHA-256 verification mode catches the same-size-different-content edge case. The proper fix needs a per-`JobFile` `wasOverwriteApproved` column to differentiate "operator-approved overwrite" from "TOCTOU intrusion" — adding `/XN /XC /XO` blindly breaks `/Z` resume after a kill (partial dest size ≠ source → robocopy excludes the file). Tracking for v2.4.1 with schema bump v6 → v7.
 
 ### Review & Quality Process
 

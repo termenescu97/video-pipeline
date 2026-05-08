@@ -654,6 +654,19 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
       return;
     }
 
+    // Final-review fix #10: capture each card's physical serial number
+    // BEFORE the confirmation dialog. The same `path → serial` map is
+    // re-checked inside prepTestCards before any DCIM/100TEST delete,
+    // so a card swap between confirm and file-picker cannot redirect
+    // the destructive op to the wrong card. Mirrors the eraseDrive
+    // identity gate.
+    final expectedSerials = <String, String?>{};
+    for (final drive in drives) {
+      final identity = await driveService.getDriveIdentity(drive.path);
+      expectedSerials[drive.path] = identity?.serialNumber;
+    }
+    if (!mounted) return;
+
     // T101 / Phase 14 typed-confirm migration: Prep Test Cards
     // replaces DCIM/100TEST/ on every detected card. Destructive
     // (one folder per card) but not catastrophic (other files
@@ -678,8 +691,11 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
     if (!mounted) return;
     setState(() => _preppingCards = true);
     try {
-      final result =
-          await driveService.prepTestCards(sourceFolder, drives);
+      final result = await driveService.prepTestCards(
+        sourceFolder,
+        drives,
+        expectedSerials: expectedSerials,
+      );
       if (!mounted) return;
       await _showPrepResult(result, drives);
     } finally {

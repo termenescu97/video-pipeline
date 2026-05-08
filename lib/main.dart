@@ -56,6 +56,16 @@ void main() async {
     return;
   }
 
+  // Logger — bring up FIRST so crash recovery and DB init can write
+  // to the persistent log. The logger has no DB dependency; resolving
+  // its file path only needs Platform.resolvedExecutable.
+  // (Final-review fix #6: recoverStaleJobs used to run before the
+  // logger was initialized, so any rescue events were lost. Initialize
+  // the logger first, then DB, then run recovery.)
+  logService = LogService();
+  await logService.init();
+  logService.info('App started');
+
   // Initialize FFI for SQLite on desktop.
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
@@ -64,7 +74,7 @@ void main() async {
   database = AppDatabase();
 
   // DAOs.
-  jobDao = JobDao(database);
+  jobDao = JobDao(database)..logService = logService;
   jobFileDao = JobFileDao(database);
   favoritePathDao = FavoritePathDao(database);
   settingsDao = SettingsDao(database);
@@ -73,14 +83,9 @@ void main() async {
   // Must run after DB init and after instance lock is held (single writer).
   await jobDao.recoverStaleJobs();
 
-  // Logger.
-  logService = LogService();
-  await logService.init();
-  logService.info('App started');
-
   // Services.
-  driveService = DriveService();
-  transferService = TransferService();
+  driveService = DriveService(logService: logService);
+  transferService = TransferService()..logService = logService;
   compressionService = CompressionService();
   slackService = SlackService(settingsDao: settingsDao);
   queueStateNotifier = QueueStateNotifier();

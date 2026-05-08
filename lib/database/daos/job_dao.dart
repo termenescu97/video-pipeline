@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 
+import '../../services/log_service.dart';
 import '../database.dart';
 import '../tables.dart';
 
@@ -8,6 +9,12 @@ part 'job_dao.g.dart';
 @DriftAccessor(tables: [Jobs, JobFiles])
 class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   JobDao(super.db);
+
+  /// Optional logger for recovery events. Wired in main.dart after
+  /// LogService.init(). Final-review fix #6: rescued jobs were
+  /// previously invisible to post-mortem; now each one writes a line
+  /// to copiatorul3000.log.
+  LogService? logService;
 
   /// Watch all jobs ordered by sort order (queue order).
   Stream<List<Job>> watchAllJobs() {
@@ -115,13 +122,12 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// Per the spec, recovery moves to [JobStatus.paused] (not [JobStatus.queued])
   /// so the operator must explicitly resume after reviewing.
   Future<void> recoverStaleJobs() async {
-    // Capture the IDs BEFORE the update so we know which rows we
-    // touched. Reading after the update would lose the set (those
-    // rows are now `paused`, indistinguishable from operator-paused
-    // jobs).
-    final rescued = await (select(jobs)
+    // Capture the rows BEFORE the update so we know which jobs we
+    // touched (and so the log entry has source/dest paths). Reading
+    // after the update would lose the set (those rows are now
+    // `paused`, indistinguishable from operator-paused jobs).
+    final rescuedJobs = await (select(jobs)
           ..where((t) => t.status.equalsValue(JobStatus.inProgress)))
-        .map((j) => j.id)
         .get();
 
     await transaction(() async {
@@ -141,7 +147,24 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
 
     _recoveredJobIds
       ..clear()
-      ..addAll(rescued);
+      ..addAll(rescuedJobs.map((j) => j.id));
+
+    // Final-review fix #6: emit one log line per rescued job so the
+    // post-mortem trail records what we touched. Trust signal for
+    // operators: "yes, the app noticed it crashed and rescued these
+    // jobs to a resumable state".
+    if (rescuedJobs.isNotEmpty) {
+      logService?.warning(
+        'Crash recovery: rescued ${rescuedJobs.length} in-progress '
+        'job(s) to paused state',
+      );
+      for (final job in rescuedJobs) {
+        logService?.warning(
+          '  Recovered job #${job.id}: '
+          '${job.sourcePath} → ${job.destinationPath}',
+        );
+      }
+    }
   }
 
   /// Atomic job creation. Inserts the job, its files, and totals in a
