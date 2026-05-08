@@ -256,7 +256,11 @@ class JobQueueService {
   }
 
   Future<void> _processJob(Job job) async {
-    _logService?.info('Job #${job.id} started — ${job.type.name} ${job.sourcePath} → ${job.destinationPath}');
+    _logService?.info(
+      'Job started — ${job.type.name} ${job.sourcePath} → ${job.destinationPath}',
+      jobId: job.id,
+      phase: LogPhase.enqueue,
+    );
     await _safeWrite(() => _jobDao.markJobStarted(job.id));
 
     try {
@@ -745,7 +749,13 @@ class JobQueueService {
         await _safeWrite(() =>
             _jobFileDao.markFileFailed(file.id, 'Transfer failed'));
         failedCount++;
-        _logService?.error('Job #${job.id} file transfer failed: ${file.fileName}');
+        _logService?.error(
+          'File transfer failed: ${file.fileName}',
+          jobId: job.id,
+          fileIndex: completedCount + failedCount,
+          totalFiles: files.length,
+          phase: LogPhase.transfer,
+        );
         // Codex review fix (MEDIUM): persist final progress before the
         // early return. Without this, completedFiles/completedBytes
         // accumulated by THIS run's pass over already-completed rows
@@ -891,7 +901,11 @@ class JobQueueService {
         completedCount++;
         completedBytes += file.fileSize;
         _logService?.info(
-          'Job #${job.id} compressed: ${file.fileName}',
+          'Compressed ${file.fileName}',
+          jobId: job.id,
+          fileIndex: completedCount,
+          totalFiles: files.length,
+          phase: LogPhase.compress,
         );
         await _safeWrite(() => _jobDao.updateJobProgress(
               job.id,
@@ -907,7 +921,11 @@ class JobQueueService {
         // post-mortem has the per-file failure trail (preset issues,
         // codec problems are diagnosed from these lines).
         _logService?.error(
-          'Job #${job.id} compression failed: ${file.fileName}',
+          'Compression failed: ${file.fileName}',
+          jobId: job.id,
+          fileIndex: completedCount + failedCount,
+          totalFiles: files.length,
+          phase: LogPhase.compress,
         );
       }
     }
@@ -936,7 +954,10 @@ class JobQueueService {
     if (failedCount > 0) {
       // Final-review fix #2: log the job-level failure summary too.
       _logService?.error(
-        'Job #${job.id} compression FAILED — $completedCount/${files.length} compressed, $failedCount failed',
+        'Compression FAILED — $completedCount/${files.length} compressed, '
+        '$failedCount failed',
+        jobId: job.id,
+        phase: LogPhase.finalize,
       );
       await _safeWrite(() => _jobDao.markJobFailed(
             job.id,
