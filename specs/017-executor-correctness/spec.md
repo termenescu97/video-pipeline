@@ -105,7 +105,7 @@ A source tree from a case-sensitive filesystem (Linux backup, macOS-formatted vo
 - **FR-005**: When a file shows verification mismatch and the operator chooses Retry, System MUST delete the destination file before re-copying, regardless of whether the destination size matches the source.
 - **FR-006**: When the system recovers from abandoned shutdown, files in a "copied but not yet verified" state MUST be routed to verify-only on next run (not re-copied).
 - **FR-007**: When the system recovers from abandoned shutdown, job-level counters (copied, verified, unverified, failed) MUST be re-derived from per-file state — not trusted from the prior shutdown's last write.
-- **FR-008**: System MUST detect collisions between two planned destination paths that differ only in character case before starting the transfer.
+- **FR-008**: System MUST detect collisions between two planned destination paths that differ only in character case before starting the transfer. Scoped to ASCII / Latin-script filenames in the operator's video corpus; non-ASCII Unicode case-folding is best-effort via `toLowerCase()` and does not need to match Windows' ICU case-folding tables in this release.
 - **FR-009**: When a case-only collision is detected, System MUST offer the operator a non-destructive rename option that preserves both source files at distinct destination paths.
 - **FR-010**: System MUST log INFO-level entries for job enqueue, preflight start/end (with verdict summary), transfer phase start/end (with totals), per-file copy success, verify phase start/end (with totals), per-file verify success, compression phase, finalization, recovery events, and shutdown phase transitions.
 - **FR-011**: Every log entry MUST include structured context fields: timestamp, severity level, and (when applicable) job ID, file index out of total, and current phase.
@@ -113,6 +113,9 @@ A source tree from a case-sensitive filesystem (Linux backup, macOS-formatted vo
 - **FR-013**: The free-space check MUST validate path shape upfront (reject empty paths, detect UNC) and either route UNC paths to a UNC-aware helper or skip with a clear "free space check skipped" warning that does NOT block job creation.
 - **FR-014**: Schema migration to v8 MUST preserve the data-safety semantics from v2.4.0 (features 015 + 016): `startedAt` preserved across resets; `wasOverwriteApproved` set only at preflight, survives retry, never cleared; `createdAt` mtime cutoff baseline never modified on retry/resume.
 - **FR-015**: Schema migration backfill MUST distinguish cryptographically-verified historical rows from size-only-verified historical rows (size-only verification does not establish cryptographic trust and must NOT backfill to "verified").
+- **FR-016**: Slack transfer-completed notifications MUST surface the per-job counts of verified, unverified, and mismatch files. When unverified or mismatch counts are non-zero, the notification MUST display a warning prefix (not a green checkmark verdict). This satisfies Constitution Principle V — operators who walk away from the workstation MUST receive actionable detail about non-clean completions.
+- **FR-017**: `verifyStatus` semantics apply ONLY to transfer-phase verification. Compression-only jobs (`Job.type = compression`) leave `verifyStatus = pending` for their `JobFile` rows and the UI MUST hide verify-related counters for these jobs. Transfer-and-compress jobs persist their transfer-phase `verifyStatus` across compression — the compressed output is intentionally different from the source and MUST NOT be hashed against it.
+- **FR-018**: Counter re-derivation during recovery (FR-007) MUST run once per rescued job after all stale-row mutations complete, regardless of which stale states (copying / copied + pending) were detected. This prevents drift between aggregate counters and per-row state when recovery touched only a subset of stale row types.
 
 ### Key Entities
 
@@ -131,6 +134,7 @@ A source tree from a case-sensitive filesystem (Linux backup, macOS-formatted vo
 - **SC-005**: Operator can determine, by reading the log alone, the full sequence of events for any successful job — phase boundaries, per-file completion, elapsed time — without reaching for the GUI.
 - **SC-006**: Zero cases of NTFS case-only collisions silently overwriting a source file's content, on a test corpus including two files differing only in filename case.
 - **SC-007**: Schema v7 → v8 migration completes successfully on the operator's existing v2.4.0 database with zero lost rows and accurate backfill of `verifyStatus` and `failureKind` fields.
+- **SC-008**: Slack notifications correctly distinguish clean completions ("Verification: SHA-256 — Passed") from completions with unverified or mismatched files (warning prefix + per-state counts), measured by inspecting the actual webhook payloads on a test run with mixed file outcomes.
 
 ## Assumptions
 
