@@ -66,6 +66,24 @@ class JobQueueService {
   // inProgress rows on the next launch.
   bool _shutdownAbandoned = false;
 
+  /// Test-only window into [_forceDestDeleteFileIds] so T045a can assert
+  /// the operator-driven retry recorded the fileId without exposing the
+  /// set as a mutable surface to production callers.
+  @visibleForTesting
+  bool isForceDestDeletePending(int fileId) =>
+      _forceDestDeleteFileIds.contains(fileId);
+
+  /// 017 (US2, T040, FR-005, Codex H2): in-memory set of fileIds that
+  /// must bypass the feature-015 delete predicate AND the size-match
+  /// short-circuit on their next pass through `_processTransfer`. Set
+  /// when the operator explicitly retries a verify-mismatch via the
+  /// banner; cleared after the file is consumed by the loop. Lives
+  /// only for the duration of the current process — recovery on next
+  /// launch reads `failureKind=verifyMismatch` from disk and, if the
+  /// operator hasn't re-confirmed, leaves the file alone. Operator-
+  /// driven attribution is the entire point (Constitution Principle I).
+  final Set<int> _forceDestDeleteFileIds = <int>{};
+
   /// Mark the queue as "shutdown abandoned." See [_shutdownAbandoned].
   /// Idempotent. Called from `shell_screen._gracefulShutdown` on Phase
   /// B timeout or unexpected throw; safe to call any number of times.
@@ -207,6 +225,34 @@ class JobQueueService {
     _transferService.cancel();
     _compressionService.cancel();
     return completer.future;
+  }
+
+  /// 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a single
+  /// file (typically after a verify mismatch). When [forceDestDelete] is
+  /// true, the next pass through `_processTransfer` will delete the
+  /// destination before robocopy regardless of size match — closes the
+  /// "same-size corrupt destination" loop where the feature-015 delete
+  /// predicate would skip robocopy and re-verify the same corrupt bytes
+  /// forever.
+  ///
+  /// Resets the file row's verify axis (verifyStatus/failureKind/hashes)
+  /// AND the parent job's status to pending so the queue scheduler can
+  /// pick the job up again. Records the fileId in
+  /// `_forceDestDeleteFileIds` for in-memory consumption by the loop.
+  Future<void> retryFile(int fileId, {bool forceDestDelete = false}) async {
+    final file = await _jobFileDao.getFile(fileId);
+    if (file == null) return;
+    if (forceDestDelete) {
+      _forceDestDeleteFileIds.add(fileId);
+      _logService?.warning(
+        'Operator retry of ${file.fileName} with forceDestDelete=true '
+        'after verify mismatch',
+        jobId: file.jobId,
+        phase: LogPhase.recover,
+      );
+    }
+    await _safeWrite(() => _jobFileDao.resetFileForRetry(fileId));
+    await _safeWrite(() => _jobDao.resetJobForRetry(file.jobId));
   }
 
   Future<void> _processJob(Job job) async {
@@ -419,7 +465,16 @@ class JobQueueService {
           final destSize = await destFile.length();
           final everAttempted = file.startedAt != null;
           final isPartial = destSize < sourceSize;
-          final shouldDelete = file.wasOverwriteApproved ||
+          // 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a
+          // verify-mismatched file. Bypasses the entire feature-015 delete
+          // predicate AND the size-match short-circuit below — even a
+          // dest with `wasOverwriteApproved=false` and identical size to
+          // source is replaced wholesale, because the bytes have already
+          // been verified to differ. Without this, retry on the same-size
+          // corrupt destination loops forever.
+          final forceDestDelete = _forceDestDeleteFileIds.remove(file.id);
+          final shouldDelete = forceDestDelete ||
+              file.wasOverwriteApproved ||
               (everAttempted && isPartial);
 
           if (shouldDelete) {
@@ -428,7 +483,10 @@ class JobQueueService {
               _logService?.info(
                 'Pre-robocopy cleanup of destination $destPath '
                 '(approved=${file.wasOverwriteApproved}, '
-                'attempted=$everAttempted, partial=$isPartial)',
+                'attempted=$everAttempted, partial=$isPartial, '
+                'forceDestDelete=$forceDestDelete)',
+                jobId: job.id,
+                phase: forceDestDelete ? LogPhase.recover : LogPhase.transfer,
               );
             } on FileSystemException catch (e) {
               // Permission denied / read-only / locked. Fail this

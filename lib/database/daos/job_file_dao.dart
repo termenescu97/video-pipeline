@@ -19,6 +19,12 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     return (select(jobFiles)..where((t) => t.jobId.equals(jobId))).get();
   }
 
+  /// Get a single file by its primary key.
+  Future<JobFile?> getFile(int fileId) {
+    return (select(jobFiles)..where((t) => t.id.equals(fileId)))
+        .getSingleOrNull();
+  }
+
   /// Get next pending file for a job.
   Future<JobFile?> getNextPendingFile(int jobId) {
     return (select(jobFiles)
@@ -168,6 +174,26 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
         status: Value(FileStatus.pending),
         completedAt: Value(null),
         errorMessage: Value(null),
+      ),
+    );
+  }
+
+  /// Reset a per-file row back to pending after operator-driven retry of
+  /// a verify-mismatch (017 US2, T040, Codex H2). Differs from
+  /// [resetFileToPending]: this clears the verify axis (verifyStatus,
+  /// failureKind, hashes) so the row re-enters the verify pipeline as
+  /// if it had never been verified. `startedAt` is preserved (load-bearing
+  /// 015 invariant — distinguishes own /Z partials from intrusions).
+  Future<void> resetFileForRetry(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      const JobFilesCompanion(
+        status: Value(FileStatus.pending),
+        completedAt: Value(null),
+        errorMessage: Value(null),
+        verifyStatus: Value(VerifyStatus.pending),
+        failureKind: Value(FailureKind.none),
+        sourceHash: Value(null),
+        destinationHash: Value(null),
       ),
     );
   }
