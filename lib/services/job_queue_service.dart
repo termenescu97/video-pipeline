@@ -248,6 +248,16 @@ class JobQueueService {
         // a junction could redirect into anywhere (system path or
         // network share), and File.delete() on a non-regular entity
         // is unsafe. Mark failed; operator resolves manually.
+        //
+        // Known coverage gap (Codex 015 review LOW): Windows `.lnk`
+        // shortcuts resolve as `FileSystemEntityType.file`, not
+        // `link`, so they bypass this guard. `.lnk` is a regular
+        // file containing a serialized shortcut header pointing at
+        // a target — robocopy/.delete() act on the .lnk file itself,
+        // not the target. Functionally safe but worth flagging if
+        // a future review wants explicit `.lnk` rejection (would
+        // need a `p.extension(destPath).toLowerCase() == '.lnk'`
+        // check here).
         final entityKind = destEntityType == FileSystemEntityType.link
             ? 'symlink/junction'
             : 'non-regular entity';
@@ -290,6 +300,28 @@ class JobQueueService {
               );
               continue;
             }
+          } else if (everAttempted && !isPartial) {
+            // Codex review fix (HIGH): legitimate "cancelled-between-
+            // robocopy-success-and-verification" case. We started this
+            // file in a prior run, robocopy completed (dest size ==
+            // source size), then the operator cancelled or the app
+            // crashed before the verification step wrote
+            // markFileCompleted. dest.lastModified() is necessarily
+            // > job.createdAt because robocopy ran AFTER job creation;
+            // applying the mtime cutoff here would falsely flag our
+            // own completed work as a TOCTOU intrusion and force the
+            // operator to manually retry every cancelled-mid-verify
+            // file. Skip the mtime guard for this case — robocopy
+            // with /XN/XC/XO will skip the file (correctly identifying
+            // it as Same/Changed), then verification will run and
+            // pass on a real match. Documented size-only-mode gap
+            // remains: a same-size content-different rogue would
+            // pass size verification; SHA-256 mode catches it.
+            _logService?.info(
+              'Job #${job.id} file ${file.fileName}: dest matches '
+              'source size on resumed file — letting robocopy skip + '
+              'verification confirm idempotently ($destPath)',
+            );
           } else {
             // Dest exists and we are NOT deleting — Option 4 mtime
             // cutoff guard. If dest was modified after the job was
@@ -452,6 +484,20 @@ class JobQueueService {
         await _jobFileDao.markFileFailed(file.id, 'Transfer failed');
         failedCount++;
         _logService?.error('Job #${job.id} file transfer failed: ${file.fileName}');
+        // Codex review fix (MEDIUM): persist final progress before the
+        // early return. Without this, completedFiles/completedBytes
+        // accumulated by THIS run's pass over already-completed rows
+        // (the `file.status == FileStatus.completed → continue` branch
+        // at the top of the loop) plus any mid-run successes is lost
+        // when this failure path returns — DB stays at whatever the
+        // last per-file success persisted, which can lag the actual
+        // on-disk state if the prior run crashed between markFile-
+        // Completed and updateJobProgress.
+        await _jobDao.updateJobProgress(
+          job.id,
+          completedFiles: completedCount,
+          completedBytes: completedBytes,
+        );
         await _jobDao.markJobFailed(job.id, 'File transfer failed: ${file.fileName}');
         await _slackService.notifyTransferFailed(
           job: job,
