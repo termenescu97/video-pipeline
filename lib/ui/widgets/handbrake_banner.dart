@@ -31,6 +31,21 @@ class HandBrakeBanner extends StatefulWidget {
   State<HandBrakeBanner> createState() => _HandBrakeBannerState();
 }
 
+/// Process-wide cache of the HandBrake availability probe. Each
+/// [HandBrakeBanner] mount used to spawn its own subprocess in
+/// initState — fine when only CreateJobScreen had one, but Phase 14
+/// added a second mount in HomeScreen's warning slot, doubling the
+/// cold-start cost. The first banner that mounts kicks off the probe;
+/// every subsequent banner awaits the same Future. Result is cached
+/// for the life of the process — installing HandBrake mid-session
+/// requires a restart to clear the banner (acceptable: HandBrake
+/// installs are rare and operators don't switch them mid-shoot).
+Future<bool>? _cachedHandbrakeProbe;
+
+Future<bool> _probeHandbrakeOnce() {
+  return _cachedHandbrakeProbe ??= compressionService.isHandbrakeInstalled();
+}
+
 class _HandBrakeBannerState extends State<HandBrakeBanner> {
   bool? _installed;
 
@@ -41,7 +56,7 @@ class _HandBrakeBannerState extends State<HandBrakeBanner> {
   }
 
   Future<void> _check() async {
-    final installed = await compressionService.isHandbrakeInstalled();
+    final installed = await _probeHandbrakeOnce();
     if (!mounted) return;
     setState(() => _installed = installed);
   }

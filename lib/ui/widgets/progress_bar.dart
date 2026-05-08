@@ -213,7 +213,13 @@ class _ShimmerBar extends StatelessWidget {
 /// are dropped when their inputs are null. Joined by " · " so the
 /// row stays one line on the active card width (~360px) until very
 /// late stages where everything is populated.
-class _DenseStatsLine extends StatelessWidget {
+///
+/// Stateful so we can cache the "done by HH:mm" wall-clock string
+/// across rebuilds. Without the cache, `DateTime.now()` inside build
+/// could flip the minute boundary on unrelated rebuilds even when
+/// the ETA itself hasn't moved — visible jitter on a fast progress
+/// stream (Codex Phase 14 review).
+class _DenseStatsLine extends StatefulWidget {
   final int completedFiles;
   final int totalFiles;
   final Duration? elapsed;
@@ -233,18 +239,69 @@ class _DenseStatsLine extends StatelessWidget {
   });
 
   @override
+  State<_DenseStatsLine> createState() => _DenseStatsLineState();
+}
+
+class _DenseStatsLineState extends State<_DenseStatsLine> {
+  Duration? _cachedEta;
+  String? _cachedDoneByText;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshDoneByCache(widget.eta);
+  }
+
+  @override
+  void didUpdateWidget(covariant _DenseStatsLine oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only rebuild the wall-clock string when ETA actually moves; keep
+    // the previous text otherwise so unrelated parent rebuilds (a new
+    // current-filename, a speed sample) don't flip "done by 18:14"
+    // → "done by 18:15" mid-second.
+    if (widget.eta != oldWidget.eta) {
+      _refreshDoneByCache(widget.eta);
+    }
+  }
+
+  void _refreshDoneByCache(Duration? eta) {
+    if (eta == null) {
+      _cachedEta = null;
+      _cachedDoneByText = null;
+      return;
+    }
+    _cachedEta = eta;
+    _cachedDoneByText = _doneByClockTime(eta);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final parts = <String>[];
-    if (speedBytesPerSec != null) parts.add(formatSpeed(speedBytesPerSec!));
-    if (totalFiles > 0) parts.add('$completedFiles/$totalFiles');
-    if (fps != null) parts.add('${fps!.toStringAsFixed(1)} fps');
-    if (elapsed != null) parts.add('${formatDuration(elapsed!)} elapsed');
-    if (eta != null) parts.add('done by ${_doneByClockTime(eta!)}');
+    if (widget.speedBytesPerSec != null) {
+      parts.add(formatSpeed(widget.speedBytesPerSec!));
+    }
+    if (widget.totalFiles > 0) {
+      parts.add('${widget.completedFiles}/${widget.totalFiles}');
+    }
+    if (widget.fps != null) {
+      parts.add('${widget.fps!.toStringAsFixed(1)} fps');
+    }
+    if (widget.elapsed != null) {
+      parts.add('${formatDuration(widget.elapsed!)} elapsed');
+    }
+    if (widget.eta != null) {
+      // Defensive: if didUpdateWidget didn't fire (initial state has
+      // null ETA, then ETA arrives), make sure the cache is current.
+      if (_cachedDoneByText == null || _cachedEta != widget.eta) {
+        _refreshDoneByCache(widget.eta);
+      }
+      parts.add('done by $_cachedDoneByText');
+    }
 
     if (parts.isEmpty) return const SizedBox.shrink();
     return Text(
       parts.join(' · '),
-      style: AppTextStyles.caption.copyWith(color: mutedColor),
+      style: AppTextStyles.caption.copyWith(color: widget.mutedColor),
       overflow: TextOverflow.ellipsis,
     );
   }
@@ -267,27 +324,59 @@ class _DenseStatsLine extends StatelessWidget {
 /// LayoutBuilder + TextPainter measures the available width and
 /// computes how many characters from each end fit; the middle is
 /// replaced by `…`.
-class _MiddleEllipsisText extends StatelessWidget {
+///
+/// Stateful + memoized: progress rows rebuild on every progress tick
+/// (~10 Hz). The binary-search inside [_ellipsize] runs ~log2(N) text
+/// measurements; without the cache that's roughly 5 TextPainter
+/// layouts per tick per active card. Cache the result keyed by
+/// `(text, fontSize, maxWidth)` so the common case (same filename,
+/// same card width) reuses the prior layout (Codex Phase 14 review).
+class _MiddleEllipsisText extends StatefulWidget {
   final String text;
   final TextStyle style;
 
   const _MiddleEllipsisText({required this.text, required this.style});
 
   @override
+  State<_MiddleEllipsisText> createState() => _MiddleEllipsisTextState();
+}
+
+class _MiddleEllipsisTextState extends State<_MiddleEllipsisText> {
+  String? _cachedText;
+  double? _cachedFontSize;
+  double? _cachedMaxWidth;
+  String? _cachedResult;
+
+  @override
   Widget build(BuildContext context) {
+    final fontSize = widget.style.fontSize ?? 14.0;
     return LayoutBuilder(
       builder: (context, constraints) {
-        return Text(
-          _ellipsize(text, style, constraints.maxWidth),
-          style: style,
-          maxLines: 1,
-          softWrap: false,
-        );
+        final maxWidth = constraints.maxWidth;
+        if (_cachedText == widget.text &&
+            _cachedFontSize == fontSize &&
+            _cachedMaxWidth == maxWidth &&
+            _cachedResult != null) {
+          return _staticText(_cachedResult!);
+        }
+        final result = _ellipsize(widget.text, widget.style, maxWidth);
+        _cachedText = widget.text;
+        _cachedFontSize = fontSize;
+        _cachedMaxWidth = maxWidth;
+        _cachedResult = result;
+        return _staticText(result);
       },
     );
   }
 
-  String _ellipsize(String src, TextStyle style, double maxWidth) {
+  Widget _staticText(String value) => Text(
+        value,
+        style: widget.style,
+        maxLines: 1,
+        softWrap: false,
+      );
+
+  static String _ellipsize(String src, TextStyle style, double maxWidth) {
     if (src.isEmpty) return src;
     if (_measure(src, style) <= maxWidth) return src;
 
@@ -298,7 +387,8 @@ class _MiddleEllipsisText extends StatelessWidget {
     int best = 1;
     while (lo <= hi) {
       final mid = (lo + hi) ~/ 2;
-      final candidate = '${src.substring(0, mid)}…${src.substring(src.length - mid)}';
+      final candidate =
+          '${src.substring(0, mid)}…${src.substring(src.length - mid)}';
       if (_measure(candidate, style) <= maxWidth) {
         best = mid;
         lo = mid + 1;
@@ -309,7 +399,7 @@ class _MiddleEllipsisText extends StatelessWidget {
     return '${src.substring(0, best)}…${src.substring(src.length - best)}';
   }
 
-  double _measure(String s, TextStyle style) {
+  static double _measure(String s, TextStyle style) {
     final painter = TextPainter(
       text: TextSpan(text: s, style: style),
       textDirection: TextDirection.ltr,

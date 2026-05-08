@@ -25,6 +25,11 @@ class JobCard extends StatelessWidget {
   final VoidCallback? onDelete;
   final VoidCallback? onRetry;
 
+  /// Forwarded to [JobCardNextUp.onStart] only. Lets the host route the
+  /// per-card Start button through the same recovery-acknowledgment +
+  /// queue-start path as the toolbar Start. Ignored by other variants.
+  final VoidCallback? onStart;
+
   /// Threaded down to draggable variants ([JobCardQueued], [JobCardNextUp])
   /// — the index in the host [SliverReorderableList]. When null, those
   /// variants render a non-draggable handle (used for static surfaces).
@@ -40,6 +45,7 @@ class JobCard extends StatelessWidget {
     this.onTap,
     this.onDelete,
     this.onRetry,
+    this.onStart,
     this.reorderIndex,
   });
 
@@ -70,6 +76,7 @@ class JobCard extends StatelessWidget {
             isExpanded: isExpanded,
             onTap: onTap,
             onDelete: onDelete,
+            onStart: onStart,
             reorderIndex: reorderIndex,
           );
         }

@@ -72,9 +72,6 @@ class ConfirmationDialog extends StatefulWidget {
     required String message,
     String confirmLabel = 'Confirm',
     String cancelLabel = 'Cancel',
-    @Deprecated('Use showDestructive/showCritical for destructive flows; '
-        'severity is no longer settable on the non-typed path')
-    Color? confirmColor,
   }) async {
     final result = await showDialog<bool>(
       context: context,
@@ -101,8 +98,19 @@ class ConfirmationDialog extends StatefulWidget {
     String cancelLabel = 'Cancel',
     String typedConfirmation = 'delete',
   }) async {
+    // Constitution Principle I: typed gate is mandatory. The assert
+    // catches misuse in dev; the runtime check guarantees a release
+    // build NEVER hands an operator a Confirm button without a typed
+    // challenge. Throw rather than silently downgrading.
     assert(typedConfirmation.isNotEmpty,
         'Destructive ConfirmationDialog requires non-empty typed gate');
+    if (typedConfirmation.isEmpty) {
+      throw ArgumentError.value(
+        typedConfirmation,
+        'typedConfirmation',
+        'Destructive ConfirmationDialog requires non-empty typed gate',
+      );
+    }
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -131,6 +139,13 @@ class ConfirmationDialog extends StatefulWidget {
   }) async {
     assert(typedConfirmation.isNotEmpty,
         'Critical ConfirmationDialog requires non-empty typed gate');
+    if (typedConfirmation.isEmpty) {
+      throw ArgumentError.value(
+        typedConfirmation,
+        'typedConfirmation',
+        'Critical ConfirmationDialog requires non-empty typed gate',
+      );
+    }
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -182,8 +197,20 @@ class _ConfirmationDialogState extends State<ConfirmationDialog> {
     };
 
     final typedRequired = widget.typedConfirmation;
-    final typedMatches =
-        typedRequired == null || _controller.text.trim() == typedRequired;
+    final typedInput = _controller.text.trim();
+    final typedMatches = typedRequired == null || typedInput == typedRequired;
+    // Inline hint when the operator has typed *something* that doesn't
+    // match — case-sensitive match is intentional (Principle I), but
+    // operators typing 'Delete' or 'DELETE' deserve to know why the
+    // button stays disabled instead of failing silently.
+    final showCaseHint = typedRequired != null &&
+        typedInput.isNotEmpty &&
+        typedInput != typedRequired &&
+        typedInput.toLowerCase() == typedRequired.toLowerCase();
+    final showMismatchHint = typedRequired != null &&
+        typedInput.isNotEmpty &&
+        typedInput != typedRequired &&
+        !showCaseHint;
 
     return AlertDialog(
       title: Row(
@@ -230,6 +257,21 @@ class _ConfirmationDialogState extends State<ConfirmationDialog> {
                 style: AppTextStyles.mono,
                 onChanged: (_) => setState(() {}),
               ),
+              if (showCaseHint) ...[
+                const SizedBox(height: Insets.xs),
+                Text(
+                  "Doesn't match — exact case required (\"$typedRequired\").",
+                  style: AppTextStyles.caption
+                      .copyWith(color: statusColors.warning),
+                ),
+              ] else if (showMismatchHint) ...[
+                const SizedBox(height: Insets.xs),
+                Text(
+                  "Doesn't match — type \"$typedRequired\" exactly.",
+                  style: AppTextStyles.caption
+                      .copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ],
             ],
           ],
         ),

@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
 import 'detail_tabs.dart';
+import 'recovered_chip.dart';
 
 /// Hero variant for the first queued job when nothing is currently running.
 ///
@@ -27,6 +28,14 @@ class JobCardNextUp extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onDelete;
 
+  /// Card-level Start handler. The host (HomeScreen) wires this so
+  /// the same recovery-acknowledgment + start path runs whether the
+  /// operator hits the toolbar Start or the per-card Start. When
+  /// null, falls back to a direct `jobQueueService.startProcessing`
+  /// call (preserves the v2.3 behavior for any host that hasn't
+  /// migrated yet).
+  final VoidCallback? onStart;
+
   /// Index in the parent [SliverReorderableList]. When non-null, the ☰
   /// handle is wrapped in a [ReorderableDragStartListener].
   final int? reorderIndex;
@@ -37,6 +46,7 @@ class JobCardNextUp extends StatelessWidget {
     this.isExpanded = false,
     this.onTap,
     this.onDelete,
+    this.onStart,
     this.reorderIndex,
   });
 
@@ -95,7 +105,7 @@ class JobCardNextUp extends StatelessWidget {
                       ),
                     ),
                     if (jobDao.recoveredJobIds.contains(job.id)) ...[
-                      const _RecoveredChip(),
+                      const RecoveredChip(),
                       const SizedBox(width: Insets.s),
                     ],
                     Container(
@@ -129,7 +139,8 @@ class JobCardNextUp extends StatelessWidget {
                 Row(
                   children: [
                     FilledButton.icon(
-                      onPressed: () => jobQueueService.startProcessing(),
+                      onPressed: onStart ??
+                          () => jobQueueService.startProcessing(),
                       icon: const Icon(Icons.play_arrow, size: 18),
                       label: const Text('Start'),
                     ),
@@ -199,40 +210,6 @@ class JobCardNextUp extends StatelessWidget {
       case JobType.transferAndCompress:
         return Icons.sync;
     }
-  }
-}
-
-/// "Recovered after restart" chip (T109). Mirror of the same chip
-/// on JobCardQueued — duplicated for self-containment.
-class _RecoveredChip extends StatelessWidget {
-  const _RecoveredChip();
-
-  @override
-  Widget build(BuildContext context) {
-    final statusColors = Theme.of(context).extension<StatusColors>()!;
-    return Tooltip(
-      message: 'This job was rescued after a previous crash.\n'
-          'Press Start when ready to resume.',
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: Insets.s, vertical: 1),
-        decoration: BoxDecoration(
-          color: statusColors.warning.withValues(alpha: 0.15),
-          border: Border.all(color: statusColors.warning),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.history, size: 12, color: statusColors.warning),
-            const SizedBox(width: Insets.xxs),
-            Text('Recovered',
-                style: AppTextStyles.caption
-                    .copyWith(color: statusColors.warning)),
-          ],
-        ),
-      ),
-    );
   }
 }
 

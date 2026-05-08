@@ -519,6 +519,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         onRetry: job.status == JobStatus.failed
                             ? () => _retryJob(job)
                             : null,
+                        // T109 fix: card-level Start must run the same
+                        // recovery-acknowledgment path as the toolbar
+                        // Start, otherwise a "Recovered" chip stays on
+                        // the card after the operator presses its own
+                        // Start button (Codex Phase 14 review).
+                        onStart: _startQueueAcknowledgingRecovery,
                         reorderIndex: job.status == JobStatus.inProgress
                             ? null
                             : index,
@@ -566,20 +572,27 @@ class _HomeScreenState extends State<HomeScreen> {
         const SnackBar(content: Text('Queue stopped')),
       );
     } else {
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Queue started')),
-      );
-      // T100/T109: starting the queue is a "resume" action — clear
-      // every recovered chip since the operator is implicitly
-      // acknowledging the whole set by pressing Start.
-      for (final id in jobDao.recoveredJobIds.toList()) {
-        jobDao.markRecoveryAcknowledged(id);
-      }
-      jobQueueService.startProcessing().then((_) {
-        if (mounted) setState(() {});
-      });
+      _startQueueAcknowledgingRecovery();
     }
+  }
+
+  /// Shared Start path used by the toolbar and the JobCardNextUp
+  /// per-card Start button (Codex Phase 14 review). Pressing Start
+  /// is an implicit acknowledgment of every recovered job, so we
+  /// clear the in-memory recovery set BEFORE kicking off processing
+  /// — that way the chip disappears on the next rebuild regardless
+  /// of which Start surface the operator used.
+  void _startQueueAcknowledgingRecovery() {
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Queue started')),
+    );
+    for (final id in jobDao.recoveredJobIds.toList()) {
+      jobDao.markRecoveryAcknowledged(id);
+    }
+    jobQueueService.startProcessing().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _deleteJob(Job job) async {
