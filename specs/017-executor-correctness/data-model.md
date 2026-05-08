@@ -45,10 +45,11 @@ class JobFiles extends Table {
 
 ### `Job` — additions
 
+Existing v7 columns (preserved unchanged): `id`, `type` (textEnum<JobType>), `status` (textEnum<JobStatus>), `sourcePath`, `destinationPath`, `compressionOutputPath`, `presetName`, `autoChain`, `createdAt`, `startedAt`, `completedAt`, `errorMessage`, `sortOrder`, `totalFiles`, `completedFiles`, `totalBytes`, `completedBytes`, `operatorName`, **`verificationMode`** (textEnum<VerificationMode> — `'size'` or `'sha256'`).
+
 ```dart
 class Jobs extends Table {
-  // ... existing v7 columns: id, type, sourcePath, destPath, status, totalFiles,
-  //     completedFiles, totalBytes, completedBytes, createdAt, ..., requireHashVerification, ...
+  // ... v7 columns above ...
 
   /// NEW v8: Mirror of count of JobFile rows where verifyStatus = unverified.
   /// Re-derived on recovery (FR-007).
@@ -80,7 +81,7 @@ enum VerifyStatus { pending, verified, mismatch, unverified }
 enum FailureKind { none, copyError, verifyMismatch, verifyUnreliable }
 ```
 
-Both encoded as `intEnum` in Drift (positional ordinal). Adding new variants in future migrations appends; existing rows preserve their ordinal.
+Both encoded as `textEnum` in Drift (Drift stores `enum.name`, so values are literal strings: `'pending'`, `'verified'`, etc.). This matches the existing schema convention (`status`, `type`, `verificationMode` are all `textEnum`). Adding new variants in future migrations is non-breaking — existing rows preserve their stored string and new readers see the deserialized enum value. Removing or reordering variants is breaking and requires a migration.
 
 ## Migration v7 → v8 (transactional)
 
@@ -151,9 +152,11 @@ MigrationStrategy get migration => MigrationStrategy(
         ''');
 
         // ─── Phase 4: backfill unverified subsystem failures ────────────
-        // Match the actual subsystem-failure messages from job_queue_service.dart
-        // line 490 ('SHA-256 verification failed: could not compute hash') and
-        // transfer_service.dart line 117 ('computeFileHash exit=...').
+        // Match the actual subsystem-failure messages from
+        //   job_queue_service.dart:490 'SHA-256 verification failed: could not compute hash'
+        //   transfer_service.dart:117  'computeFileHash exit=…'
+        //   transfer_service.dart:126  'computeFileHash returned malformed output'
+        //   transfer_service.dart:137  'computeFileHash threw for'
         await customStatement('''
           UPDATE job_files
           SET verify_status = 'unverified',
@@ -163,7 +166,9 @@ MigrationStrategy get migration => MigrationStrategy(
             AND (
               error_message LIKE '%could not compute hash%' OR
               error_message LIKE '%hash computation failed%' OR
-              error_message LIKE '%computeFileHash exit=%'
+              error_message LIKE '%computeFileHash exit=%' OR
+              error_message LIKE '%computeFileHash returned malformed output%' OR
+              error_message LIKE '%computeFileHash threw%'
             )
         ''');
 
@@ -200,18 +205,21 @@ MigrationStrategy get migration => MigrationStrategy(
 
 ### `JobFile` lifecycle (v8)
 
+The `FileStatus` enum is **`pending, inProgress, completed, failed, skipped`** (defined in `tables.dart:10`; no `copying` or `copied` values). In v8, `status=completed` means "bytes on disk after robocopy success" — independent of `verifyStatus`. Legacy readers reading `status=completed` continue to see "transfer-side done"; the verify axis is read separately by new code.
+
 | Trigger | `status` change | `verifyStatus` change | `failureKind` change |
 |---------|-----------------|------------------------|----------------------|
-| Job starts copy | `pending` → `copying` | `pending` (unchanged) | `none` (unchanged) |
-| Robocopy success | `copying` → `copied` | `pending` (unchanged) | `none` (unchanged) |
-| Robocopy fail | `copying` → `failed` | `pending` (unchanged) | `none` → `copyError` |
-| Hash matches | `copied` (unchanged) | `pending` → `verified` | `none` (unchanged) |
-| Hash mismatch | `copied` (unchanged) | `pending` → `mismatch` | `none` → `verifyMismatch` |
-| Hash subsystem error | `copied` (unchanged) | `pending` → `unverified` | `none` → `verifyUnreliable` |
-| Operator clicks Retry on `mismatch` | `failed` → `pending` | `mismatch` → `pending` | `verifyMismatch` (unchanged until next attempt) |
-| Operator clicks Retry on `copyError` | `failed` → `pending` | `pending` (unchanged) | `copyError` (unchanged until next attempt) |
-| Recovery — copied + pending | unchanged | unchanged (re-enters verify-only phase) | unchanged |
-| Recovery — copied + pending + source missing | unchanged | `pending` → `unverified` | `none` → `verifyUnreliable` |
+| Job starts copy | `pending` → `inProgress` | `pending` (unchanged) | `none` (unchanged) |
+| Robocopy success | `inProgress` → `completed` (bytes on disk) | `pending` (unchanged) | `none` (unchanged) |
+| Robocopy fail | `inProgress` → `failed` | `pending` (unchanged) | `none` → `copyError` |
+| Hash matches | `completed` (unchanged) | `pending` → `verified` | `none` (unchanged) |
+| Hash mismatch | `completed` (unchanged — bytes still on disk) | `pending` → `mismatch` | `none` → `verifyMismatch` |
+| Hash subsystem error | `completed` (unchanged) | `pending` → `unverified` | `none` → `verifyUnreliable` |
+| Operator clicks Retry on `mismatch` | `completed` → `pending` (file scheduled for re-copy with `forceDestDelete=true`) | `mismatch` → `pending` | `verifyMismatch` (unchanged until next attempt resolves) |
+| Operator clicks Retry on `copyError` | `failed` → `pending` | `pending` (unchanged) | `copyError` (unchanged until next attempt resolves) |
+| Recovery — `status=completed && verifyStatus=pending` (FR-006) | unchanged | unchanged (re-enters verify-only phase) | unchanged |
+| Recovery — same as above + source missing | unchanged | `pending` → `unverified` | `none` → `verifyUnreliable` |
+| Recovery — `status=inProgress` | `inProgress` → `pending` (existing v2.4.0 behavior; robocopy `/Z` resumes on retry) | `pending` (unchanged) | `none` (unchanged) |
 
 ### `Job` aggregate counters (v8)
 
@@ -224,7 +232,7 @@ There is no `verifiedFiles` column on `Job` because it equals `completedFiles - 
 | Invariant (from CLAUDE.md) | v8 status |
 |----------------------------|-----------|
 | `_safeWrite` wrapper required for all DAO writes inside processing loop | Preserved — new mark/increment methods called inside `_safeWrite`. |
-| `JobFile.startedAt` preserved across resets | Preserved — `markFileCopied` does NOT touch it; `resetFileToPending` continues to leave it. |
+| `JobFile.startedAt` preserved across resets | Preserved — `markFileTransferComplete` does NOT touch it; `resetFileToPending` continues to leave it. |
 | `JobFile.wasOverwriteApproved` set only at preflight, survives retry, never cleared | Preserved — A4 changes do not modify this field. |
 | `Job.createdAt` mtime cutoff baseline never modified on retry/resume | Preserved — A4/A7 do not touch `createdAt`. |
 | `robocopyFlags` includes `/XN /XC /XO` | Preserved — A5's `forceDestDelete=true` deletes the dest file BEFORE robocopy, so `/XO`'s "skip on size match" doesn't fire. |

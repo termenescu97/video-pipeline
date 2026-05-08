@@ -71,7 +71,7 @@ Codex H2: `'%SHA-256%'` alone is too broad — it matches BOTH real mismatches a
 | `status='completed'` AND `verified=1` AND parent `verification_mode='size'` | `unverified` (size-only doesn't establish cryptographic trust) | `none` |
 | `status='completed'` AND `verified=0` (rare — recovery edge case) | `pending` (will re-verify) | `none` |
 | `status='failed'` AND `errorMessage LIKE '%SHA-256 hash mismatch%' OR LIKE '%SHA-256 MISMATCH%' OR LIKE '%hash mismatch%'` | `mismatch` | `verifyMismatch` |
-| `status='failed'` AND `errorMessage LIKE '%could not compute hash%' OR LIKE '%hash computation failed%' OR LIKE '%computeFileHash exit=%'` | `unverified` | `verifyUnreliable` |
+| `status='failed'` AND `errorMessage LIKE` any of: `'%could not compute hash%'`, `'%hash computation failed%'`, `'%computeFileHash exit=%'`, `'%computeFileHash returned malformed output%'`, `'%computeFileHash threw%'` | `unverified` | `verifyUnreliable` |
 | `status='failed'` (other) | `pending` (default) | `copyError` |
 | `status='pending'` / `'inProgress'` / `'skipped'` | `pending` (default) | `none` (default) |
 
@@ -94,7 +94,7 @@ Codex H2: `'%SHA-256%'` alone is too broad — it matches BOTH real mismatches a
 
 ```dart
 // After robocopy success (≈ line 484 of job_queue_service.dart)
-await _safeWrite(() => _jobFileDao.markFileCopied(file.id));
+await _safeWrite(() => _jobFileDao.markFileTransferComplete(file.id));
 await _safeWrite(() => _jobDao.updateJobProgress(
   job.id,
   completedFiles: completedCount,
@@ -114,7 +114,7 @@ The `_safeWrite` wrapper (load-bearing convention from feature 016) drops writes
 
 ### Risks
 
-- Race: shutdown fires between the two `_safeWrite` calls. The file is `status=copied + verifyStatus=pending`. **Closed by R-A7** — `recoverStaleJobs` handles this row state.
+- Race: shutdown fires between the two `_safeWrite` calls. The file is `status=completed + verifyStatus=pending`. **Closed by R-A7** — `recoverStaleJobs` handles this row state.
 - The new mark methods on `JobFileDao` need symmetric extension on `JobDao` (counters). Tests cover both paths.
 
 ## R-A6 — Logging API backward-compat + truncation
@@ -164,6 +164,8 @@ Field order inside the bracket: `job`, `file`, `phase`. Always space-separated. 
 Per Codex M2, "every caller manually truncates stderr" is fragile. A mechanical migration can miss one path. Solution: enforce in `LogService.error` itself.
 
 ```dart
+import 'package:characters/characters.dart';
+
 class LogService {
   static const int _maxStderrChars = 200;
 
@@ -173,10 +175,16 @@ class LogService {
   }) {
     var formatted = _format('ERROR', message, jobId, fileIndex, totalFiles, phase);
     if (subprocessStderr != null && subprocessStderr.isNotEmpty) {
-      // Single-line, max 200 chars.
+      // First line. .split('\n') already strips '\n'; .trim() removes trailing
+      // '\r' from Windows CRLF stderr (Codex round-2 R6).
       final firstLine = subprocessStderr.split('\n').first.trim();
-      final truncated = firstLine.length > _maxStderrChars
-          ? '${firstLine.substring(0, _maxStderrChars)}…'
+      // Truncate by user-perceived characters (grapheme clusters), NOT raw
+      // UTF-16 code units. .substring(0, 200) can split a UTF-16 surrogate
+      // pair and produce mojibake when the stderr contains emoji or non-BMP
+      // code points (Codex round-2 R6). The `characters` package is a
+      // transitive Flutter dep — no new dependency.
+      final truncated = firstLine.characters.length > _maxStderrChars
+          ? '${firstLine.characters.take(_maxStderrChars).toString()}…'
           : firstLine;
       formatted += ': $truncated';
     }
@@ -185,7 +193,7 @@ class LogService {
 }
 ```
 
-Callers pass raw stderr; LogService handles truncation. Golden tests cover multi-line input.
+Callers pass raw stderr; LogService handles truncation. Golden tests cover: empty stderr (skip the colon), Windows CRLF (trim handles `\r`), single line > 200 chars (truncate with ellipsis), multi-line (take first), emoji or surrogate-pair stderr (no mojibake).
 
 ### Rationale
 
@@ -247,23 +255,31 @@ Validate before invoking PS:
 
 ### `_PlannedFile` consolidation contract (R-A9, Codex M7 + M4 refinement)
 
-Two consumers today:
-- `JobQueueService.createBatchTransferJobs` and `_processTransfer` (executor side)
-- `CreateJobScreen._applyResolution` and conflict UI (creation side)
+Two consumers today (verified against `lib/services/job_queue_service.dart:1048-1078` and `lib/ui/screens/create_job_screen.dart:1140-1173`). **Both have identical fields** — they're literally duplicate classes the operator's load-bearing convention has flagged for consolidation:
 
-Consolidation target: shared definition in `lib/database/planned_file.dart` with the union of fields used by both consumers.
+```dart
+class _PlannedFile {
+  String sourcePath;          // required
+  String destinationPath;     // required (mutable in executor copy, final in UI copy)
+  String fileName;            // required
+  int fileSize;               // required
+  bool wasOverwriteApproved;  // default false; stamped true in _applyResolution per 015
+  
+  _PlannedFile.copyWith({String? destinationPath, bool? wasOverwriteApproved}) → _PlannedFile;
+}
+```
 
-Codex M4: a single all-fields-set fixture is insufficient — production paths often pass sparse shapes. The contract test must cover:
+Consolidation target: shared definition in `lib/database/planned_file.dart` (or `lib/services/planned_file.dart`) with all 5 fields. Make all final and the class immutable; replace executor's mutable `destinationPath`/`wasOverwriteApproved` assignment in `_applyResolution` with `copyWith`.
 
-- **Full population**: every field set; both consumers process without `null` derefs.
-- **Subset shapes per consumer**:
-  - Batch creation: `sourcePath`, `destPath`, `fileSize` set; `wasOverwriteApproved=false`, `existingDestSize=null`.
-  - Single-job creation with rename: `sourcePath`, `destPath` (renamed), `fileSize`, `wasOverwriteApproved=false`.
-  - Single-job creation with overwrite: `wasOverwriteApproved=true`, `existingDestSize` set.
-  - Skip resolution: file omitted from the planned set entirely (assert downstream handles missing rows correctly).
-- **`copyWith` preservation**: `wasOverwriteApproved` and `existingDestSize` survive `_PlannedFile.copyWith(destPath: ...)` calls used during rename suffix generation.
+Codex M4: a single all-fields-set fixture is insufficient — production paths exercise different field combinations. The contract test must cover:
 
-The contract test runs in CI and fails fast on any divergence between the consolidated shape and either consumer's expectations.
+- **Full population**: all 5 fields set; both consumers (`createBatchTransferJobs` flow + `_applyResolution` flow) process without `null` derefs.
+- **Default `wasOverwriteApproved=false`**: covers the common case where preflight detects no conflict on this file.
+- **`wasOverwriteApproved=true`**: covers the `_applyResolution` flow where operator chose Overwrite at preflight; verify the executor's delete-pre-robocopy logic respects the flag.
+- **Rename via `copyWith(destinationPath: …)`**: the existing `_suffixed` helper produces a renamed file by calling `copyWith`. Contract: `wasOverwriteApproved` and `fileName` are preserved across rename. (`fileName` doesn't change on rename; `destinationPath` does.)
+- **Skip resolution**: a planned file is omitted from the resulting `List<_PlannedFile>` entirely. Contract: downstream consumers (DB insert, robocopy invocation) handle the missing rows correctly — they're filtered upstream, never reach the executor.
+
+The contract test runs in CI and fails fast on any divergence between the consolidated shape and either consumer's expectations. **No `existingDestSize` field exists** — earlier draft fabricated this; the conflict UI tracks dest size separately via `ConflictEntry` (`job_queue_service.dart:1040-1045`).
 
 ### Slack notification expansion for unverified files (Codex H3 → new FR)
 
@@ -297,3 +313,30 @@ Future<void> notifyTransferCompleted({
 ```
 
 Callers (`job_queue_service.dart::_processTransfer` and `_processCompression`) pass the per-job aggregate counters from the schema v8 fields. Mismatch and unverified counts > 0 trigger the warning prefix.
+
+**Compression-completed notification expansion** (Codex round-2 H3 follow-up): `notifyCompressionCompleted` (`slack_service.dart:106-119`) currently has no verify counts — it just shows files done + duration. For `JobType.transferAndCompress` jobs, the transfer-phase verify state persists across compression; a clean-looking compression Slack ping after a non-clean transfer would violate Principle V again. Expansion:
+
+```dart
+Future<void> notifyCompressionCompleted({
+  required Job job,
+  required int completedFiles,
+  required int totalFiles,
+  required int verifiedFiles,           // NEW — from transfer phase, persisted
+  required int unverifiedFiles,         // NEW — from transfer phase, persisted
+  required int mismatchedFiles,         // NEW — from transfer phase, persisted
+}) async {
+  final isTransferAndCompress = job.type == JobType.transferAndCompress;
+  final verifyLine = isTransferAndCompress
+      ? (mismatchedFiles > 0
+          ? '⚠ Transfer verification: $mismatchedFiles file(s) FAILED'
+          : unverifiedFiles > 0
+              ? '⚠ Transfer verification: $unverifiedFiles file(s) UNVERIFIED'
+              : 'Transfer verification: Passed')
+      : null;  // compression-only: no verify state to surface
+  // ... format + send ...
+}
+```
+
+For `JobType.compression` (compression-only), the verify count params are accepted but not surfaced (no transfer phase happened). Callers pass them defensively from the schema.
+
+This satisfies FR-016 across both phase boundaries and closes the round-2 ambiguity flagged by the Codex follow-up.

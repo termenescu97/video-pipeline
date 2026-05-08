@@ -121,36 +121,56 @@ flutter run --dart-define=COPIATORUL_DB_PATH=/tmp/test.db
 
 Backfill rules are documented in [data-model.md](./data-model.md). Migration is wrapped in a single Drift `transaction` block — mid-migration crash leaves DB at v7.
 
-## How to recover a job stuck in "copied + pending"
+## How to recover a job stuck mid-pipeline
 
-This case happens when shutdown fires between robocopy success and SHA-256 verification. On next launch, `JobQueueService.recoverStaleJobs` detects these rows and routes them to verify-only:
+Recovery handles two stale-row shapes (`FileStatus` is `pending, inProgress, completed, failed, skipped` — there is NO `copying` or `copied`):
+
+1. `status = inProgress` — robocopy was killed mid-copy. v2.4.0 already handles this: reset to `pending`, robocopy `/Z` resumes.
+2. `status = completed && verifyStatus = pending` — robocopy succeeded but verify never ran (v8 NEW). Re-enter verify-only phase.
 
 ```dart
-// In recoverStaleJobs (job_queue_service.dart):
+// In recoverStaleJobs (lib/services/job_queue_service.dart):
+
+// Step 1: collect rescued-job set per FR-018.
+//   union of (jobs.status='inProgress')
+//   and (jobs with any file in inProgress OR completed+verifyStatus=pending).
+final rescuedJobIds = await jobDao.getRescuedJobIds();
+
+// Step 2a: existing v2.4.0 path — reset inProgress files to pending.
+await jobFileDao.resetInProgressFilesToPending();
+
+// Step 2b: NEW v8 — schedule verify-only for completed+pending rows.
 final staleVerifyRows = await jobFileDao.getFilesByStateAndVerify(
   status: FileStatus.completed,
   verifyStatus: VerifyStatus.pending,
 );
-
 for (final file in staleVerifyRows) {
-  if (await File(file.sourcePath).exists() && await File(file.destPath).exists()) {
-    // Re-enter verify phase; do not re-copy
+  final sourceExists = await File(file.sourceFilePath).exists();
+  final destExists = await File(file.destinationFilePath).exists();
+  if (sourceExists && destExists) {
     await jobQueueService.queueVerifyOnly(file.id);
   } else {
-    // Source or dest gone — mark unverified, surface to operator
-    await jobFileDao.markFileUnverified(file.id, reason: 'source or destination missing on recovery');
+    await jobFileDao.markFileUnverified(file.id);
     logService.warning(
       'Cannot verify recovered file (source or dest missing)',
       jobId: file.jobId,
-      filename: file.sourcePath,
       phase: LogPhase.recover,
     );
   }
 }
 
-// Re-derive job counters from per-file state (FR-007)
-await jobDao.recomputeCountersFromFiles(file.jobId);
+// Step 3 (FR-018): re-derive Job-level counters ONCE per rescued job,
+// after ALL stale-row mutations complete, regardless of which states were
+// detected. This prevents drift when recovery touches only a subset.
+for (final jobId in rescuedJobIds) {
+  await jobDao.recomputeCountersFromFiles(jobId);
+}
 ```
+
+`recomputeCountersFromFiles(jobId)` reads all `JobFile` rows for that job and writes:
+- `Job.completedFiles` = count of `status = completed`
+- `Job.completedBytes` = sum of `fileSize` where `status = completed`
+- `Job.unverifiedFiles` = count of `verifyStatus = unverified`
 
 ## Test invariants
 
@@ -167,7 +187,7 @@ flutter test test/unit/process_runner_argv_test.dart
 # 4. Progress decoupling (mocks hash subprocess to fail)
 flutter test test/unit/progress_decouple_test.dart
 
-# 5. Recovery (status=copied + verifyStatus=pending → verify-only)
+# 5. Recovery (status=completed + verifyStatus=pending → verify-only)
 flutter test test/unit/recovery_test.dart
 
 # 6. Case-only collision normalization

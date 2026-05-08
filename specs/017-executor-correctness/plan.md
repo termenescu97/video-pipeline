@@ -11,7 +11,7 @@ Fix the executor failures from the operator's 2026-05-08 Windows test run on v2.
 2. **Progress counters gated on verification success** — when (1) cascades, every file's verify fails and `Job.completedFiles/completedBytes` never advance. UI reads `0 B / 161 GB`.
 3. **No structured logging** — `LogService` has plain-string `info/warning/error`, no `jobId/file/phase` context, no INFO-level events for successful operations.
 
-Approach: replace `$args[0]` with single-quote escape (`s.replaceAll("'", "''")`) inside the `-Command` script string + `-LiteralPath` for verbatim path treatment. Decouple progress counters from verify outcome (two `_safeWrite` calls). Add schema v8 columns `JobFile.verifyStatus`, `JobFile.failureKind`, `Job.unverifiedFiles`, `AppSettings.sourcesPanelCollapsed` (last one consumed by feature 018). Extend `recoverStaleJobs` to handle `status=copied + verifyStatus=pending` rows. Add `forceDestDelete=true` retry path for verify-mismatch. Add normalized-key collision detection at preflight for NTFS case-only duplicates. Refactor `LogService` to a named-param API with `LogPhase` enum; structured INFO events at every phase boundary.
+Approach: replace `$args[0]` with single-quote escape (`s.replaceAll("'", "''")`) inside the `-Command` script string + `-LiteralPath` for verbatim path treatment. Decouple progress counters from verify outcome (two `_safeWrite` calls). Add schema v8 columns `JobFile.verifyStatus`, `JobFile.failureKind`, `Job.unverifiedFiles`, `AppSettings.sourcesPanelCollapsed` (last one consumed by feature 018). Extend `recoverStaleJobs` to handle `status=completed + verifyStatus=pending` rows. Add `forceDestDelete=true` retry path for verify-mismatch. Add normalized-key collision detection at preflight for NTFS case-only duplicates. Refactor `LogService` to a named-param API with `LogPhase` enum; structured INFO events at every phase boundary.
 
 ## Technical Context
 
@@ -69,7 +69,7 @@ lib/
 │   ├── database.dart                   # A3 — schema v8 migration with backfill
 │   └── daos/
 │       ├── job_dao.dart                # A4 — incrementVerified/Unverified/Failed; A7 — recovery counter re-derivation
-│       └── job_file_dao.dart           # A4 — markFileCopied, markFileVerified, markFileVerifyMismatch, markFileUnverified
+│       └── job_file_dao.dart           # A4 — markFileTransferComplete, markFileVerified, markFileVerifyMismatch, markFileUnverified
 └── ui/
     └── widgets/
         ├── job_card_active.dart        # surfaces verify-mismatch banner (Investigate / Retry / Skip per FR-005)
@@ -80,7 +80,7 @@ test/
 │   ├── process_runner_argv_test.dart   # A1 — assert argv length is 3 when calling PowerShell inline scripts
 │   ├── ps_escape_test.dart             # A1 — fixtures for paths with ', [, ], *, ?, `, $, U+2018, U+2019, > 260 chars
 │   ├── progress_decouple_test.dart     # A4 — verify counter advances when hash mocked to fail
-│   ├── recovery_test.dart              # A7 — copied + pending → verify-only on next run
+│   ├── recovery_test.dart              # A7 — completed + verifyStatus=pending → verify-only on next run
 │   ├── collision_normalize_test.dart   # A8 — case-only collision detection
 │   └── log_format_test.dart            # A6 — golden tests on log line format per (level × phase)
 └── contract/
