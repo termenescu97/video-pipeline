@@ -35,7 +35,7 @@ void main() {
     await db.close();
   });
 
-  Future<int> _seedJob({VerificationMode mode = VerificationMode.sha256}) async {
+  Future<int> seedJob({VerificationMode mode = VerificationMode.sha256}) async {
     return jobDao.createJobWithFiles(
       job: JobsCompanion.insert(
         type: JobType.transfer,
@@ -62,7 +62,7 @@ void main() {
 
   test('FR-002: markFileCompleted(verified: false) credits bytes immediately',
       () async {
-    final jobId = await _seedJob();
+    final jobId = await seedJob();
     final files = await jobFileDao.getFilesForJob(jobId);
 
     // Simulate the post-robocopy state for the first file.
@@ -82,7 +82,7 @@ void main() {
   test(
       'FR-003: hash subsystem failure (markFileUnverified) does NOT undo copy progress',
       () async {
-    final jobId = await _seedJob();
+    final jobId = await seedJob();
     final files = await jobFileDao.getFilesForJob(jobId);
 
     // Simulate: robocopy succeeded, hash subprocess died for every file.
@@ -110,7 +110,7 @@ void main() {
   test(
       'FR-005: markFileVerifyMismatch keeps status=completed (FR-004 — copy succeeded)',
       () async {
-    final jobId = await _seedJob();
+    final jobId = await seedJob();
     final files = await jobFileDao.getFilesForJob(jobId);
 
     await jobFileDao.markFileCompleted(files[0].id, verified: false);
@@ -132,7 +132,7 @@ void main() {
   });
 
   test('FR-003 verified: markFileVerified sets full success state', () async {
-    final jobId = await _seedJob();
+    final jobId = await seedJob();
     final files = await jobFileDao.getFilesForJob(jobId);
 
     await jobFileDao.markFileCompleted(files[0].id, verified: false);
@@ -151,7 +151,7 @@ void main() {
   });
 
   test('FR-018: recomputeCountersFromFiles re-derives correctly', () async {
-    final jobId = await _seedJob();
+    final jobId = await seedJob();
     final files = await jobFileDao.getFilesForJob(jobId);
 
     // 1 verified, 1 unverified, 1 still pending.
@@ -178,7 +178,7 @@ void main() {
 
   test('FR-018: getRescuedJobIds includes copied+pending verify rows',
       () async {
-    final jobId = await _seedJob();
+    final jobId = await seedJob();
     final files = await jobFileDao.getFilesForJob(jobId);
 
     // Simulate abandoned shutdown mid-verify: file copied, verifyStatus stayed pending.

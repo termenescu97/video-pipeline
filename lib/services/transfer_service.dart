@@ -39,6 +39,14 @@ class TransferService {
 
   /// Transfer a single file from source to destination using robocopy.
   /// Returns true on success, false on failure.
+  ///
+  /// 017 (Codex round-5 P1): when [destinationFile]'s basename differs
+  /// from [sourceFile]'s basename, robocopy is run with the source
+  /// basename (robocopy can't rename during copy) and a post-copy
+  /// File.rename moves the result to the requested name. This is the
+  /// load-bearing path for the case-only NTFS collision normalization
+  /// (Codex H3); without it, a planned dest like `IMG_001_1.MOV` would
+  /// land at `IMG_001.MOV` and re-collide with the first occurrence.
   Future<bool> transferFile({
     required String sourceFile,
     required String destinationFile,
@@ -47,14 +55,15 @@ class TransferService {
 
     final sourceDir = p.dirname(sourceFile);
     final destDir = p.dirname(destinationFile);
-    final fileName = p.basename(sourceFile);
+    final sourceBasename = p.basename(sourceFile);
+    final destBasename = p.basename(destinationFile);
 
     _fileStartTime = DateTime.now();
     _fileTotalBytes = await File(sourceFile).length();
 
     final exitCode = await _processRunner.run(
       executable: 'robocopy',
-      arguments: [sourceDir, destDir, fileName, ...robocopyFlags],
+      arguments: [sourceDir, destDir, sourceBasename, ...robocopyFlags],
       onStdoutLine: (line) {
         final event = RobocopyParser.parseLine(line);
         if (event != null) onProgress?.call(event);
@@ -63,7 +72,25 @@ class TransferService {
 
     _fileStartTime = null;
     final result = RobocopyParser.parseExitCode(exitCode);
-    return result.success;
+    if (!result.success) return false;
+
+    // Post-copy rename when caller asked for a different basename
+    // (case-collision normalization, conflict-rename resolution). Done
+    // AFTER robocopy success so a failed copy doesn't leave the system
+    // in a half-renamed state.
+    if (sourceBasename != destBasename) {
+      try {
+        final copied = File(p.join(destDir, sourceBasename));
+        await copied.rename(destinationFile);
+      } on FileSystemException catch (e) {
+        logService?.error(
+          'Post-copy rename failed: $sourceBasename → $destBasename '
+          '(${e.message})',
+        );
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Kill any currently running transfer or hash subprocess.

@@ -60,10 +60,10 @@ void main() {
       // operates on UTF-16 code units; the apostrophe is a single code unit
       // so surrogate pairs are unaffected.
       const emoji = '\u{1F4F7}'; // 📷 camera emoji
-      expect(escapePsLiteral('photo_${emoji}_2026.JPG'),
-          'photo_${emoji}_2026.JPG');
-      expect(escapePsLiteral("photo_${emoji}'s_2026.JPG"),
-          "photo_${emoji}''s_2026.JPG");
+      expect(escapePsLiteral('photo_$emoji-2026.JPG'),
+          'photo_$emoji-2026.JPG');
+      expect(escapePsLiteral("photo_$emoji's_2026.JPG"),
+          "photo_$emoji''s_2026.JPG");
     });
   });
 }

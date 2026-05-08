@@ -107,10 +107,10 @@ void main() {
 
     queue.normalizeCaseCollisions([cardA, cardB]);
 
-    final allKeys = [
+    final allKeys = <String>{
       cardA.first.destinationPath.toLowerCase(),
       cardB.first.destinationPath.toLowerCase(),
-    ].toSet();
+    };
     expect(allKeys.length, 2,
         reason: 'Cross-plan case-only collision must also be broken — '
             'two cards with same label-letter folder name plus '

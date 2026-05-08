@@ -166,6 +166,22 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
       // status=completed — don't reset (would lose copy progress).
       // _processTransfer's loop has a recovery branch that re-runs
       // verify-only for these. We don't mutate them here.
+      //
+      // Codex round-5 P2 #1: but the parent job needs to land in a
+      // schedulable state — getNextQueuedJob filters out completed/
+      // failed jobs, so a rescued job whose ONLY stale signal is a
+      // completed+pending verify row would never re-enter
+      // _processTransfer. Flip such jobs to paused so the operator
+      // can explicitly resume from history.
+      if (rescuedJobIdSet.isNotEmpty) {
+        final rescuedIds = rescuedJobIdSet.toList();
+        await (update(jobs)
+              ..where((t) =>
+                  t.id.isIn(rescuedIds) &
+                  (t.status.equalsValue(JobStatus.completed) |
+                      t.status.equalsValue(JobStatus.failed))))
+            .write(const JobsCompanion(status: Value(JobStatus.paused)));
+      }
 
       // 017 (T048, FR-018): re-derive Job-level counters once per
       // rescued job after all stale-row mutations. Iterates the

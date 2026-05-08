@@ -176,6 +176,7 @@ class JobCardDone extends StatelessWidget {
         const PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
     ).then((value) {
+      if (!context.mounted) return;
       if (value == 'details') onTap?.call();
       if (value == 'retry') onRetry?.call();
       if (value == 'retry-mismatched') {
@@ -187,18 +188,17 @@ class JobCardDone extends StatelessWidget {
 
   Future<void> _retryMismatchedFiles(
       BuildContext context, List<int> ids) async {
+    final messenger = ScaffoldMessenger.of(context);
     for (final id in ids) {
       await jobQueueService.retryFile(id, forceDestDelete: true);
     }
     await jobQueueService.startProcessing();
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Retrying ${ids.length} file(s) with forced dest delete'),
-        ),
-      );
-    }
+    messenger.showSnackBar(
+      SnackBar(
+        content:
+            Text('Retrying ${ids.length} file(s) with forced dest delete'),
+      ),
+    );
   }
 
   static IconData _typeGlyph(JobType type) {

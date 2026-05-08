@@ -58,7 +58,7 @@ void main() {
     await db.close();
   });
 
-  Future<({int jobId, int fileId})> _seedMismatchedFile() async {
+  Future<({int jobId, int fileId})> seedMismatchedFile() async {
     final jobId = await jobDao.createJobWithFiles(
       job: JobsCompanion.insert(
         type: JobType.transfer,
@@ -99,7 +99,7 @@ void main() {
   test(
       'retryFile(forceDestDelete: true) clears verify axis and arms the '
       'delete-bypass set', () async {
-    final seeded = await _seedMismatchedFile();
+    final seeded = await seedMismatchedFile();
 
     // Pre-state sanity: the seeded file is exactly the H2 trap shape —
     // wasOverwriteApproved=false, status=completed, verifyStatus=mismatch.
@@ -140,7 +140,7 @@ void main() {
   test(
       'retryFile(forceDestDelete: false) does NOT arm the delete-bypass set',
       () async {
-    final seeded = await _seedMismatchedFile();
+    final seeded = await seedMismatchedFile();
 
     await queue.retryFile(seeded.fileId, forceDestDelete: false);
 
