@@ -1021,6 +1021,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               ),
             ),
         ];
+        // Codex round-9 P2 #2: the rebuilt list lost the suffixes that
+        // _normalizeCaseCollisions stamped on the original `planned`
+        // destinations. Re-run the normalizer against the new folder
+        // so case-only duplicates (e.g., DCIM/IMG_001.MOV vs
+        // dcim/img_001.mov) still land at distinct NTFS keys.
+        jobQueueService.normalizeCaseCollisions([resolved]);
         continue;
       }
 

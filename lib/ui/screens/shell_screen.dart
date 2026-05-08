@@ -45,6 +45,12 @@ class _ShellScreenState extends State<ShellScreen>
   /// expand. The shell holds this so the auto-expand decision lives
   /// next to the collapsed flag, not inside SourcesPanel itself.
   Set<String> _previouslySeenDrivePaths = const <String>{};
+  /// Codex round-9 P2 #1: the first poll seeds the baseline only —
+  /// auto-expand is suppressed for cards that were already inserted
+  /// when the app launched. Without this, restarting with a card in
+  /// the slot would immediately undo the operator's persisted
+  /// collapse preference.
+  bool _hasSeededDrives = false;
   // When the operator picks a drive from SourcesPanel, hand it to
   // CreateJobScreen via this transient. Cleared when CreateJobScreen
   // dismisses or another panel state takes over.
@@ -518,7 +524,18 @@ class _ShellScreenState extends State<ShellScreen>
   /// can detect "newly inserted card" (a path appearing that wasn't in
   /// the previous set) and auto-expand the panel — operators must
   /// notice card insertions even when they've collapsed the panel.
+  ///
+  /// Codex round-9 P2 #1: the first poll seeds the baseline only — its
+  /// drives are NOT treated as "new cards" because they were already
+  /// inserted at launch. Without this guard, restarting the app with
+  /// any card present would immediately undo the operator's persisted
+  /// collapse preference.
   void _onDrivesChanged(Set<String> currentPaths) {
+    if (!_hasSeededDrives) {
+      _hasSeededDrives = true;
+      _previouslySeenDrivePaths = currentPaths;
+      return;
+    }
     final newCards = currentPaths.difference(_previouslySeenDrivePaths);
     _previouslySeenDrivePaths = currentPaths;
     if (newCards.isNotEmpty && _sourcesCollapsed) {
