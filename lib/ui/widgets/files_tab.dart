@@ -78,22 +78,33 @@ class _FilterChipRow extends StatelessWidget {
     int count(FileStatus? s) =>
         s == null ? all.length : all.where((f) => f.status == s).length;
 
-    return Padding(
+    // 017B (FR-B05): horizontal-scroll instead of Wrap. The operator's
+    // 2026-05-08 test had this row breaking to 3 lines at column
+    // widths around 360 px; counts became unreadable. Scrolling
+    // horizontally keeps every chip on a single line — the chip the
+    // operator wants is at most a swipe away regardless of column
+    // width.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(
           Insets.s, Insets.s, Insets.s, Insets.xs),
-      child: Wrap(
-        spacing: Insets.xs,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           _chip(context, label: 'All (${count(null)})', value: null),
+          const SizedBox(width: Insets.xs),
           _chip(context,
               label: 'Pending (${count(FileStatus.pending)})',
               value: FileStatus.pending),
+          const SizedBox(width: Insets.xs),
           _chip(context,
               label: 'In progress (${count(FileStatus.inProgress)})',
               value: FileStatus.inProgress),
+          const SizedBox(width: Insets.xs),
           _chip(context,
               label: 'Completed (${count(FileStatus.completed)})',
               value: FileStatus.completed),
+          const SizedBox(width: Insets.xs),
           _chip(context,
               label: 'Failed (${count(FileStatus.failed)})',
               value: FileStatus.failed),
