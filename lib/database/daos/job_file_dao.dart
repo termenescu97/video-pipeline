@@ -70,22 +70,16 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
   ///
   /// Backward-compat: legacy callers passing `verified: true` still work.
   ///
-  /// Codex round-2 P2 #1: when [verified] is true (size-mode success),
-  /// ALSO set `verifyStatus=verified`. Otherwise size-mode rows would
-  /// stay at `verifyStatus=pending` forever, which the recovery query
-  /// (FR-018) treats as "abandoned mid-verify" — every completed
-  /// size-mode row would be re-rescued on every launch. Forward
-  /// operation now matches the legacy `verified` boolean: "verified"
-  /// means "passed all configured checks for the job's verification
-  /// mode," which for size-mode is byte-size match.
+  /// `verifyStatus` is INTENTIONALLY left untouched — the SHA-256
+  /// success path uses [markFileVerified] explicitly. Size-mode rows
+  /// keep `verifyStatus=pending`; recovery filters size-mode jobs out
+  /// of the "completed+pending" rescue set via the parent's
+  /// `verificationMode` (Codex round-3 P2 #1).
   Future<void> markFileCompleted(int fileId, {bool verified = false}) {
     return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
       JobFilesCompanion(
         status: const Value(FileStatus.completed),
         verified: Value(verified),
-        verifyStatus: verified
-            ? const Value(VerifyStatus.verified)
-            : const Value.absent(),
         completedAt: Value(DateTime.now()),
       ),
     );

@@ -359,14 +359,23 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// Returns deduplicated job IDs. Caller iterates and calls
   /// recomputeCountersFromFiles per ID after stale-row mutations.
   Future<Set<int>> getRescuedJobIds() async {
+    // Codex round-3 P2 #1: the third UNION arm is restricted to SHA-256
+    // jobs. Size-mode jobs leave verifyStatus=pending forever (size
+    // checks happen inline via TransferService.verifyTransfer; there is
+    // no SHA-256 phase to abandon mid-flight), so including them would
+    // cause every completed size-mode row to be re-rescued on every
+    // launch.
     final rows = await customSelect(
       '''
       SELECT DISTINCT id AS job_id FROM jobs WHERE status = 'inProgress'
       UNION
       SELECT DISTINCT job_id FROM job_files WHERE status = 'inProgress'
       UNION
-      SELECT DISTINCT job_id FROM job_files
-        WHERE status = 'completed' AND verify_status = 'pending'
+      SELECT DISTINCT jf.job_id FROM job_files jf
+        INNER JOIN jobs j ON j.id = jf.job_id
+        WHERE jf.status = 'completed'
+          AND jf.verify_status = 'pending'
+          AND j.verification_mode = 'sha256'
       ''',
     ).get();
     return rows.map((r) => r.read<int>('job_id')).toSet();
