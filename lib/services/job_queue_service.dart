@@ -1315,7 +1315,9 @@ class JobQueueService {
   /// path; later occurrences are rerouted via the same suffixed-rename
   /// pattern used elsewhere ([_suffixedPathAgainst]). The [onRename]
   /// callback fires once per rewrite for telemetry/logging.
-  @visibleForTesting
+  ///
+  /// Public (not @visibleForTesting) because the single-job preflight in
+  /// `CreateJobScreen` calls this directly — Codex round-4 P2 #2 fix.
   void normalizeCaseCollisions(
     List<List<PlannedFile>> plans, {
     void Function(String original, String renamed)? onRename,

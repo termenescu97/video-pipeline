@@ -454,16 +454,25 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           forceDestDeleteApproved: Value(true),
         ),
       );
-      // Reset failed files to pending. Verify axis cleared so re-run
-      // produces fresh hashes; failureKind reset to none so a
-      // subsequent retry without a fresh mismatch doesn't keep
-      // arming forceDestDeleteApproved.
+      // Reset failed files AND completed-but-mismatched rows to
+      // pending. Codex round-4 P2 #2: completed+verifyMismatch rows
+      // are the FR-004 "bytes on disk, hash differs" state; without
+      // including them in the reset, a job-level Retry would leave
+      // those rows at status=completed, _processTransfer would skip
+      // them before consuming forceDestDeleteApproved, and the
+      // corrupt destinations would never be replaced.
+      //
+      // Verify axis cleared so re-run produces fresh hashes;
+      // failureKind reset to none so a subsequent retry without a
+      // fresh mismatch doesn't keep arming forceDestDeleteApproved.
       await (update(db.jobFiles)
             ..where(
               (t) =>
                   t.jobId.equals(jobId) &
                   (t.status.equalsValue(FileStatus.failed) |
-                      t.status.equalsValue(FileStatus.pending)),
+                      t.status.equalsValue(FileStatus.pending) |
+                      t.failureKind
+                          .equalsValue(FailureKind.verifyMismatch)),
             ))
           .write(
         const JobFilesCompanion(

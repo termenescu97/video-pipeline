@@ -883,6 +883,16 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       ));
     }
 
+    // 017 (T058 / Codex H3 + round-4 P2 #2): break case-only NTFS
+    // collisions WITHIN the planned set before conflict preflight. The
+    // batch path runs the equivalent check via
+    // JobQueueService._normalizeCaseCollisionsAcrossPlans; this is the
+    // single-job mirror. Without it, two source files like
+    // `DCIM/IMG_001.MOV` and `dcim/img_001.mov` from a case-sensitive
+    // source land at the same NTFS destination key and silently
+    // overwrite each other mid-batch.
+    jobQueueService.normalizeCaseCollisions([planned]);
+
     // Check disk space before creating.
     if (_destinationFreeSpace != null &&
         totalBytes > _destinationFreeSpace!) {

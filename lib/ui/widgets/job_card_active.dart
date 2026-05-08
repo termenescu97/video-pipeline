@@ -171,6 +171,7 @@ class JobCardActive extends StatelessWidget {
                                 _VerifyMismatchBanner(
                                   tally: tally,
                                   onInvestigate: onTap,
+                                  jobId: job.id,
                                 ),
                               ],
                             ],
@@ -520,10 +521,12 @@ class _VerifyStatsRow extends StatelessWidget {
 class _VerifyMismatchBanner extends StatelessWidget {
   final _VerifyTally tally;
   final VoidCallback? onInvestigate;
+  final int jobId;
 
   const _VerifyMismatchBanner({
     required this.tally,
     required this.onInvestigate,
+    required this.jobId,
   });
 
   @override
@@ -531,6 +534,16 @@ class _VerifyMismatchBanner extends StatelessWidget {
     final statusColors = Theme.of(context).extension<StatusColors>()!;
     final scheme = Theme.of(context).colorScheme;
     final fg = statusColors.error;
+
+    // Codex round-4 P1: disable Retry while the queue is running this
+    // job. retryFile would mutate the row mid-iteration but the
+    // current `_processTransfer` pass holds an in-memory file
+    // snapshot from getFilesForJob and won't pick up the reset;
+    // startProcessing() no-ops because _isProcessing is true.
+    // Operator must wait for the job to finish, then use
+    // JobCardDone's "Retry N mismatched file(s)" menu.
+    final isCurrentlyProcessing = jobQueueService.isProcessing &&
+        jobQueueService.currentJobId == jobId;
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -547,7 +560,9 @@ class _VerifyMismatchBanner extends StatelessWidget {
           Expanded(
             child: Text(
               '${tally.mismatched} file(s) failed SHA-256 verification — '
-              'bytes on disk differ from source.',
+              'bytes on disk differ from source.'
+              '${isCurrentlyProcessing ? ' Wait for the job to finish '
+                  'before retrying.' : ''}',
               style: AppTextStyles.caption.copyWith(color: scheme.onSurface),
             ),
           ),
@@ -556,7 +571,9 @@ class _VerifyMismatchBanner extends StatelessWidget {
             child: const Text('Investigate'),
           ),
           TextButton(
-            onPressed: () => _retryAll(context, tally.mismatchedFileIds),
+            onPressed: isCurrentlyProcessing
+                ? null
+                : () => _retryAll(context, tally.mismatchedFileIds),
             child: const Text('Retry'),
           ),
         ],
