@@ -99,11 +99,15 @@ lib/
 | 011 - SHA-256 Verification | `011-sha256-verification` | 19/19 | ✅ Complete |
 | 012 - Test Card Prep | `012-test-card-prep` | 4/4 | ✅ Complete |
 | 013 - Data Safety & Reliability Hardening | `013-data-safety-hardening` | 46/46 | ✅ Complete |
-| 014 - UI/UX Redesign — Visual Hierarchy & Operator Trust | `014-ui-redesign` | 113/114 | ✅ Code complete (T114 = Windows manual QA) |
+| 014 - UI/UX Redesign — Visual Hierarchy & Operator Trust | `014-ui-redesign` | 114/114 | ✅ Complete |
+| 015 - Robocopy Execution-Time Overwrite Guard | merged into v2.4.0 | n/a | ✅ Complete (bundled) |
+| 016 - Graceful Shutdown Race Hardening | merged into v2.4.0 | n/a | ✅ Complete (bundled) |
 
-**Latest release (in flight)**: v2.4.0 — tag pending Windows manual QA
+**Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions building Windows .exe)
 **Previous release**: v2.3.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 390
+**Total tasks implemented**: 392 (390 across 014 + 015 + 016 bundles)
+
+> **QA status**: T114 (Windows manual QA) is the operator's responsibility on the workstation. Update prompt is gated by Constitution Principle VI — never silent — so operators see and approve the v2.3 → v2.4 transition before applying.
 
 ### What Works
 
@@ -235,9 +239,10 @@ Full report: `specs/006-review-findings/review-report-v2.md`
 
 ### Open Bugs
 
-None blocking v2.4.0. The pre-merge final review (Opus + Codex parallel pass) cleared 8 of 9 accepted findings. Deferred to v2.4.1:
+None known as of v2.4.0. The robocopy overwrite-guard CRITICAL flagged in the v2.4.0 final review was implemented as feature 015 and bundled into the same release (schema v7, split delete-rule, mtime cutoff, `_safeWrite` abandonment guard). The graceful-shutdown HIGH was implemented as feature 016 (phased shutdown). Both passed Codex `--model gpt-5.5 --effort high` adversarial review.
 
-- **robocopy execution-time overwrite guard (Codex CRITICAL #4)** — robocopy is invoked without `/XN /XC /XO`, so a destination file appearing between conflict-preflight and execution is silently overwritten with source content. Severity is lower in practice than first framed: the file at dest after the overwrite IS the operator's source data (no operator data loss); SHA-256 verification mode catches the same-size-different-content edge case. The proper fix needs a per-`JobFile` `wasOverwriteApproved` column to differentiate "operator-approved overwrite" from "TOCTOU intrusion" — adding `/XN /XC /XO` blindly breaks `/Z` resume after a kill (partial dest size ≠ source → robocopy excludes the file). Tracking for v2.4.1 with schema bump v6 → v7.
+Deferred to v2.5 (no operator-visible behavior change):
+- **`ConfirmationDialog.showCritical` consolidation for the SD erase path.** The erase dialog has its own bespoke typed-confirmation gate (`erase_drive_action.dart`) that satisfies FR-047 in spirit but doesn't route through the canonical primitive added in Phase 14. Bundle with the next feature that ships a destructive action (currently planned: NAS upload "Disconnect & wipe local cache" in v3.0).
 
 ### Review & Quality Process
 
