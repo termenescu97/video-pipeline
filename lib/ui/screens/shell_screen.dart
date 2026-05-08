@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,11 +6,17 @@ import 'package:flutter/services.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../database/database.dart';
+import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../../utils/history_export.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
 import '../widgets/activity_panel.dart';
+import '../widgets/confirmation_dialog.dart';
+import '../widgets/copy_all_cards_dialog.dart';
+import '../widgets/keyboard_cheat_sheet.dart';
 import '../widgets/sources_panel.dart';
 import '../widgets/status_bar.dart';
 import 'create_job_screen.dart';
@@ -41,6 +48,20 @@ class _ShellScreenState extends State<ShellScreen>
   /// read from / write to the same set.
   final Set<int> _expandedJobIds = <int>{};
 
+  /// US11 (T085): keyboard-focus selection in the queue. Drives ↑/↓
+  /// navigation and Space/Delete/Ctrl+R actions. Stored as a job ID
+  /// (not an index) so the selection survives reorders.
+  int? _selectedQueueJobId;
+
+  /// Shell-side mirror of the queue list, used by selection-cycling
+  /// shortcuts (↑/↓) and selection-target shortcuts (Space/Delete/
+  /// Ctrl+R). HomeScreen has its own StreamBuilder for rendering;
+  /// shell needs the same data to compute "next/prev card" without
+  /// drilling through HomeScreen's build. Drift caches the underlying
+  /// query so the duplicate subscription is cheap.
+  List<Job> _activeJobsForSelection = const <Job>[];
+  StreamSubscription<List<Job>>? _activeJobsSub;
+
   void _toggleExpanded(int jobId) {
     setState(() {
       if (!_expandedJobIds.add(jobId)) {
@@ -66,10 +87,26 @@ class _ShellScreenState extends State<ShellScreen>
     // before the OS terminates the process.
     windowManager.addListener(this);
     windowManager.setPreventClose(true);
+    // US11 (T085): subscribe to active jobs for selection cycling.
+    _activeJobsSub = jobDao.watchAllJobs().listen((jobs) {
+      final filtered = jobs
+          .where((j) => j.status != JobStatus.completed)
+          .toList();
+      // Drop selection if the selected job no longer exists or moved
+      // out of the queue (e.g., transitioned to completed).
+      if (_selectedQueueJobId != null &&
+          !filtered.any((j) => j.id == _selectedQueueJobId)) {
+        _selectedQueueJobId = null;
+      }
+      if (mounted) {
+        setState(() => _activeJobsForSelection = filtered);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _activeJobsSub?.cancel();
     trayManager.removeListener(this);
     windowManager.removeListener(this);
     super.dispose();
@@ -154,11 +191,39 @@ class _ShellScreenState extends State<ShellScreen>
   @override
   Widget build(BuildContext context) {
     return Shortcuts(
+      // US11 (T086): full shortcut map. Flutter's Shortcuts widget
+      // automatically scopes — text input fields (TextField, TextFormField)
+      // intercept printable keys before they reach this map, so typing
+      // "?" in the operator-name field inserts the character rather
+      // than opening the cheat sheet (FR-049 / T099).
       shortcuts: <ShortcutActivator, Intent>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
             const _CreateJobIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyC,
+                control: true, shift: true):
+            const _CopyAllCardsIntent(),
         const SingleActivator(LogicalKeyboardKey.enter, control: true):
             const _ToggleQueueIntent(),
+        const SingleActivator(LogicalKeyboardKey.comma, control: true):
+            const _OpenSettingsIntent(),
+        const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+            const _OpenCheatSheetIntent(),
+        const SingleActivator(LogicalKeyboardKey.f1):
+            const _OpenCheatSheetIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowUp):
+            const _SelectPrevIntent(),
+        const SingleActivator(LogicalKeyboardKey.arrowDown):
+            const _SelectNextIntent(),
+        const SingleActivator(LogicalKeyboardKey.space):
+            const _ToggleExpandIntent(),
+        const SingleActivator(LogicalKeyboardKey.delete):
+            const _DeleteSelectedIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyR, control: true):
+            const _RetrySelectedIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyL, control: true):
+            const _RevealLogIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyE, control: true):
+            const _ExportCsvIntent(),
       },
       child: Actions(
         actions: {
@@ -169,6 +234,9 @@ class _ShellScreenState extends State<ShellScreen>
               });
               return null;
             },
+          ),
+          _CopyAllCardsIntent: CallbackAction<_CopyAllCardsIntent>(
+            onInvoke: (_) => _onCopyAllCards(),
           ),
           _ToggleQueueIntent: CallbackAction<_ToggleQueueIntent>(
             onInvoke: (_) {
@@ -181,16 +249,47 @@ class _ShellScreenState extends State<ShellScreen>
               return null;
             },
           ),
+          _OpenSettingsIntent: CallbackAction<_OpenSettingsIntent>(
+            onInvoke: (_) => _openSettings(),
+          ),
+          _OpenCheatSheetIntent: CallbackAction<_OpenCheatSheetIntent>(
+            onInvoke: (_) => KeyboardCheatSheet.show(context),
+          ),
+          _SelectPrevIntent: CallbackAction<_SelectPrevIntent>(
+            onInvoke: (_) => _moveSelection(-1),
+          ),
+          _SelectNextIntent: CallbackAction<_SelectNextIntent>(
+            onInvoke: (_) => _moveSelection(1),
+          ),
+          _ToggleExpandIntent: CallbackAction<_ToggleExpandIntent>(
+            onInvoke: (_) {
+              final id = _selectedQueueJobId;
+              if (id != null) _toggleExpanded(id);
+              return null;
+            },
+          ),
+          _DeleteSelectedIntent: CallbackAction<_DeleteSelectedIntent>(
+            onInvoke: (_) => _deleteSelected(),
+          ),
+          _RetrySelectedIntent: CallbackAction<_RetrySelectedIntent>(
+            onInvoke: (_) => _retrySelected(),
+          ),
+          _RevealLogIntent: CallbackAction<_RevealLogIntent>(
+            onInvoke: (_) => _revealLogFile(),
+          ),
+          _ExportCsvIntent: CallbackAction<_ExportCsvIntent>(
+            onInvoke: (_) {
+              exportHistoryToCsv(context);
+              return null;
+            },
+          ),
         },
         child: Focus(
           autofocus: true,
           child: Scaffold(
             appBar: StatusBar(
-              onSettings: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              ),
-              // Cheat sheet wired in US11 (T091).
+              onSettings: _openSettings,
+              onCheatSheet: () => KeyboardCheatSheet.show(context),
             ),
             // Three-column layout (FR-001). Sources column at 240px on
             // the left, Queue+Detail in the flexible center, Activity
@@ -227,6 +326,7 @@ class _ShellScreenState extends State<ShellScreen>
                           expandedJobIds: _expandedJobIds,
                           onToggleExpanded: _toggleExpanded,
                           onJobDeleted: _onJobDeleted,
+                          selectedQueueJobId: _selectedQueueJobId,
                           onCreateJob: () {
                             setState(() {
                               _showCreateJob = true;
@@ -298,12 +398,197 @@ class _ShellScreenState extends State<ShellScreen>
       ),
     );
   }
+
+  // ── US11 shortcut helpers (T085-T097) ─────────────────────────
+  // Inlined here because `setState` is @protected and unreachable
+  // from a top-level extension on the State class.
+
+  /// Open Settings — shared between Ctrl+, shortcut and StatusBar cog.
+  Object? _openSettings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+    return null;
+  }
+
+  /// Open the Copy All Cards review dialog (T088). Same modal
+  /// HomeScreen's "Copy All" button uses — single source of truth.
+  Object? _onCopyAllCards() {
+    // Fire and forget — the dialog manages its own lifecycle.
+    // ignore: discarded_futures
+    CopyAllCardsDialog.show(context);
+    return null;
+  }
+
+  /// Cycle the selected queue job by [delta] (-1 prev, +1 next).
+  /// Wraps at the ends — pressing ↓ on the last card stays on the
+  /// last card; pressing ↑ on the first stays on the first. (Wrap-
+  /// around would surprise an operator deep in a long queue.)
+  Object? _moveSelection(int delta) {
+    if (_activeJobsForSelection.isEmpty) return null;
+    final jobs = _activeJobsForSelection;
+    int idx;
+    if (_selectedQueueJobId == null) {
+      idx = delta > 0 ? 0 : jobs.length - 1;
+    } else {
+      final current =
+          jobs.indexWhere((j) => j.id == _selectedQueueJobId);
+      if (current < 0) {
+        idx = delta > 0 ? 0 : jobs.length - 1;
+      } else {
+        idx = (current + delta).clamp(0, jobs.length - 1);
+      }
+    }
+    setState(() => _selectedQueueJobId = jobs[idx].id);
+    return null;
+  }
+
+  /// Delete shortcut: confirm and delete the selected job. Active
+  /// (in-progress) jobs are protected — same gate HomeScreen uses
+  /// (Constitution Principle I). The full typed-confirmation gate
+  /// lands in T101/T102; here we route through the existing
+  /// ConfirmationDialog.show.
+  Future<Object?> _deleteSelected() async {
+    final id = _selectedQueueJobId;
+    if (id == null) return null;
+    final job = _activeJobsForSelection
+        .firstWhere((j) => j.id == id, orElse: () => _NoJob.value);
+    if (job == _NoJob.value) return null;
+    if (job.status == JobStatus.inProgress) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Cannot delete the running job')),
+      );
+      return null;
+    }
+    final confirmed = await ConfirmationDialog.show(
+      context: context,
+      title: 'Remove Job',
+      message: 'Remove this job from the queue?\n\n'
+          '${job.sourcePath} → ${job.destinationPath}',
+      confirmLabel: 'Remove',
+    );
+    if (!confirmed) return null;
+    await jobDao.deleteJob(job.id);
+    _onJobDeleted(job.id);
+    if (_selectedQueueJobId == job.id) {
+      setState(() => _selectedQueueJobId = null);
+    }
+    return null;
+  }
+
+  /// Retry shortcut: only acts on the selected job if it's in
+  /// `failed` state. Silent no-op otherwise — the cheat sheet
+  /// describes it as "Retry selected failed job", so the operator
+  /// knows the precondition.
+  Future<Object?> _retrySelected() async {
+    final id = _selectedQueueJobId;
+    if (id == null) return null;
+    final job = _activeJobsForSelection
+        .firstWhere((j) => j.id == id, orElse: () => _NoJob.value);
+    if (job == _NoJob.value || job.status != JobStatus.failed) {
+      return null;
+    }
+    await jobDao.resetJobForRetry(job.id);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Job re-queued for retry')),
+      );
+    }
+    return null;
+  }
+
+  /// Reveal the persistent log file in Explorer (Ctrl+L). Mirrors
+  /// the Settings → Diagnostics "Reveal in Explorer" button so
+  /// operators have two paths to the same file.
+  Future<Object?> _revealLogFile() async {
+    final path = logService.logPath;
+    if (path.isEmpty) return null;
+    try {
+      if (Platform.isWindows) {
+        await Process.run('explorer', ['/select,', path]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', ['-R', path]);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not reveal log file: $e')),
+        );
+      }
+    }
+    return null;
+  }
+
+}
+
+/// Sentinel "no job" Job used by selection helpers' orElse — avoids
+/// a nullable return when the selected ID isn't in the active list
+/// (race between Stream tick and intent fire). Comparison is by
+/// identity (`==` falls through to default).
+class _NoJob {
+  static final Job value = Job(
+    id: -1,
+    type: JobType.transfer,
+    status: JobStatus.completed,
+    sourcePath: '',
+    destinationPath: '',
+    totalFiles: 0,
+    completedFiles: 0,
+    totalBytes: 0,
+    completedBytes: 0,
+    sortOrder: 0,
+    autoChain: false,
+    verificationMode: VerificationMode.size,
+    createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+  );
 }
 
 class _CreateJobIntent extends Intent {
   const _CreateJobIntent();
 }
 
+class _CopyAllCardsIntent extends Intent {
+  const _CopyAllCardsIntent();
+}
+
 class _ToggleQueueIntent extends Intent {
   const _ToggleQueueIntent();
+}
+
+class _OpenSettingsIntent extends Intent {
+  const _OpenSettingsIntent();
+}
+
+class _OpenCheatSheetIntent extends Intent {
+  const _OpenCheatSheetIntent();
+}
+
+class _SelectPrevIntent extends Intent {
+  const _SelectPrevIntent();
+}
+
+class _SelectNextIntent extends Intent {
+  const _SelectNextIntent();
+}
+
+class _ToggleExpandIntent extends Intent {
+  const _ToggleExpandIntent();
+}
+
+class _DeleteSelectedIntent extends Intent {
+  const _DeleteSelectedIntent();
+}
+
+class _RetrySelectedIntent extends Intent {
+  const _RetrySelectedIntent();
+}
+
+class _RevealLogIntent extends Intent {
+  const _RevealLogIntent();
+}
+
+class _ExportCsvIntent extends Intent {
+  const _ExportCsvIntent();
 }

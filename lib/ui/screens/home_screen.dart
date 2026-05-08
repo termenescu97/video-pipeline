@@ -30,12 +30,20 @@ class HomeScreen extends StatefulWidget {
   /// Callback for embedded mode (ShellScreen).
   final VoidCallback? onCreateJob;
 
+  /// US11 (T085): the keyboard-selected job ID, owned by the shell.
+  /// HomeScreen renders a focus ring on the matching card; clicks
+  /// don't currently change selection (mouse-driven flow uses
+  /// click-to-expand, not click-to-select). When null, no focus ring
+  /// is shown.
+  final int? selectedQueueJobId;
+
   const HomeScreen({
     super.key,
     this.expandedJobIds,
     this.onToggleExpanded,
     this.onJobDeleted,
     this.onCreateJob,
+    this.selectedQueueJobId,
   });
 
   @override
@@ -484,22 +492,40 @@ class _HomeScreenState extends State<HomeScreen> {
                       // routes to JobCardDone which doesn't render a
                       // handle either; we still pass a valid index so a
                       // drag onto a failed row's slot lands cleanly.
+                      // T085: render a focus ring around the keyboard-
+                      // selected job. The ring is the visual signal for
+                      // ↑/↓ navigation; mouse clicks still expand cards
+                      // via the existing onTap path.
+                      final selected =
+                          widget.selectedQueueJobId == job.id;
+                      final scheme = Theme.of(context).colorScheme;
+                      Widget card = JobCard(
+                        job: job,
+                        isNextUp: index == nextUpIndex,
+                        isExpanded: _expandedJobIds.contains(job.id),
+                        onTap: () =>
+                            widget.onToggleExpanded?.call(job.id),
+                        onDelete: () => _deleteJob(job),
+                        onRetry: job.status == JobStatus.failed
+                            ? () => _retryJob(job)
+                            : null,
+                        reorderIndex: job.status == JobStatus.inProgress
+                            ? null
+                            : index,
+                      );
+                      if (selected) {
+                        card = Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                                color: scheme.primary, width: 2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: card,
+                        );
+                      }
                       return KeyedSubtree(
                         key: ValueKey(job.id),
-                        child: JobCard(
-                          job: job,
-                          isNextUp: index == nextUpIndex,
-                          isExpanded: _expandedJobIds.contains(job.id),
-                          onTap: () =>
-                              widget.onToggleExpanded?.call(job.id),
-                          onDelete: () => _deleteJob(job),
-                          onRetry: job.status == JobStatus.failed
-                              ? () => _retryJob(job)
-                              : null,
-                          reorderIndex: job.status == JobStatus.inProgress
-                              ? null
-                              : index,
-                        ),
+                        child: card,
                       );
                     },
                   ),

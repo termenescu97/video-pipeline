@@ -265,22 +265,22 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 ### Implementation for User Story 11
 
-- [ ] T084 [US11] Create `lib/ui/widgets/keyboard_cheat_sheet.dart`: modal listing all shortcuts grouped by category (Job Management / Queue Control / Navigation / Help); dismiss on `Esc` or outside click. **MUST precede T091** since the wiring opens this modal.
-- [ ] T085 [US11] Define `selectedQueueJobId: int?` state in `lib/ui/screens/home_screen.dart` (lifted from prior local state if any). Drives `↑/↓` navigation and `Space`/`Delete`/`Ctrl+R` actions. Selection visualizes as a focus ring on the corresponding card. Selection is preserved across reorders (by job ID, not index).
-- [ ] T086 [US11] Expand `Shortcuts(shortcuts: {...})` block in `lib/ui/screens/shell_screen.dart` to map all 11 shortcut keystrokes to `Intent` instances
-- [ ] T087 [US11] Wire `Ctrl+N` Action → existing CreateJobIntent
-- [ ] T088 [US11] Wire `Ctrl+Shift+C` Action → opens `CopyAllCardsDialog` (T035)
-- [ ] T089 [US11] Wire `Ctrl+Enter` Action → existing PauseResumeIntent
-- [ ] T090 [US11] Wire `Ctrl+,` Action → navigates to Settings
-- [ ] T091 [US11] Wire `?` and `F1` Actions → open KeyboardCheatSheet (T084)
-- [ ] T092 [US11] Wire `↑`/`Down` Actions → step `selectedQueueJobId` (T085) up/down through visible queue cards
-- [ ] T093 [US11] Wire `Space` Action → toggle inclusion of selected job in `expandedJobIds` (T050)
-- [ ] T094 [US11] Wire `Delete` Action → delete selected job after `ConfirmationDialog` (with typed confirmation per FR-047 — see T101)
-- [ ] T095 [US11] Wire `Ctrl+R` Action → retry selected job if status is failed
-- [ ] T096 [US11] Wire `Ctrl+L` Action → opens log file via `Process.run('explorer', ['/select,', logService.logPath])`
-- [ ] T097 [US11] Wire `Ctrl+E` Action → calls `ActivityPanel.exportCsv()` via the public method exposed in T042
-- [ ] T098 [US11] Wire StatusBar `?` IconButton (from T014) to open KeyboardCheatSheet (T084)
-- [ ] T099 [US11] Verify keyboard shortcut focus scoping: typing `?` in operator-name TextField inserts the character, NOT opens the cheat sheet (Flutter `Shortcuts` widget already scopes; verify by manual test)
+- [X] T084 [US11] Create `lib/ui/widgets/keyboard_cheat_sheet.dart`: modal listing all shortcuts grouped by category (Job Management / Queue Control / Navigation / Help); dismiss on `Esc` or outside click. **MUST precede T091** since the wiring opens this modal.
+- [X] T085 [US11] Define `selectedQueueJobId: int?` state in `lib/ui/screens/home_screen.dart` (lifted from prior local state if any). Drives `↑/↓` navigation and `Space`/`Delete`/`Ctrl+R` actions. Selection visualizes as a focus ring on the corresponding card. Selection is preserved across reorders (by job ID, not index).
+- [X] T086 [US11] Expand `Shortcuts(shortcuts: {...})` block in `lib/ui/screens/shell_screen.dart` to map all 11 shortcut keystrokes to `Intent` instances
+- [X] T087 [US11] Wire `Ctrl+N` Action → existing CreateJobIntent
+- [X] T088 [US11] Wire `Ctrl+Shift+C` Action → opens `CopyAllCardsDialog` (T035)
+- [X] T089 [US11] Wire `Ctrl+Enter` Action → existing PauseResumeIntent
+- [X] T090 [US11] Wire `Ctrl+,` Action → navigates to Settings
+- [X] T091 [US11] Wire `?` and `F1` Actions → open KeyboardCheatSheet (T084)
+- [X] T092 [US11] Wire `↑`/`Down` Actions → step `selectedQueueJobId` (T085) up/down through visible queue cards
+- [X] T093 [US11] Wire `Space` Action → toggle inclusion of selected job in `expandedJobIds` (T050)
+- [X] T094 [US11] Wire `Delete` Action → delete selected job after `ConfirmationDialog` (with typed confirmation per FR-047 — see T101)
+- [X] T095 [US11] Wire `Ctrl+R` Action → retry selected job if status is failed
+- [X] T096 [US11] Wire `Ctrl+L` Action → opens log file via `Process.run('explorer', ['/select,', logService.logPath])`
+- [X] T097 [US11] Wire `Ctrl+E` Action → calls `ActivityPanel.exportCsv()` via the public method exposed in T042
+- [X] T098 [US11] Wire StatusBar `?` IconButton (from T014) to open KeyboardCheatSheet (T084)
+- [X] T099 [US11] Verify keyboard shortcut focus scoping: typing `?` in operator-name TextField inserts the character, NOT opens the cheat sheet (Flutter `Shortcuts` widget already scopes; verify by manual test)
 
 **Checkpoint**: All 11 shortcuts perform documented actions; cheat sheet is discoverable; selection survives reorders.
 
