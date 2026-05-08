@@ -19,6 +19,15 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     return (select(jobFiles)..where((t) => t.jobId.equals(jobId))).get();
   }
 
+  /// 017B (FR-B08): the HistorySurface tallies verify-axis state per
+  /// job to drive its status-filter chips (Verified / Unverified /
+  /// Mismatch). Streaming the full file table is fine for the
+  /// operator's expected scale; if it becomes a bottleneck swap for
+  /// a per-job aggregate DAO query.
+  Stream<List<JobFile>> watchAllFiles() {
+    return select(jobFiles).watch();
+  }
+
   /// Get a single file by its primary key.
   Future<JobFile?> getFile(int fileId) {
     return (select(jobFiles)..where((t) => t.id.equals(fileId)))

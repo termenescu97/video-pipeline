@@ -402,6 +402,14 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
   }
 
+  /// 017B (FR-B10): batched job lookup for the Diagnostics → Recent
+  /// failures section. Returns the rows in DB order; the caller is
+  /// expected to sort by `completedAt` for newest-first display.
+  Future<List<Job>> getJobsByIds(List<int> jobIds) {
+    if (jobIds.isEmpty) return Future.value(const <Job>[]);
+    return (select(jobs)..where((t) => t.id.isIn(jobIds))).get();
+  }
+
   /// Get completed and failed jobs as a one-time list (for CSV export).
   Future<List<Job>> getCompletedJobsList() {
     return (select(jobs)
