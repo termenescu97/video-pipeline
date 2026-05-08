@@ -94,6 +94,10 @@ class JobCardNextUp extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (jobDao.recoveredJobIds.contains(job.id)) ...[
+                      const _RecoveredChip(),
+                      const SizedBox(width: Insets.s),
+                    ],
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: Insets.s, vertical: 2),
@@ -195,6 +199,40 @@ class JobCardNextUp extends StatelessWidget {
       case JobType.transferAndCompress:
         return Icons.sync;
     }
+  }
+}
+
+/// "Recovered after restart" chip (T109). Mirror of the same chip
+/// on JobCardQueued — duplicated for self-containment.
+class _RecoveredChip extends StatelessWidget {
+  const _RecoveredChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    return Tooltip(
+      message: 'This job was rescued after a previous crash.\n'
+          'Press Start when ready to resume.',
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: Insets.s, vertical: 1),
+        decoration: BoxDecoration(
+          color: statusColors.warning.withValues(alpha: 0.15),
+          border: Border.all(color: statusColors.warning),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.history, size: 12, color: statusColors.warning),
+            const SizedBox(width: Insets.xxs),
+            Text('Recovered',
+                style: AppTextStyles.caption
+                    .copyWith(color: statusColors.warning)),
+          ],
+        ),
+      ),
+    );
   }
 }
 

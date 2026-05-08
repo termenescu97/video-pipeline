@@ -8,6 +8,7 @@ import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'skeleton_row.dart';
 
 /// Live-updating left-column panel listing all detected removable drives.
 /// Polls every 3 seconds (FR-020). Tapping a row fires [onSourceSelected]
@@ -101,9 +102,12 @@ class _SourcesPanelState extends State<SourcesPanel>
   Widget _buildLoadingState() {
     // Three skeleton rows during the very first poll. Once we have a result
     // (even an empty list), we switch to the empty-state pulsing banner.
+    // T106: shared SkeletonRow with shimmer (replaces the static
+    // colored Container "skeleton" — actual loading signal now).
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: Insets.s),
-      children: List.generate(3, (_) => const _SkeletonDriveRow()),
+      children: List.generate(
+          3, (_) => const SkeletonRow(height: 60)),
     );
   }
 
@@ -237,31 +241,6 @@ class _DriveRow extends StatelessWidget {
   }
 }
 
-class _SkeletonDriveRow extends StatelessWidget {
-  const _SkeletonDriveRow();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: Insets.xs),
-      child: Padding(
-        padding: const EdgeInsets.all(Insets.m),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-                height: 14,
-                width: 120,
-                color: scheme.surfaceContainerHighest),
-            const SizedBox(height: Insets.xs),
-            Container(
-                height: 12,
-                width: 160,
-                color: scheme.surfaceContainerHighest),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// _SkeletonDriveRow retired in T106 — replaced by the shared
+// SkeletonRow widget (lib/ui/widgets/skeleton_row.dart) which actually
+// shimmers and unifies the loading affordance across panels.

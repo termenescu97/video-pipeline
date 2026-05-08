@@ -81,9 +81,9 @@ lib/
     └── instance_lock.dart       # PID-based single-instance lock
 ```
 
-## Current State (as of 2026-05-06)
+## Current State (as of 2026-05-08)
 
-### Completed Features (12 spec-kit features)
+### Completed Features (13 spec-kit features)
 
 | Feature | Branch | Tasks | Status |
 |---------|--------|-------|--------|
@@ -99,9 +99,11 @@ lib/
 | 011 - SHA-256 Verification | `011-sha256-verification` | 19/19 | ✅ Complete |
 | 012 - Test Card Prep | `012-test-card-prep` | 4/4 | ✅ Complete |
 | 013 - Data Safety & Reliability Hardening | `013-data-safety-hardening` | 46/46 | ✅ Complete |
+| 014 - UI/UX Redesign — Visual Hierarchy & Operator Trust | `014-ui-redesign` | 113/114 | ✅ Code complete (T114 = Windows manual QA) |
 
-**Latest release**: v2.3.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 277
+**Latest release (in flight)**: v2.4.0 — tag pending Windows manual QA
+**Previous release**: v2.3.0 (tagged, built via GitHub Actions)
+**Total tasks implemented**: 390
 
 ### What Works
 
@@ -148,6 +150,29 @@ lib/
 - Graceful shutdown for both window close and tray quit (awaits queue + 30s safety timeout)
 - OS-level instance lock (atomic acquisition via RandomAccessFile.lock, fail-closed)
 - Queue ordering matches drag-and-drop display order (sortOrder, then createdAt)
+
+### What Works (014 — UI/UX Redesign, v2.4.0)
+
+- Three-column shell: Sources (left, 240px) / Queue + inline Detail (center, flex) / Activity (right, 300px)
+- Slim StatusBar with single-color state dot + queue summary (replaces bare AppBar; tray tooltip mirrors)
+- Job card variants: Active (hero with shimmering progress) / NextUp (hero with Start CTA) / Queued (slim row, drag handle) / Done (dimmed history); router picks per status
+- Inline detail tabs (Files / Audit / Errors) expand within the active card — no separate route
+- Per-file SHA-256 hash popover with copy-to-clipboard
+- Live SD card sources panel with auto-refresh polling and "Listening for cards" pulse
+- Live PlanSummaryPanel in CreateJobScreen (file count · bytes · free-space verdict · conflict count · long-path "View files" link); replaces v2.3.0's blocking AlertDialogs
+- Review-first "Copy All Cards" dialog with detected-cards confirmation step
+- Side-nav Settings: Notifications / Operator / Behavior / Diagnostics / About; persistent default verification + conflict-handling preferences (schema v6)
+- Diagnostics panel: instance-lock state, log path with "Reveal in Explorer", HandBrake detection, Prep Test Cards
+- Failed-jobs banner ("N failed — review") with [Retry all] [Dismiss]; dismiss persists per-ID until a NEW failure
+- Completion celebration card ("All cards copied & verified") with sequential per-card erase CTA
+- "Recovered after restart" chip on jobs rescued from a previous crash
+- 12 keyboard shortcuts (Ctrl+N, Ctrl+Shift+C, Ctrl+Enter, Ctrl+,, ?, F1, ↑, ↓, Space, Delete, Ctrl+R, Ctrl+L, Ctrl+E) with discoverability via `?` cheat sheet modal
+- Typed-confirmation gate on every non-conflict destructive action (severity-aware: destructive vs critical) — no more button-only confirms for delete/erase/overwrite
+- ConflictDialog shows source ↔ destination sizes side-by-side with "(identical size)" / "(very different)" hint
+- Visible drag handle (☰) on queued/next-up cards; click on card body expands inline (no drag conflict)
+- Skeleton-row shimmer placeholders during first-load on Sources, Queue, and FilesTab
+- HandBrake-not-installed banner extracted to its own widget; renders in HomeScreen warning slot AND CreateJobScreen
+- Material 3 with `StatusColors` theme extension used everywhere; `Insets.*` spacing scale + `AppTextStyles` typography scale (tabular figures on numerics so digit changes don't reflow); JetBrains Mono for paths/hashes
 
 ### Known Issues (from review-report-v2.md)
 

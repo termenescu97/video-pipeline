@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import '../../database/database.dart';
 import '../../database/extensions.dart';
 import '../../database/tables.dart';
+import '../../main.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
@@ -89,14 +90,28 @@ class JobCardQueued extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Tooltip(
-                        message:
-                            '${job.sourcePath} → ${job.destinationPath}',
-                        child: Text(
-                          '$src → $dst',
-                          style: AppTextStyles.body,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Tooltip(
+                              message:
+                                  '${job.sourcePath} → ${job.destinationPath}',
+                              child: Text(
+                                '$src → $dst',
+                                style: AppTextStyles.body,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          // T109: recovery chip — visible while THIS
+                          // process's recoverStaleJobs() rescued this
+                          // job from a prior crash. Cleared when the
+                          // operator acts on the job.
+                          if (jobDao.recoveredJobIds.contains(job.id)) ...[
+                            const SizedBox(width: Insets.s),
+                            const _RecoveredChip(),
+                          ],
+                        ],
                       ),
                       Text(
                         '${job.type.label} · ${job.totalFiles} files',
@@ -167,6 +182,46 @@ class JobCardQueued extends StatelessWidget {
       case JobType.transferAndCompress:
         return Icons.sync;
     }
+  }
+}
+
+/// "Recovered after restart" chip rendered next to the title on
+/// JobCardQueued and JobCardNextUp when the job was rescued from
+/// in-progress by [JobDao.recoverStaleJobs] (T109, FR-051).
+///
+/// Reads from [jobDao.recoveredJobIds] (in-memory; resets on app
+/// restart). The chip dismisses for that specific job when the
+/// operator acts on it (resume / cancel / delete / retry handlers
+/// call [JobDao.markRecoveryAcknowledged]).
+class _RecoveredChip extends StatelessWidget {
+  const _RecoveredChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    return Tooltip(
+      message: 'This job was rescued after a previous crash.\n'
+          'Press Start when ready to resume.',
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: Insets.s, vertical: 1),
+        decoration: BoxDecoration(
+          color: statusColors.warning.withValues(alpha: 0.15),
+          border: Border.all(color: statusColors.warning),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.history, size: 12, color: statusColors.warning),
+            const SizedBox(width: Insets.xxs),
+            Text('Recovered',
+                style: AppTextStyles.caption
+                    .copyWith(color: statusColors.warning)),
+          ],
+        ),
+      ),
+    );
   }
 }
 

@@ -17,6 +17,7 @@ import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import '../widgets/conflict_dialog.dart';
+import '../widgets/handbrake_banner.dart';
 import '../widgets/plan_summary_panel.dart';
 
 /// Screen for creating a new job with source, destination, and options.
@@ -352,32 +353,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // HandBrake not installed banner.
-            if (!_handbrakeInstalled) ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: statusColors.warning.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: statusColors.warning),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber, color: statusColors.warning),
-                    const SizedBox(width: Insets.s),
-                    const Expanded(
-                      child: Text(
-                        'Compression requires HandBrake. '
-                        'Download it at handbrake.fr. '
-                        'Compression options are disabled.',
-                        style: AppTextStyles.body,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: Insets.l),
-            ],
+            // T107: HandBrake banner extracted to its own widget so
+            // HomeScreen's warning slot can render the same one.
+            // The widget self-checks and renders nothing when
+            // HandBrake is installed.
+            const HandBrakeBanner(),
+            if (!_handbrakeInstalled) const SizedBox(height: Insets.l),
 
             // Job type selector.
             Text('Job Type', style: Theme.of(context).textTheme.titleMedium),
@@ -944,10 +925,27 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     var resolved = planned;
     var autoApplied = false;
     while (true) {
-      final conflicts = <String>[];
+      // T103/FR-046: collect conflict ENTRIES (source + dest paths +
+      // both sizes) so the resolution dialog can render side-by-side
+      // sizes with an "identical" / "very different" hint.
+      final conflicts = <ConflictEntry>[];
       for (final f in resolved) {
-        if (await File(f.destinationPath).exists()) {
-          conflicts.add(f.destinationPath);
+        final destFile = File(f.destinationPath);
+        if (await destFile.exists()) {
+          int? destBytes;
+          try {
+            destBytes = await destFile.length();
+          } catch (_) {
+            // File vanished or permission denied between the
+            // exists() check and length() — skip the size, the
+            // dialog renders "?" for unknown.
+          }
+          conflicts.add(ConflictEntry(
+            sourcePath: f.sourcePath,
+            destinationPath: f.destinationPath,
+            sourceBytes: f.fileSize,
+            destinationBytes: destBytes,
+          ));
         }
       }
       if (conflicts.isEmpty) break;

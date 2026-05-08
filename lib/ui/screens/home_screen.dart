@@ -12,8 +12,10 @@ import '../theme/insets.dart';
 import '../theme/text_styles.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
+import '../widgets/handbrake_banner.dart';
 import '../widgets/job_card.dart';
 import '../widgets/job_card_completed.dart';
+import '../widgets/skeleton_row.dart';
 import 'settings_screen.dart';
 
 /// Queue list panel — can be used standalone or as left panel in ShellScreen.
@@ -162,7 +164,15 @@ class _HomeScreenState extends State<HomeScreen> {
       stream: jobDao.watchAllJobs(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          // T106: skeleton rows during the first DB query — gives a
+          // sense of WHERE jobs will appear instead of a free-floating
+          // spinner. Three rows matches the empirical typical batch
+          // size (one per detected SD card).
+          return ListView(
+            padding: const EdgeInsets.symmetric(vertical: Insets.s),
+            children: List.generate(
+                3, (_) => const SkeletonRow(height: 64)),
+          );
         }
 
         final jobs = snapshot.data ?? const <Job>[];
@@ -560,6 +570,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Queue started')),
       );
+      // T100/T109: starting the queue is a "resume" action — clear
+      // every recovered chip since the operator is implicitly
+      // acknowledging the whole set by pressing Start.
+      for (final id in jobDao.recoveredJobIds.toList()) {
+        jobDao.markRecoveryAcknowledged(id);
+      }
       jobQueueService.startProcessing().then((_) {
         if (mounted) setState(() {});
       });
@@ -569,22 +585,26 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _deleteJob(Job job) async {
     if (job.status == JobStatus.inProgress) return;
 
-    final confirmed = await ConfirmationDialog.show(
+    final confirmed = await ConfirmationDialog.showDestructive(
       context: context,
       title: 'Remove Job',
       message: 'Remove this job from the queue?\n\n'
           '${job.sourcePath} → ${job.destinationPath}',
       confirmLabel: 'Remove',
-      confirmColor: Theme.of(context).extension<StatusColors>()!.error,
     );
 
     if (confirmed) {
+      // T100/T109: clear recovery chip when the operator deletes a
+      // recovered job — they've explicitly acknowledged it.
+      jobDao.markRecoveryAcknowledged(job.id);
       await jobDao.deleteJob(job.id);
       widget.onJobDeleted?.call(job.id);
     }
   }
 
   Future<void> _retryJob(Job job) async {
+    // T100/T109: retry counts as acknowledgment.
+    jobDao.markRecoveryAcknowledged(job.id);
     await jobDao.resetJobForRetry(job.id);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -632,6 +652,10 @@ class _WarningBannerSlot extends StatelessWidget {
             onDismiss: onDismissFailed,
           ),
         const _SlackUnconfiguredBanner(),
+        // T108: HandBrake-not-installed banner. Self-checks and
+        // renders empty when HandBrake is available, so it's always
+        // safe to include here.
+        const HandBrakeBanner(compact: true),
       ],
     );
   }

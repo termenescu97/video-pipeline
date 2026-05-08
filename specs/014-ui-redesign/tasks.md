@@ -290,20 +290,20 @@ description: "Implementation tasks for feature 014: UI/UX Redesign — Visual Hi
 
 **Purpose**: Refinements that span multiple stories.
 
-- [ ] T100 Implement `recoveredJobIds: Set<int>` in `lib/database/daos/job_dao.dart` (in-memory only, no schema change). Set is populated inside `recoverStaleJobs()` on cold start with the IDs of jobs that were transitioned from in-progress to paused. Clearing semantics: an ID is removed only when the operator acts on **that specific job** (resume / cancel / delete / retry); creating an unrelated new job does NOT clear other jobs' recovery chips. (data-model.md updated.)
-- [ ] T101 Update `lib/ui/widgets/confirmation_dialog.dart` with severity-aware variant (`info` / `destructive` / `critical`). **All non-conflict destructive actions MUST use the typed-confirmation pattern** (FR-047). Severity affects visual treatment only (color/icon), NOT whether typed confirmation is required. Lower-severity destructive ops (e.g., "Delete job") may use a SHORTER typed confirmation string (e.g., type `delete`) than catastrophic ones (e.g., erase SD card requires the full drive path); the typed gate itself is mandatory in all cases.
-- [ ] T102 [P] Update existing destructive call sites to use the typed-confirmation `ConfirmationDialog`: "Clear history", "Delete job" (also reached by `Delete` shortcut T094), and any other non-conflict destructive flow. Erase SD Card already uses its own typed gate (preserved); no change there.
-- [ ] T103 [P] Update `lib/ui/widgets/conflict_dialog.dart` to show source vs destination file sizes side-by-side per row with "identical size" / "very different" hint (FR-046); reads source size via `File(path).lengthSync()`
-- [ ] T104 [P] Update `lib/ui/widgets/progress_bar.dart`: dense single-line stats (`184 MB/s · 23/49 · 12m elapsed · done by 18:14`), slow shimmer animation when active, phase indicator strip for Transfer & Compress jobs, middle-ellipsis filename
-- [ ] T105 [P] Create `lib/ui/widgets/skeleton_row.dart`: configurable-height shimmering placeholder
-- [ ] T106 Wire SkeletonRow into SourcesPanel (3 rows on first scan), home queue (3 rows on first job query), FilesTab (5 rows). NOT [P]: edits home_screen.dart which other tasks touch.
-- [ ] T107 [P] Create `lib/ui/widgets/handbrake_banner.dart` extracted from `lib/ui/screens/create_job_screen.dart` (the existing HandBrake-not-installed banner near lines 109-133 in v2.3.0; since CreateJobScreen has been restructured by T031–T034, locate the equivalent banner block in the rewritten file and extract it)
-- [ ] T108 Render HandBrakeBanner in HomeScreen's warning-banner slot (T027) alongside the existing Slack-unconfigured banner. NOT [P]: edits home_screen.dart.
-- [ ] T109 [P] Add "Recovered after restart" chip on `JobCardQueued` and `JobCardNextUp` reading from `JobDao.recoveredJobIds` (T100). Chip dismisses for that job when the operator acts on it (per T100's clearing semantics).
-- [ ] T110 Run `flutter pub get` (re-verify font asset resolves)
-- [ ] T111 Run `flutter analyze` — must pass clean (no warnings, no errors)
-- [ ] T112 Run `flutter test` — keep `widget_test.dart` placeholder green
-- [ ] T113 Update `CLAUDE.md`: add 014 to feature table; bump latest release to v2.4.0; refresh "What Works" with redesign entries; remove now-stale "What's invisible" residue
+- [X] T100 Implement `recoveredJobIds: Set<int>` in `lib/database/daos/job_dao.dart` (in-memory only, no schema change). Set is populated inside `recoverStaleJobs()` on cold start with the IDs of jobs that were transitioned from in-progress to paused. Clearing semantics: an ID is removed only when the operator acts on **that specific job** (resume / cancel / delete / retry); creating an unrelated new job does NOT clear other jobs' recovery chips. (data-model.md updated.)
+- [X] T101 Update `lib/ui/widgets/confirmation_dialog.dart` with severity-aware variant (`info` / `destructive` / `critical`). **All non-conflict destructive actions MUST use the typed-confirmation pattern** (FR-047). Severity affects visual treatment only (color/icon), NOT whether typed confirmation is required. Lower-severity destructive ops (e.g., "Delete job") may use a SHORTER typed confirmation string (e.g., type `delete`) than catastrophic ones (e.g., erase SD card requires the full drive path); the typed gate itself is mandatory in all cases.
+- [X] T102 [P] Update existing destructive call sites to use the typed-confirmation `ConfirmationDialog`: "Clear history", "Delete job" (also reached by `Delete` shortcut T094), and any other non-conflict destructive flow. Erase SD Card already uses its own typed gate (preserved); no change there.
+- [X] T103 [P] Update `lib/ui/widgets/conflict_dialog.dart` to show source vs destination file sizes side-by-side per row with "identical size" / "very different" hint (FR-046); reads source size via `File(path).lengthSync()`
+- [X] T104 [P] Update `lib/ui/widgets/progress_bar.dart`: dense single-line stats (`184 MB/s · 23/49 · 12m elapsed · done by 18:14`), slow shimmer animation when active, phase indicator strip for Transfer & Compress jobs, middle-ellipsis filename
+- [X] T105 [P] Create `lib/ui/widgets/skeleton_row.dart`: configurable-height shimmering placeholder
+- [X] T106 Wire SkeletonRow into SourcesPanel (3 rows on first scan), home queue (3 rows on first job query), FilesTab (5 rows). NOT [P]: edits home_screen.dart which other tasks touch.
+- [X] T107 [P] Create `lib/ui/widgets/handbrake_banner.dart` extracted from `lib/ui/screens/create_job_screen.dart` (the existing HandBrake-not-installed banner near lines 109-133 in v2.3.0; since CreateJobScreen has been restructured by T031–T034, locate the equivalent banner block in the rewritten file and extract it)
+- [X] T108 Render HandBrakeBanner in HomeScreen's warning-banner slot (T027) alongside the existing Slack-unconfigured banner. NOT [P]: edits home_screen.dart.
+- [X] T109 [P] Add "Recovered after restart" chip on `JobCardQueued` and `JobCardNextUp` reading from `JobDao.recoveredJobIds` (T100). Chip dismisses for that job when the operator acts on it (per T100's clearing semantics).
+- [X] T110 Run `flutter pub get` (re-verify font asset resolves)
+- [X] T111 Run `flutter analyze` — must pass clean (no warnings, no errors)
+- [X] T112 Run `flutter test` — keep `widget_test.dart` placeholder green
+- [X] T113 Update `CLAUDE.md`: add 014 to feature table; bump latest release to v2.4.0; refresh "What Works" with redesign entries; remove now-stale "What's invisible" residue
 - [ ] T114 Manual QA on Windows 11 against `quickstart.md` test plan — walk through all 11 user-story sections
 
 ---

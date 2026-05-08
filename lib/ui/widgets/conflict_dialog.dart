@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/job_queue_service.dart';
+import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
@@ -20,22 +21,22 @@ import '../theme/text_styles.dart';
 ///     Principle I — Human-in-the-Loop).
 ///   - **Cancel**: Abort job creation.
 class ConflictResolutionDialog extends StatefulWidget {
-  final List<String> conflictingPaths;
+  final List<ConflictEntry> conflicts;
 
   const ConflictResolutionDialog({
     super.key,
-    required this.conflictingPaths,
+    required this.conflicts,
   });
 
   static Future<ConflictResolution?> show(
     BuildContext context,
-    List<String> conflictingPaths,
+    List<ConflictEntry> conflicts,
   ) {
     return showDialog<ConflictResolution>(
       context: context,
       barrierDismissible: false,
       builder: (_) =>
-          ConflictResolutionDialog(conflictingPaths: conflictingPaths),
+          ConflictResolutionDialog(conflicts: conflicts),
     );
   }
 
@@ -59,10 +60,11 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final count = widget.conflictingPaths.length;
-    final preview = widget.conflictingPaths.take(8).toList();
+    final count = widget.conflicts.length;
+    final preview = widget.conflicts.take(8).toList();
     final more = count - preview.length;
     final statusColors = Theme.of(context).extension<StatusColors>()!;
+    final scheme = Theme.of(context).colorScheme;
 
     return AlertDialog(
       title: Text('$count file${count == 1 ? '' : 's'} already exist'),
@@ -87,13 +89,11 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final path in preview)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Text(
-                          '• $path',
-                          style: AppTextStyles.mono.copyWith(fontSize: 11),
-                        ),
+                    for (final c in preview)
+                      _ConflictRow(
+                        entry: c,
+                        statusColors: statusColors,
+                        mutedColor: scheme.onSurfaceVariant,
                       ),
                     if (more > 0)
                       Text(
@@ -193,6 +193,83 @@ class _ConflictResolutionDialogState extends State<ConflictResolutionDialog> {
             child: const Text('Cancel'),
           ),
       ],
+    );
+  }
+}
+
+/// One row of the conflict preview list (T103, FR-046). Shows the
+/// destination path on top and source ↔ destination sizes side by
+/// side beneath, with a "(identical size)" / "(very different)"
+/// hint to help operators spot placeholder vs real conflicts.
+///
+/// Heuristic: sizes within 1% of each other → "identical size".
+/// Sizes differing by more than 50% → "very different". Anything
+/// in between renders without a hint.
+class _ConflictRow extends StatelessWidget {
+  final ConflictEntry entry;
+  final StatusColors statusColors;
+  final Color mutedColor;
+
+  const _ConflictRow({
+    required this.entry,
+    required this.statusColors,
+    required this.mutedColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final src = entry.sourceBytes;
+    final dst = entry.destinationBytes;
+
+    final srcText = formatBytes(src);
+    final dstText = dst != null ? formatBytes(dst) : '?';
+
+    String? hint;
+    Color hintColor = mutedColor;
+    if (dst != null && dst > 0) {
+      final ratio = src > dst ? src / dst : dst / src;
+      if (ratio <= 1.01) {
+        hint = '(identical size)';
+        hintColor = mutedColor;
+      } else if (ratio >= 1.5) {
+        hint = '(very different)';
+        hintColor = statusColors.warning;
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Insets.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '• ${entry.destinationPath}',
+            style: AppTextStyles.mono.copyWith(fontSize: 11),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 12, top: Insets.xxs),
+            child: Row(
+              children: [
+                Text(
+                  '$srcText ↔ $dstText',
+                  style: AppTextStyles.mono.copyWith(
+                    fontSize: 11,
+                    color: mutedColor,
+                  ),
+                ),
+                if (hint != null) ...[
+                  const SizedBox(width: Insets.s),
+                  Text(
+                    hint,
+                    style: AppTextStyles.caption
+                        .copyWith(fontSize: 11, color: hintColor),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

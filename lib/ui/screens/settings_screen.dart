@@ -654,7 +654,11 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
       return;
     }
 
-    final confirmed = await ConfirmationDialog.show(
+    // T101 / Phase 14 typed-confirm migration: Prep Test Cards
+    // replaces DCIM/100TEST/ on every detected card. Destructive
+    // (one folder per card) but not catastrophic (other files
+    // untouched), so it gets the standard typed gate.
+    final confirmed = await ConfirmationDialog.showDestructive(
       context: context,
       title: 'Prep Test Cards',
       message: 'This will create DCIM/100TEST/ on ${drives.length} card(s) '
@@ -662,6 +666,7 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
           'Existing DCIM/100TEST/ folders will be replaced.\n'
           'Other files on the cards will NOT be affected.',
       confirmLabel: 'Prep Cards',
+      typedConfirmation: 'prep',
     );
     if (!confirmed || !mounted) return;
 

@@ -55,10 +55,8 @@ class KeyboardCheatSheet extends StatelessWidget {
               _ShortcutGroup(title: 'Job management', items: [
                 ('Ctrl+N', 'New job'),
                 ('Ctrl+Shift+C', 'Copy all detected cards'),
+                ('Delete', 'Remove selected job (typed confirmation)'),
                 ('Ctrl+R', 'Retry selected failed job'),
-                // Delete shortcut deferred until typed-confirmation
-                // gate is wired across destructive flows (Phase 14
-                // T101). Use right-click → Delete on a card for now.
               ]),
               _ShortcutGroup(title: 'Queue control', items: [
                 ('Ctrl+Enter', 'Pause / resume queue'),

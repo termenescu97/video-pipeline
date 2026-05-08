@@ -87,6 +87,27 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return row?.read(maxExpr) ?? 0;
   }
 
+  /// US7 polish (T100): in-memory set of job IDs that THIS process
+  /// rescued from in-progress on cold start. Populated inside
+  /// [recoverStaleJobs] and read by [JobCardQueued]/[JobCardNextUp]
+  /// to render a "Recovered after restart" chip.
+  ///
+  /// Clearing semantics (FR-051): an entry is removed only when the
+  /// operator acts on THAT specific job (resume / cancel / delete /
+  /// retry). Creating an UNRELATED new job does NOT clear other
+  /// jobs' chips — operators get to see the recovery signal until
+  /// they explicitly address each rescued job. Resets on app restart
+  /// (in-memory; no schema change).
+  final Set<int> _recoveredJobIds = <int>{};
+  Set<int> get recoveredJobIds => Set.unmodifiable(_recoveredJobIds);
+
+  /// Operator-action signal: drop [jobId] from [recoveredJobIds].
+  /// Called by JobCardQueued/NextUp's resume/cancel/delete/retry
+  /// handlers. Idempotent — safe to call for non-recovered IDs.
+  void markRecoveryAcknowledged(int jobId) {
+    _recoveredJobIds.remove(jobId);
+  }
+
   /// Recover jobs left in [JobStatus.inProgress] state from a previous run
   /// (crash, power loss, kill). Moves them and their in-progress files back
   /// to a resumable state so the operator can review and manually resume.
@@ -94,6 +115,15 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// Per the spec, recovery moves to [JobStatus.paused] (not [JobStatus.queued])
   /// so the operator must explicitly resume after reviewing.
   Future<void> recoverStaleJobs() async {
+    // Capture the IDs BEFORE the update so we know which rows we
+    // touched. Reading after the update would lose the set (those
+    // rows are now `paused`, indistinguishable from operator-paused
+    // jobs).
+    final rescued = await (select(jobs)
+          ..where((t) => t.status.equalsValue(JobStatus.inProgress)))
+        .map((j) => j.id)
+        .get();
+
     await transaction(() async {
       await (update(jobs)
             ..where((t) => t.status.equalsValue(JobStatus.inProgress)))
@@ -108,6 +138,10 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         ),
       );
     });
+
+    _recoveredJobIds
+      ..clear()
+      ..addAll(rescued);
   }
 
   /// Atomic job creation. Inserts the job, its files, and totals in a

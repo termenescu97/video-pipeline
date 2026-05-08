@@ -14,6 +14,7 @@ import '../../utils/history_export.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
 import '../widgets/activity_panel.dart';
+import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
 import '../widgets/keyboard_cheat_sheet.dart';
 import '../widgets/sources_panel.dart';
@@ -218,11 +219,12 @@ class _ShellScreenState extends State<ShellScreen>
             const _SelectNextIntent(),
         const SingleActivator(LogicalKeyboardKey.space):
             const _ToggleExpandIntent(),
-        // Delete shortcut deliberately NOT bound until T101 lands
-        // typed-confirmation across destructive flows (Constitution
-        // Principle I — Codex Phase 13 review CRITICAL). The
-        // single-key destructive trigger is too easy to fire
-        // accidentally without a typed gate; Phase 14 brings it back.
+        // T102: Delete keyboard shortcut restored behind T101's
+        // typed-confirmation gate. Operator must type "delete" to
+        // proceed — same gate as right-click → Delete (Constitution
+        // Principle I, FR-047).
+        const SingleActivator(LogicalKeyboardKey.delete):
+            const _DeleteSelectedIntent(),
         const SingleActivator(LogicalKeyboardKey.keyR, control: true):
             const _RetrySelectedIntent(),
         const SingleActivator(LogicalKeyboardKey.keyL, control: true):
@@ -273,7 +275,9 @@ class _ShellScreenState extends State<ShellScreen>
               return null;
             },
           ),
-          // _DeleteSelectedIntent removed pending T101 typed-confirm.
+          _DeleteSelectedIntent: CallbackAction<_DeleteSelectedIntent>(
+            onInvoke: (_) => _deleteSelected(),
+          ),
           _RetrySelectedIntent: CallbackAction<_RetrySelectedIntent>(
             onInvoke: (_) => _retrySelected(),
           ),
@@ -447,10 +451,40 @@ class _ShellScreenState extends State<ShellScreen>
     return null;
   }
 
-  // _deleteSelected removed pending T101's typed-confirmation
-  // upgrade across destructive flows. Single-key Delete is the
-  // riskiest entry point in the shortcut map; it returns when
-  // T101 lands (Phase 14).
+  /// Delete shortcut (T094 / T102): typed-confirm and delete the
+  /// selected job. Active (in-progress) jobs are protected. Routes
+  /// through the SAME [ConfirmationDialog.showDestructive] path as
+  /// right-click → Delete and ActivityPanel delete — single typed
+  /// gate across all destructive entry points (FR-047).
+  Future<Object?> _deleteSelected() async {
+    final id = _selectedQueueJobId;
+    if (id == null) return null;
+    final job = _activeJobsForSelection
+        .firstWhere((j) => j.id == id, orElse: () => _NoJob.value);
+    if (job == _NoJob.value) return null;
+    if (job.status == JobStatus.inProgress) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Cannot delete the running job')),
+      );
+      return null;
+    }
+    final confirmed = await ConfirmationDialog.showDestructive(
+      context: context,
+      title: 'Remove Job',
+      message: 'Remove this job from the queue?\n\n'
+          '${job.sourcePath} → ${job.destinationPath}',
+      confirmLabel: 'Remove',
+    );
+    if (!confirmed) return null;
+    jobDao.markRecoveryAcknowledged(job.id);
+    await jobDao.deleteJob(job.id);
+    _onJobDeleted(job.id);
+    if (_selectedQueueJobId == job.id) {
+      setState(() => _selectedQueueJobId = null);
+    }
+    return null;
+  }
 
   /// Retry shortcut: only acts on the selected job if it's in
   /// `failed` state. Silent no-op otherwise — the cheat sheet
@@ -549,6 +583,10 @@ class _SelectNextIntent extends Intent {
 
 class _ToggleExpandIntent extends Intent {
   const _ToggleExpandIntent();
+}
+
+class _DeleteSelectedIntent extends Intent {
+  const _DeleteSelectedIntent();
 }
 
 class _RetrySelectedIntent extends Intent {

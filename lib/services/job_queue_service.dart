@@ -478,7 +478,8 @@ class JobQueueService {
     List<DetectedDrive> drives,
     String destination, {
     VerificationMode verificationMode = VerificationMode.size,
-    Future<ConflictResolution> Function(List<String> conflicts)? onConflict,
+    Future<ConflictResolution> Function(List<ConflictEntry> conflicts)?
+        onConflict,
   }) async {
     // Phase 1: enumerate per-card files with per-card subfolders.
     final cardPlans = <_CardTransferPlan>[];
@@ -518,12 +519,27 @@ class JobQueueService {
       ));
     }
 
-    // Phase 2: global conflict preflight across all cards.
-    final allConflicts = <String>[];
+    // Phase 2: global conflict preflight across all cards. T103/FR-046:
+    // also stat the destination size so the resolution dialog can
+    // render side-by-side sizes with an "identical"/"very different"
+    // hint.
+    final allConflicts = <ConflictEntry>[];
     for (final plan in cardPlans) {
       for (final file in plan.files) {
-        if (await File(file.destinationPath).exists()) {
-          allConflicts.add(file.destinationPath);
+        final destFile = File(file.destinationPath);
+        if (await destFile.exists()) {
+          int? destBytes;
+          try {
+            destBytes = await destFile.length();
+          } catch (_) {
+            // File vanished between exists() and length() — render '?'.
+          }
+          allConflicts.add(ConflictEntry(
+            sourcePath: file.sourcePath,
+            destinationPath: file.destinationPath,
+            sourceBytes: file.fileSize,
+            destinationBytes: destBytes,
+          ));
         }
       }
     }
@@ -535,8 +551,14 @@ class JobQueueService {
       }
       if (resolution == ConflictResolution.cancel ||
           resolution == ConflictResolution.newFolder) {
-        // Caller handles re-target / abort externally.
-        return (created: 0, skipped: 0, conflicts: allConflicts);
+        // Caller handles re-target / abort externally. Return paths
+        // (not entries) so the legacy `({conflicts: List<String>})`
+        // result shape stays stable for callers.
+        return (
+          created: 0,
+          skipped: 0,
+          conflicts: allConflicts.map((c) => c.destinationPath).toList(),
+        );
       }
       _applyResolution(cardPlans, resolution);
     }
@@ -585,7 +607,11 @@ class JobQueueService {
       }
     }
 
-    return (created: created, skipped: skipped, conflicts: allConflicts);
+    return (
+      created: created,
+      skipped: skipped,
+      conflicts: allConflicts.map((c) => c.destinationPath).toList(),
+    );
   }
 
   /// Apply a conflict resolution to the planned file list. `skip` removes
@@ -692,6 +718,37 @@ class JobQueueService {
 /// Operator-chosen response when a transfer job's destination already
 /// contains some of the files it would write.
 enum ConflictResolution { skip, rename, newFolder, overwrite, cancel }
+
+/// One conflicting file pair surfaced to the resolution dialog and the
+/// batch-job preflight callback (T103, FR-046). Carries both source and
+/// destination metadata so consumers can show side-by-side sizes and a
+/// "very different" / "identical size" hint per row.
+///
+/// Lives in the service layer (not the UI widget file) because both the
+/// dialog AND `createBatchTransferJobs` need to construct/consume it,
+/// and a service must not import from `lib/ui/`.
+class ConflictEntry {
+  /// Path to the file in the source location.
+  final String sourcePath;
+
+  /// Path the job would have written to. The actual conflict.
+  final String destinationPath;
+
+  /// Source file size in bytes.
+  final int sourceBytes;
+
+  /// Existing destination file size in bytes. `null` if the dest
+  /// file vanished between the conflict scan and dialog open
+  /// (race window — caller may pass null defensively).
+  final int? destinationBytes;
+
+  const ConflictEntry({
+    required this.sourcePath,
+    required this.destinationPath,
+    required this.sourceBytes,
+    required this.destinationBytes,
+  });
+}
 
 /// Internal: a planned file destination prior to job creation.
 class _PlannedFile {

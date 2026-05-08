@@ -4,7 +4,6 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../utils/history_export.dart';
-import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
 import 'confirmation_dialog.dart';
@@ -160,18 +159,17 @@ class _GroupedHistoryList extends StatelessWidget {
     );
   }
 
-  /// Constitution Principle I: deletion is destructive and MUST require
-  /// explicit confirmation. Mirrors the legacy queue-delete path
-  /// (`HomeScreen._deleteJob`) so both surfaces share the same safety gate.
+  /// Constitution Principle I (FR-047): deletion is destructive and
+  /// MUST require typed confirmation. Routes through showDestructive
+  /// — same gate the queue-delete and Delete-keyboard-shortcut paths
+  /// use, so all three surfaces share one safety pattern.
   Future<void> _confirmAndDelete(BuildContext context, Job job) async {
-    final statusColors = Theme.of(context).extension<StatusColors>()!;
-    final confirmed = await ConfirmationDialog.show(
+    final confirmed = await ConfirmationDialog.showDestructive(
       context: context,
       title: 'Delete from history',
       message:
           'Permanently remove this job from history?\n\n${job.sourcePath} → ${job.destinationPath}',
       confirmLabel: 'Delete',
-      confirmColor: statusColors.error,
     );
     if (confirmed) {
       await jobDao.deleteJob(job.id);

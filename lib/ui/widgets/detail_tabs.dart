@@ -4,6 +4,7 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../theme/insets.dart';
+import 'skeleton_row.dart';
 import 'audit_tab.dart';
 import 'errors_tab.dart';
 import 'files_tab.dart';
@@ -40,6 +41,19 @@ class DetailTabs extends StatelessWidget {
     return StreamBuilder<List<JobFile>>(
       stream: jobFileDao.watchFilesForJob(job.id),
       builder: (context, snapshot) {
+        // T106: while the very first snapshot is in flight, show
+        // skeleton rows in the Files tab area instead of an empty
+        // list — gives a visual cue that data is on its way.
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return Column(
+            children: [
+              const SizedBox(height: Insets.m),
+              for (var i = 0; i < 5; i++)
+                const SkeletonRow(height: 36),
+            ],
+          );
+        }
         final files = snapshot.data ?? const <JobFile>[];
         final failedCount =
             files.where((f) => f.status == FileStatus.failed).length;
