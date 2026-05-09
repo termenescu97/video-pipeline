@@ -420,14 +420,25 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// job-level "Retry all" action but catastrophic for "Retry verify
   /// on 1 unverified file"). Counters will re-derive from per-row
   /// state via the recovery path or the next run's accumulator.
-  Future<void> requeueJobForFileRetry(int jobId) {
-    return (update(jobs)..where((t) => t.id.equals(jobId))).write(
-      const JobsCompanion(
-        status: Value(JobStatus.queued),
-        errorMessage: Value(null),
-        completedAt: Value(null),
-      ),
-    );
+  Future<void> requeueJobForFileRetry(int jobId) async {
+    // Codex round-18 P2 #1: re-derive completedFiles/completedBytes
+    // from per-row state in the same transaction. Without this, a
+    // per-file retry from a completed job (`resetFileForRetry` flips
+    // one file back to `pending`) would re-enter processing with
+    // stale counters showing N/N complete when one file is now
+    // pending again. recomputeCountersFromFiles also re-derives
+    // unverified_files for free, so this single call subsumes the
+    // round-17 _recomputeUnverifiedForFile semantics for the parent.
+    await transaction(() async {
+      await (update(jobs)..where((t) => t.id.equals(jobId))).write(
+        const JobsCompanion(
+          status: Value(JobStatus.queued),
+          errorMessage: Value(null),
+          completedAt: Value(null),
+        ),
+      );
+      await recomputeCountersFromFiles(jobId);
+    });
   }
 
   /// 017B (Codex round-14 P2 #2): does any compression job already

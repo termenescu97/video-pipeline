@@ -158,6 +158,7 @@ class JobQueueService {
     _queueStateNotifier?.notifyQueueRunningStarted();
 
     var hadFailures = false;
+    var hadVerifyWarnings = false;
     var processedAny = false;
     try {
       while (_isProcessing) {
@@ -173,6 +174,20 @@ class JobQueueService {
         // Re-read the just-processed job to detect failure outcome.
         final after = await _jobDao.watchJob(job.id).first;
         if (after?.status == JobStatus.failed) hadFailures = true;
+        // Codex round-18 P2 #2: a SHA-256 transfer that ends with
+        // mismatch/unverified files lands at JobStatus.completed (FR-004
+        // — bytes are on disk; verify is a soft fail). Without this
+        // signal, the celebration "All cards copied & verified" would
+        // fire on jobs that explicitly produced verify warnings,
+        // misleading the operator about the verify outcome.
+        if (after != null) {
+          final files = await _jobFileDao.getFilesForJob(after.id);
+          if (files.any((f) =>
+              f.verifyStatus == VerifyStatus.mismatch ||
+              f.verifyStatus == VerifyStatus.unverified)) {
+            hadVerifyWarnings = true;
+          }
+        }
         _currentJobId = null;
       }
     } finally {
@@ -182,9 +197,11 @@ class JobQueueService {
       _stopCompleter = null;
       completer?.complete();
       // Emit allDone only when the queue drained naturally with no
-      // failures AND we actually processed something. A pure Stop
-      // (no work happened) MUST NOT trigger the celebration.
-      if (processedAny && !hadFailures && !_stoppedByUser) {
+      // failures, no verify warnings, AND we actually processed
+      // something. A pure Stop (no work happened) MUST NOT trigger
+      // the celebration; neither does a run that produced
+      // verifyStatus=mismatch / unverified rows (Codex round-18 P2 #2).
+      if (processedAny && !hadFailures && !hadVerifyWarnings && !_stoppedByUser) {
         _queueStateNotifier?.notifyQueueAllDone();
       }
     }
