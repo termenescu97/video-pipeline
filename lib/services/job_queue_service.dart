@@ -498,6 +498,23 @@ class JobQueueService {
         continue;
       }
 
+      // Codex round-20 P2 #1: pre-existing `failed` rows are NOT auto-
+      // reprocessed. The "Retry failed files" path (`resetJobForRetry`)
+      // flips them to `pending` BEFORE requeuing, so a true full-retry
+      // pass sees them as pending and processes them. A per-file retry
+      // (`requeueJobForFileRetry` via `retryFile`) intentionally leaves
+      // other failed rows alone — the operator chose ONE file. Without
+      // this skip, the executor's loop would fall through to the dest
+      // checks below and re-copy/re-delete unrelated destinations.
+      // Tally into `failedCount` so the post-loop branch still routes
+      // through `notifyJobFailed` and the job stays `failed` rather
+      // than being silently lifted to `completed` by the per-file
+      // retry's success.
+      if (file.status == FileStatus.failed) {
+        failedCount++;
+        continue;
+      }
+
       if (file.status == FileStatus.completed) {
         completedCount++;
         completedBytes += file.fileSize;
@@ -1114,6 +1131,7 @@ class JobQueueService {
       // the final ping surfaces transfer-side outcomes (Codex H3 closure).
       Job? parentTransferJob;
       int? parentVerifiedFiles;
+      int? parentNotVerifiedFiles;
       int? parentUnverifiedFiles;
       int? parentMismatchedFiles;
       if (job.parentJobId != null) {
@@ -1123,6 +1141,13 @@ class JobQueueService {
               await _jobFileDao.getFilesForJob(parentTransferJob.id);
           parentVerifiedFiles = parentFiles
               .where((f) => f.verifyStatus == VerifyStatus.verified)
+              .length;
+          // Codex round-20 P2 #2: count the size-mode baseline rows so
+          // a default (size-mode) transferAndCompress chained Slack
+          // ping doesn't read "Transfer verification: 0 verified ·
+          // Passed" when every file actually passed size verification.
+          parentNotVerifiedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.notVerified)
               .length;
           parentUnverifiedFiles = parentFiles
               .where((f) => f.verifyStatus == VerifyStatus.unverified)
@@ -1138,6 +1163,7 @@ class JobQueueService {
         totalFiles: files.length,
         parentTransferJob: parentTransferJob,
         parentVerifiedFiles: parentVerifiedFiles,
+        parentNotVerifiedFiles: parentNotVerifiedFiles,
         parentUnverifiedFiles: parentUnverifiedFiles,
         parentMismatchedFiles: parentMismatchedFiles,
       );
