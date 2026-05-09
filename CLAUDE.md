@@ -365,5 +365,5 @@ git push origin vX.Y.Z
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/014-ui-redesign/plan.md
+specs/018-pre-tag-hardening/plan.md
 <!-- SPECKIT END -->
