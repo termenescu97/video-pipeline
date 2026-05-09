@@ -13,6 +13,16 @@ This feature is the **last gate before tagging v2.5.0**. The operator's "bundle 
 
 The canonical input is `specs/v2.5.0-pre-tag-findings.md` (committed earlier on this branch). It enumerates each finding with file/line refs, problem, risk, fix sketch, and provenance.
 
+## Clarifications
+
+### Session 2026-05-09
+
+- Q: F-2 priority — keep at P1 or revert to review-doc's P2? → A: Keep at P1. The consequence chain (misclick blesses corrupt bytes → unblocks chained compression → encodes corrupt bytes → operator can then erase source SD card under their own authority) is irreversible in a way the other P2s aren't. The typed-gate primitive already exists, so cost-to-ship matches P2 while benefit prevents an authority-laundering chain. Constitution Principle I treats this category as foundational.
+- Q: US3 and US5 bundling — keep multi-finding stories or split per finding? → A: Keep bundled. US3 (F-4+F-5) groups by theme "concurrent actions don't break things"; US5 (F-6+F-7+F-8+F-10) groups by theme "the system tells the truth". The 6-story shape stays reviewable; tasks generated downstream will naturally split per finding regardless of story granularity.
+- Q: FR-013 strategy — atomic write-pairs, self-healing recompute, or both? → A: Atomic write-pairs at every paired counter site, plus self-healing recompute as defense-in-depth. Eliminates the drift class at the source while keeping a fallback that catches any future call site that forgets the atomic pattern. Mirrors the existing `acceptUnverified` shape — refactor-to-pattern, not new abstraction.
+- Q: FR-015 staging-dir sweep scope — which destination roots, what perf budget? → A: Sweep destination roots of jobs in non-terminal status (queued, paused, inProgress) plus the single most-recently-completed job's root. Bounded scope (typically 1–3 roots) keeps startup latency predictable; orphans on drives no longer in active use are unreachable to daily workflow and skipped by the existing unmounted-drive guard. On-demand cleanup via Settings → Diagnostics is deferred to v2.6+.
+- Q: FR-009 — does enabling the FK pragma require a pre-flip cleanup of already-dangling references in existing v8 databases? → A: Yes. The bug being fixed produced exactly the dangling references that strict FK enforcement will now reject. Run a one-time `UPDATE jobs SET parent_job_id = NULL WHERE parent_job_id IS NOT NULL AND parent_job_id NOT IN (SELECT id FROM jobs)` cleanup before the pragma flip on every connection open (idempotent — safe to re-run; affects at most a handful of rows per operator). Without cleanup, operators who deleted parents pre-release would see deferred constraint errors that look unrelated to this feature.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Operator-driven retry survives a crash with no silent intent loss (Priority: P1)
@@ -154,9 +164,9 @@ The destination drive does not accumulate orphaned staging directories across ap
 
 #### Database Constraints (US4)
 
-- **FR-009**: The database MUST enable foreign-key constraint enforcement for every connection it opens. The currently-documented `ON DELETE SET NULL` behavior on the parent-job reference MUST observably take effect when a parent is deleted.
+- **FR-009**: The database MUST enable foreign-key constraint enforcement for every connection it opens. Before the enforcement is enabled on each connection, the database MUST run an idempotent cleanup that nulls any pre-existing dangling parent-job references — covering the case where an operator deleted a parent job during the era before this release, when the documented `ON DELETE SET NULL` constraint silently failed to fire. After enforcement is enabled, the constraint MUST observably take effect for all subsequent parent deletions.
 
-- **FR-010**: Deleting a parent transfer-and-compress job MUST result in any chained compression child's parent reference observably becoming null, not a dangling integer.
+- **FR-010**: Deleting a parent transfer-and-compress job MUST result in any chained compression child's parent reference observably becoming null, not a dangling integer. This applies to both new deletions (FR-009 enforcement) and pre-existing dangling references from before this release (FR-009 cleanup).
 
 #### Reporting Truthfulness (US5)
 
@@ -164,13 +174,13 @@ The destination drive does not accumulate orphaned staging directories across ap
 
 - **FR-012**: When the v7→v8 schema migration lifts a job's status from `failed` to `completed` (because its only failed children were hash-only failures), the job's stored error message MUST be either cleared or rewritten to reflect the migration outcome. UI surfaces reading the error message MUST NOT display stale "X failed copy" text on a job marked as completed.
 
-- **FR-013**: The job-level unverified-files counter MUST stay consistent with the per-row state. After an abandoned shutdown that interrupts a row-update / counter-update pair, the next operator interaction with the job MUST observe a counter that matches the per-row reality (either via a self-healing recompute or by performing the row update + counter update atomically in the first place).
+- **FR-013**: The job-level unverified-files counter MUST stay consistent with the per-row state. The implementation MUST combine the per-row state mutation and the counter-update mutation into a single atomic write at every paired call site (eliminating the drift class at the source), AND MUST also provide a self-healing recompute on the operator-facing read paths as defense-in-depth against any future call site that forgets the atomic pattern. After an abandoned shutdown that interrupts a paired write, the next operator interaction MUST observe a counter that matches the per-row reality.
 
 - **FR-014**: For size-mode transfers, copy progress (bytes credited to the operator's progress bar and counters) MUST be persisted immediately after the underlying copy succeeds, before any verification step. This mirrors the existing SHA-256-mode behavior and prevents a slow verification call from freezing visible progress.
 
 #### Filesystem Hygiene (US6)
 
-- **FR-015**: The system MUST sweep orphaned staging directories on the destination drive at startup. Empty staging directories matching the established naming pattern, with no marker indicating they belong to a currently-running instance, MUST be removed. Live staging directories from a currently-running instance MUST NOT be removed.
+- **FR-015**: The system MUST sweep orphaned staging directories at startup, scoped to destination roots of jobs in non-terminal status (queued, paused, inProgress) plus the single most-recently-completed job's destination root. Empty staging directories matching the established naming pattern, with no marker indicating they belong to a currently-running instance, MUST be removed. Live staging directories from a currently-running instance MUST NOT be removed. Destination drives that are not currently mounted MUST be skipped silently (no error, no retry-on-mount).
 
 ### Key Entities
 
@@ -188,7 +198,7 @@ This feature does not introduce new persisted entities. It modifies the behavior
 
 - **SC-004**: Across 100 stop-then-start stress runs (window close immediately followed by a queue-triggering action), exactly one processing loop is ever active at any moment. Zero observed concurrent loops.
 
-- **SC-005**: A freshly-opened database observably has foreign-key enforcement enabled. Deleting a parent job with a chained child results in the child's parent reference being null on subsequent reads.
+- **SC-005**: A freshly-opened database observably has foreign-key enforcement enabled. A test database seeded with a dangling parent reference (simulating pre-release operator deletion) is cleaned to null on first connection-open after this release, with no error surfaced to the operator. Deleting a parent job with a chained child results in the child's parent reference being null on subsequent reads.
 
 - **SC-006**: For 100% of clean size-mode transfers in test, the post-transfer Slack notification's verified-count line agrees with its verdict line. No "Verified: 0 · Passed" pairs occur.
 
@@ -198,7 +208,7 @@ This feature does not introduce new persisted entities. It modifies the behavior
 
 - **SC-009**: Size-mode transfers credit progress to the operator within the same number of awaited operations after copy completion as SHA-256-mode transfers do. Measured by comparing the awaited-operation count between the two code paths.
 
-- **SC-010**: After a synthetic crash leaving an orphaned staging directory on the destination drive, the next app launch removes the orphan within the same startup sequence that runs job recovery. Live staging directories from a currently-running instance are never touched.
+- **SC-010**: After a synthetic crash leaving an orphaned staging directory on a destination root in scope (per FR-015's bounded scope), the next app launch removes the orphan within the same startup sequence that runs job recovery, in under 500 ms of added startup latency for the typical case (1–3 roots in scope). Live staging directories from a currently-running instance are never touched. Orphans on drives outside the bounded scope or on unmounted drives are not removed (acceptable per Edge Case).
 
 - **SC-011** (release-level): Once this feature merges, the Windows acceptance scenario from `RELEASE_NOTES_v2.5.0.md` (T067) passes end-to-end on the operator's workstation with no new defects introduced. Zero regressions on the 78-test suite.
 

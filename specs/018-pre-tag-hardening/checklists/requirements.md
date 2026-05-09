@@ -43,6 +43,12 @@
 
 **Iteration verdict**: All items pass on first iteration. Ready to proceed to `/speckit-clarify` (per project preference: never skip clarify).
 
+**Iteration 2 — post-clarify (2026-05-09)**:
+
+5 clarification questions answered (the maximum allowed by the skill). All updates landed in the spec under `## Clarifications` → `### Session 2026-05-09`. Spec body updates: FR-013 sharpened to mandate both atomic write-pairs AND self-healing recompute (Q3 / option A); FR-015 + SC-010 bounded to non-terminal jobs + most-recent-completed root, with a 500 ms perf budget (Q4 / option B); FR-009 + FR-010 + SC-005 expanded to require a one-time pre-flip cleanup of dangling parent references (Q5 / option A). Q1 (F-2 P1 priority) and Q2 (US3+US5 bundling) confirmed prior decisions — no body changes.
+
+All Content / Completeness / Readiness items still pass. Ready to proceed to `/speckit-plan`.
+
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`.
