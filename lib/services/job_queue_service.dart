@@ -232,11 +232,34 @@ class JobQueueService {
     if (parent.type != JobType.transferAndCompress) return false;
     if (await _jobDao.hasChainedChild(parentJobId)) return false;
 
+    // Codex round-16 P1 #2: refuse to chain if the parent is in any
+    // non-completed terminal state. A transferAndCompress with copy
+    // failures sits at status=failed; if the operator accepts only
+    // the verify warnings, the verify-axis check below would pass,
+    // and we'd silently spawn a compression child over the
+    // copy-completed subset — losing the failed files from the
+    // operator's intent. The only states from which compression may
+    // resume are: completed (clean transfer) or paused (operator
+    // explicitly resumed after recovery).
+    if (parent.status != JobStatus.completed &&
+        parent.status != JobStatus.paused) {
+      return false;
+    }
+
     final files = await _jobFileDao.getFilesForJob(parentJobId);
-    final hasNonClean = files.any((f) =>
+    // Defense in depth: any non-completed file row also blocks the
+    // chain. `failed` files are the round-16 P1 #2 trigger; pending /
+    // inProgress would mean the operator clicked Accept while the
+    // queue was still running (shouldn't happen via UI but the
+    // banner-disable-while-processing only covers the active card).
+    final hasNonCompletedRow =
+        files.any((f) => f.status != FileStatus.completed);
+    if (hasNonCompletedRow) return false;
+
+    final hasNonCleanVerify = files.any((f) =>
         f.verifyStatus == VerifyStatus.mismatch ||
         f.verifyStatus == VerifyStatus.unverified);
-    if (hasNonClean) return false;
+    if (hasNonCleanVerify) return false;
 
     await _createChainedCompressionJob(parent);
     _logService?.info(
@@ -279,7 +302,15 @@ class JobQueueService {
           fileId,
           forceDestDeleteApproved: forceDestDelete,
         ));
-    await _safeWrite(() => _jobDao.resetJobForRetry(file.jobId));
+    // Codex round-16 P1 #1: requeueJobForFileRetry is the per-file-
+    // scoped requeue helper. The previous `resetJobForRetry` is the
+    // job-level "Retry all" action — it arms every verifyMismatch row
+    // for force-delete AND resets every failed/pending file. Using it
+    // for a per-file retry would silently re-copy/delete unrelated
+    // destinations the operator never approved (e.g., "Retry verify
+    // on 1 unverified file" was force-deleting separate mismatch
+    // rows in the same job).
+    await _safeWrite(() => _jobDao.requeueJobForFileRetry(file.jobId));
   }
 
   Future<void> _processJob(Job job) async {

@@ -410,6 +410,26 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.isIn(jobIds))).get();
   }
 
+  /// 017B (Codex round-16 P1 #1): scoped requeue. Flips the Job row
+  /// back to `queued` and resets aggregate counters so the queue
+  /// scheduler can pick it up — but does NOT touch any JobFile rows.
+  /// Used by `JobQueueService.retryFile` so a per-file retry doesn't
+  /// sweep unrelated files in the same job (the heavyweight
+  /// `resetJobForRetry` arms every verifyMismatch row for force-delete
+  /// AND resets every failed/pending file, which is correct for a
+  /// job-level "Retry all" action but catastrophic for "Retry verify
+  /// on 1 unverified file"). Counters will re-derive from per-row
+  /// state via the recovery path or the next run's accumulator.
+  Future<void> requeueJobForFileRetry(int jobId) {
+    return (update(jobs)..where((t) => t.id.equals(jobId))).write(
+      const JobsCompanion(
+        status: Value(JobStatus.queued),
+        errorMessage: Value(null),
+        completedAt: Value(null),
+      ),
+    );
+  }
+
   /// 017B (Codex round-14 P2 #2): does any compression job already
   /// link back to [parentJobId] via Job.parentJobId? Used to suppress
   /// duplicate auto-chain attempts after the operator resolves
