@@ -18,7 +18,7 @@ Approach groups by failure class, not by finding number:
 
 4. **FK enforcement + retroactive cleanup** (FR-009, FR-010): on every connection-open, run an idempotent `UPDATE jobs SET parent_job_id = NULL WHERE parent_job_id IS NOT NULL AND parent_job_id NOT IN (SELECT id FROM jobs)` BEFORE issuing `PRAGMA foreign_keys = ON`. Order matters — flipping the pragma first would surface the violation as an error.
 
-5. **Reporting truthfulness** (FR-011, FR-012, FR-014): add `notVerifiedFiles` parameter to `notifyTransferCompleted` (mirroring the round-20 fix to `notifyCompressionCompleted`). v8 migration Phase 7 also clears `error_message` for status-lifted jobs. Size-mode `_processTransfer` reorders to `markFileSizeOnlyVerified` BEFORE `verifyTransfer` size check (matching SHA-256 ordering invariant).
+5. **Reporting truthfulness** (FR-011, FR-012, FR-014): add `notVerifiedFiles` parameter to `notifyTransferCompleted` (mirroring the round-20 fix to `notifyCompressionCompleted`). v8 migration Phase 7 also clears `error_message` for status-lifted jobs AND an idempotent connection-open cleanup runs the same SET clause on every open (so pre-tag testers who already migrated to v8 get the cleanup retroactively — see R7'). Size-mode `_processTransfer` mirrors the SHA-256 sequence EXACTLY: after robocopy → `markFileCompleted(verified: false)` + progress credit → THEN `verifyTransfer` size check → on success `markFileSizeOnlyVerified` → on failure `markFileFailed`. (Codex round-22 P1 corrected the original "reorder markFileSizeOnlyVerified before verifyTransfer" plan, which would have written success state before proof.)
 
 6. **Filesystem hygiene** (FR-015): startup sweep at the same hook point as `recoverStaleJobs`. Scope: destination roots of jobs in non-terminal status + most-recently-completed job's root. Live-instance marker via PID file inside the staging dir.
 
@@ -134,21 +134,30 @@ After implementation:
 
 | Risk | Mitigation |
 |------|------------|
-| FR-009 cleanup statement runs on every connection-open. If misimplemented, becomes a perf regression on hot startup paths. | Statement is `WHERE parent_job_id NOT IN (SELECT id FROM jobs)` — SQLite optimizes via index on `id`. Verify EXPLAIN QUERY PLAN in research.md. |
+| FR-009 cleanup statement runs on every connection-open. If misimplemented, becomes a perf regression on hot startup paths. | Codex round-22 P3: actual SQLite plan is `SCAN jobs` plus rowid lookups (NOT a SEARCH on parent_job_id, which lacks an index). At the project's scale (tens to low hundreds of jobs) this is sub-millisecond and acceptable. Adding an index on `parent_job_id` is deferred to v2.6 if production observes a regression. |
 | The atomic `retryFile` refactor changes a long-tested code path. Risk of subtle regression in error-handling shape (e.g., a different exception type bubbles up). | Keep the public `retryFile(int fileId, {bool forceDestDelete})` signature unchanged. Only the implementation collapses to one DAO call. Existing callers see no surface change. |
 | `_stopRequested` flag pattern (FR-008) is a non-trivial concurrency change to a well-tested loop. | Add a dedicated unit test that interleaves `stopProcessing` and `startProcessing` 100× and asserts loop count = 1 throughout (SC-004). Use a deterministic test runner (controlled awaiter) rather than wall-clock sleeps. |
 | Migration Phase 7 errorMessage clear (FR-012) is a write to existing rows on every operator's database. | Statement scoped to rows that meet the lift criteria; idempotent (re-running on already-cleared rows is a no-op). Phase 7 itself already runs in the same v8 transaction; we extend it, not add new phases. |
 | Staging-dir PID marker (FR-015) on Windows: file locking semantics differ from POSIX. A live PID file might be left behind if the process is killed without cleanup. | Sweep checks (a) PID exists in OS process table AND (b) PID's executable path matches the current app's executable. If either check fails, treat as orphan. Same approach as the existing instance-lock helper (proven). |
 | Codex round-22 might surface NEW findings (not just confirm fixes). Could push tag past acceptable schedule. | This is acceptance-by-design — round 22 IS the gate (SC-012). If it surfaces a new P1/P2, fix-and-rerun before tagging. P3 findings can defer to v2.5.1. |
 
-## Open questions for Codex review
+## Codex round-22 review — findings folded back
 
-The plan above will be passed to Codex `gpt-5.5 effort=high` adversarial review. Specific things to interrogate:
+The plan above was passed to Codex `gpt-5.5 effort=high` (`codex exec` with the prompt at `/tmp/codex_plan_review_prompt.md`). 10 findings returned (1 P1, 3 P2, 6 P3). All folded into spec/plan/research/data-model. Fold map:
 
-1. **Is the FR-009 cleanup-then-pragma order safe under all crash modes?** What if the connection drops between the cleanup `UPDATE` and the `PRAGMA` statement?
-2. **Does the `_stopRequested` flag introduce a new race?** Specifically, what about `startProcessing` arriving AFTER `stopCompleter` resolves but BEFORE the loop's final teardown writes complete?
-3. **Atomic `markFileUnverified+increment`**: in the recovery branch (`_processTransfer:459`), is there an existing assumption about the order of these two writes that the collapse changes?
-4. **`maybeChainCompression` transaction wrap**: does any caller rely on `hasChainedChild` returning a value computed BEFORE the rest of the chain logic runs? (i.e., a logical read-then-act outside the transaction.)
-5. **Staging-dir PID marker on a remounted drive**: if the drive was network-mounted and remount changed the path representation (`\\nas01\share` vs `Z:\`), does the sweep skip orphans because the live PID is on what looks like a different drive?
+| Codex finding | Severity | Where folded |
+|---|---|---|
+| Size-mode "progress" fix wrote success before verification | P1 | spec.md FR-014 (rewritten), plan.md Summary #5 (rewritten) |
+| Stop/start fix still allowed multiple queued starters | P2 | research.md R4 (re-check after await spelled out) |
+| Chain dedup not centralized across all chain paths | P2 | research.md R8' (new `createChainedCompressionJobIfAbsent` gate routes BOTH `_processJob` and `maybeChainCompression`) |
+| Existing v8 databases waved away, not fixed | P2 | research.md R7' (added idempotent connection-open cleanup for status-lifted jobs, alongside the FK cleanup) |
+| FK lifecycle claim overstated | P3 | research.md R2 (corrected: `beforeOpen` runs AFTER migrations, not before) |
+| FK cleanup query-plan claim false without index | P3 | plan.md Risks (claim corrected: SCAN jobs is acceptable at current scale; index deferred) |
+| `_safeWrite` transaction composition overclaimed cancellation | P3 | research.md R6 (corrected: row/counter atomicity, NOT abandonment preemption) |
+| Counter self-healing read paths not specified | P3 | data-model.md (specific DAO read paths named: `watchAllJobs`, `watchCompletedJobs`, `watchJob`) |
+| SC-009 test metric tautological | P3 | spec.md SC-009 (rewritten: controlled completer assertion, not await-count) |
+| Staging marker liveness underspecified | P3 | research.md R5 (corrected: marker write is load-bearing — abort transfer if it fails) |
 
-These will be the fold-in points for round-22 fixes if the review finds them load-bearing.
+Round 22 surfaced ZERO findings on the typed-confirmation work, the FR-001 atomic retry direction, or the FR-013 atomic counter pattern — those parts are solid.
+
+The plan now reflects all round-22 corrections. Ready for `/speckit-tasks`.

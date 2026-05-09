@@ -176,7 +176,7 @@ The destination drive does not accumulate orphaned staging directories across ap
 
 - **FR-013**: The job-level unverified-files counter MUST stay consistent with the per-row state. The implementation MUST combine the per-row state mutation and the counter-update mutation into a single atomic write at every paired call site (eliminating the drift class at the source), AND MUST also provide a self-healing recompute on the operator-facing read paths as defense-in-depth against any future call site that forgets the atomic pattern. After an abandoned shutdown that interrupts a paired write, the next operator interaction MUST observe a counter that matches the per-row reality.
 
-- **FR-014**: For size-mode transfers, copy progress (bytes credited to the operator's progress bar and counters) MUST be persisted immediately after the underlying copy succeeds, before any verification step. This mirrors the existing SHA-256-mode behavior and prevents a slow verification call from freezing visible progress.
+- **FR-014**: For size-mode transfers, the executor MUST mirror the SHA-256-mode write sequence exactly: after the underlying copy succeeds, persist `status=completed` with the legacy `verified` boolean still false (using `markFileCompleted(verified: false)` or its size-mode equivalent), then credit progress bytes, THEN run the size verification, then on size-verify success call `markFileSizeOnlyVerified` (which finalizes the verify axis), or on size-verify failure call `markFileFailed`. The system MUST NOT write a "size-verified" success state before the size check has actually run — doing so could persist a bad file as clean/completed if the process is interrupted between the premature write and the failed size check.
 
 #### Filesystem Hygiene (US6)
 
@@ -206,7 +206,7 @@ This feature does not introduce new persisted entities. It modifies the behavior
 
 - **SC-008**: After a synthetic abandoned shutdown that interrupts the recovery branch's row-update / counter-update pair, the next read of the job's unverified counter agrees with the per-row tally. Maximum drift: zero.
 
-- **SC-009**: Size-mode transfers credit progress to the operator within the same number of awaited operations after copy completion as SHA-256-mode transfers do. Measured by comparing the awaited-operation count between the two code paths.
+- **SC-009**: With the test `TransferService` configured to make `verifyTransfer` block on a controlled completer, a size-mode transfer credits `Job.completedBytes` and `Job.completedFiles` BEFORE the completer is released. The assertion: read the persisted counters at the moment `verifyTransfer` is blocked, observe credited bytes; release the completer; observe `verifyStatus` finalize. Tautological metrics ("same await count") MUST NOT be substituted — the test must observe persisted state at the blocked-verify moment.
 
 - **SC-010**: After a synthetic crash leaving an orphaned staging directory on a destination root in scope (per FR-015's bounded scope), the next app launch removes the orphan within the same startup sequence that runs job recovery, in under 500 ms of added startup latency for the typical case (1–3 roots in scope). Live staging directories from a currently-running instance are never touched. Orphans on drives outside the bounded scope or on unmounted drives are not removed (acceptable per Edge Case).
 

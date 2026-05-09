@@ -22,7 +22,13 @@ Existing columns relevant to this feature:
 
 2. **`errorMessage` cleared by migration Phase 7 lift (FR-012)**. The v8 migration already lifts `Job.status` from `failed` to `completed` for jobs whose only failed children were hash-only failures (per round-19 P2 fix). This feature extends that same Phase 7 statement to also clear `error_message` on the lifted rows. Affected rows: same as Phase 7's existing scope.
 
-3. **Counter consistency invariant (FR-013)**. `Job.unverifiedFiles` MUST equal `COUNT(*) FROM job_files WHERE job_id = ? AND verify_status = 'unverified'` at every operator-observable read. Maintained by atomic write-pairs at every mutation site PLUS self-healing recompute on read paths.
+3. **Counter consistency invariant (FR-013)**. `Job.unverifiedFiles` MUST equal `COUNT(*) FROM job_files WHERE job_id = ? AND verify_status = 'unverified'` at every operator-observable read. Maintained by atomic write-pairs at every mutation site (primary mechanism) PLUS self-healing recompute (defense-in-depth) on these specific operator-facing DAO read paths:
+   - `JobDao.watchAllJobs()` — feeds the queue + history surfaces
+   - `JobDao.watchCompletedJobs()` — feeds the completion celebration card and HistorySurface
+   - `JobDao.watchJob(int jobId)` — feeds the active-card detail view
+   - `JobDao.getJob(int jobId)` — used by `notifyTransferCompleted` / `notifyCompressionCompleted` Slack call sites
+
+   The self-healing pattern: each of these reads runs a lightweight `recomputeCountersFromFiles(jobId)` for any job whose `unverifiedFiles` disagrees with the per-row tally. Disagreement is detected via a SQL existence check that's bounded (sub-millisecond at project scale). Concrete code: a wrapper layer that intercepts each of these read paths and reconciles before returning the row to the caller. Codex round-22 P3 corrected the original "promise without read paths named" — this list IS the contract.
 
 ### JobFile (no schema change)
 
