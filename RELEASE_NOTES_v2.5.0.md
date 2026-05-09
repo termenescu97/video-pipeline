@@ -120,12 +120,13 @@ Backfill rules for existing rows:
 
 ## Review process
 
-Both features went through the full spec-kit pipeline (`/speckit-specify` → `/speckit-clarify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`) with **16 Codex adversarial-review rounds** total (`gpt-5.5`, `effort=high`):
+Both features went through the full spec-kit pipeline (`/speckit-specify` → `/speckit-clarify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-implement`) with **20 Codex adversarial-review rounds** total (`gpt-5.5`, `effort=high`):
 
 - 017A: 6 rounds — covered PowerShell argv shape, schema migration backfill, recovery semantics, retry persistence, mismatch banner UX, FK delete cascade, completed-mismatch reset filter, active-card retry race.
 - 017B: 9 rounds — covered the round-7 P1 robocopy-rename overwrite (staging-dir fix), case-collision detection in single-job + newFolder paths, persisted SourcesPanel collapse, HistorySurface details wiring, mismatch Skip flow, VerifyStatus.notVerified for size-mode, conflict-rename collision-aware suffix helper, Slack failure-truth, transferAndCompress auto-chain gating, unverified recovery + chain resume after Accept, compression-ready filter on the v8 axis.
+- Bundled rounds 17–20: counter-recompute on per-file retry (round-17 P2 + round-18 P2 #1), success-celebration suppression on verify warnings (round-18 P2 #2), v8 migration backfill of hash-only v7 failures to status=completed so Accept paths reach them (round-19 P2), per-file-retry blast radius scoping (round-20 P2 #1), size-mode parent file count in chained-compression Slack ping (round-20 P2 #2).
 
-Cumulative findings: **4 P1, ~28 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
+Cumulative findings: **4 P1, ~32 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
 
 ## Verification
 
