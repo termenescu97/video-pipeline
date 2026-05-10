@@ -69,10 +69,19 @@ Future<void> sweepOrphanedStagingDirs(
   });
   for (final j in live) {
     roots.add(j.destinationPath);
+    // 019 T024 (FR-016, US5): also collect compressionOutputPath so
+    // orphaned `.tmp_handbrake_copiatorul3000_*` dirs at the
+    // compression destination get swept on next launch.
+    if (j.compressionOutputPath != null && j.compressionOutputPath!.isNotEmpty) {
+      roots.add(j.compressionOutputPath!);
+    }
   }
   final recent = await jobDao.getRecentTerminalJobs(limit: 10);
   for (final j in recent) {
     roots.add(j.destinationPath);
+    if (j.compressionOutputPath != null && j.compressionOutputPath!.isNotEmpty) {
+      roots.add(j.compressionOutputPath!);
+    }
   }
 
   final thisHost = Platform.localHostname;
@@ -96,7 +105,17 @@ Future<void> sweepOrphanedStagingDirs(
     for (final child in children) {
       if (child is! Directory) continue;
       final name = p.basename(child.path);
-      if (!name.startsWith('.tmp_robocopy_')) continue;
+      // 019 T025 (FR-016, US5): the more-specific
+      // `.tmp_handbrake_copiatorul3000_*` prefix narrows the false-
+      // positive sweep collision surface vs. a bare `.tmp_handbrake_*`
+      // matcher (operator-or-other-tool-created dirs are vastly less
+      // likely to start with our app name). The robocopy prefix stays
+      // as `.tmp_robocopy_*` for backwards compatibility with 018-era
+      // staging dirs.
+      if (!name.startsWith('.tmp_robocopy_') &&
+          !name.startsWith('.tmp_handbrake_copiatorul3000_')) {
+        continue;
+      }
       final markerOwner = await _readMarkerOwner(child);
       if (markerOwner == null) {
         // Marker absent or unreadable — orphan from a process that
