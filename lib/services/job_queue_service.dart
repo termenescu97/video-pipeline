@@ -205,22 +205,20 @@ class JobQueueService {
     // re-check pauses a job (branches b/c/d in T007), we MUST NOT
     // re-pick it on the next loop iteration — getNextQueuedJob returns
     // both queued AND paused, which would otherwise spin forever on
-    // an identity mismatch. The operator regains the chance to retry
-    // by stopping + restarting the queue (fresh run, fresh skip set).
+    // an identity mismatch.
+    //
+    // Codex round-27b P2 #2 (queue starvation): the original
+    // skip-then-break pattern halted the entire run after one bad card.
+    // With multi-card batches, that means a single identity-mismatched
+    // card stalls every other queued job. Switched to a proper exclude
+    // query so the loop continues past skipped jobs to the next eligible
+    // one. Operator regains the chance to retry the skipped job by
+    // stopping + restarting the queue (fresh run, fresh skip set).
     final skippedThisRun = <int>{};
     try {
       while (_isProcessing && !_stopRequested) {
-        final job = await _jobDao.getNextQueuedJob();
+        final job = await _jobDao.getNextQueuedJobExcluding(skippedThisRun);
         if (job == null) {
-          _isProcessing = false;
-          break;
-        }
-        if (skippedThisRun.contains(job.id)) {
-          // The next eligible job is the one we just identity-paused
-          // and getNextQueuedJob ordering put it back at the head.
-          // No way to skip past it without a richer query — exit the
-          // loop. Operator can stop + restart to retry after swapping
-          // the right card back in.
           _isProcessing = false;
           break;
         }
@@ -487,12 +485,22 @@ class JobQueueService {
           // Branch (a): legacy bypass, one-time-per-launch banner
           if (!_legacyJobBannerShown.contains(job.id)) {
             _legacyJobBannerShown.add(job.id);
+            const message = 'Job pre-dates drive-identity tracking — '
+                're-create to enable card-swap detection. Proceeding '
+                'without identity check.';
             _logService?.warning(
-              'Job ${job.id} pre-dates drive-identity tracking — '
-              're-create to enable card-swap detection. Proceeding '
-              'without identity check.',
+              'Job ${job.id} $message',
               jobId: job.id,
               phase: LogPhase.preflight,
+            );
+            // 019 (Codex round-27b P2 #1): surface to operator. Log-only
+            // would mean the operator never knows their card-swap
+            // protection is silently disabled for this job.
+            _queueStateNotifier?.notifyOperatorMessage(
+              const OperatorMessage(
+                text: message,
+                severity: OperatorMessageSeverity.warning,
+              ),
             );
           }
         } else if (stored == null || stored.isEmpty) {
@@ -1517,8 +1525,14 @@ class JobQueueService {
   /// provided and conflicts are found, the callback is awaited to obtain
   /// a [ConflictResolution] which is then applied to the file list before
   /// any jobs are created.
-  Future<({int created, int skipped, List<String> conflicts})>
-      createBatchTransferJobs(
+  Future<
+      ({
+        int created,
+        int skipped,
+        int identityRefused,
+        List<String> identityRefusedPaths,
+        List<String> conflicts
+      })> createBatchTransferJobs(
     List<DetectedDrive> drives,
     String destination, {
     VerificationMode verificationMode = VerificationMode.size,
@@ -1627,11 +1641,12 @@ class JobQueueService {
       if (resolution == ConflictResolution.cancel ||
           resolution == ConflictResolution.newFolder) {
         // Caller handles re-target / abort externally. Return paths
-        // (not entries) so the legacy `({conflicts: List<String>})`
-        // result shape stays stable for callers.
+        // (not entries) so the legacy result shape stays stable.
         return (
           created: 0,
           skipped: 0,
+          identityRefused: 0,
+          identityRefusedPaths: const <String>[],
           conflicts: allConflicts.map((c) => c.destinationPath).toList(),
         );
       }
@@ -1643,6 +1658,12 @@ class JobQueueService {
     var created = 0;
     var skipped = 0;
     var orderIndex = 0;
+    // 019 (Codex round-27b P2 #3): identity-refused is reported as a
+    // distinct axis from `skipped`. The previous shape collapsed
+    // "no video files on the card" and "WMI identity capture failed"
+    // into the same counter, so the operator couldn't tell whether to
+    // re-insert the card or accept that it's empty.
+    final identityRefusedPaths = <String>[];
 
     for (final plan in cardPlans) {
       if (plan.files.isEmpty) {
@@ -1669,7 +1690,7 @@ class JobQueueService {
           'and retry.',
           phase: LogPhase.preflight,
         );
-        skipped++;
+        identityRefusedPaths.add(plan.drive.path);
         continue;
       }
       orderIndex++;
@@ -1711,6 +1732,8 @@ class JobQueueService {
     return (
       created: created,
       skipped: skipped,
+      identityRefused: identityRefusedPaths.length,
+      identityRefusedPaths: identityRefusedPaths,
       conflicts: allConflicts.map((c) => c.destinationPath).toList(),
     );
   }

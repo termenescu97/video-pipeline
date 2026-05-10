@@ -89,55 +89,74 @@ Future<void> sweepOrphanedStagingDirs(
   for (final root in roots) {
     final rootDir = Directory(root);
     if (!rootDir.existsSync()) continue;
-    final List<FileSystemEntity> children;
-    try {
-      children = await rootDir
-          .list(followLinks: false)
-          .toList()
-          .timeout(const Duration(seconds: 2));
-    } catch (e) {
-      logService?.warning(
-        'startup-sweep: list failed/timed-out for $root: $e',
-        phase: LogPhase.recover,
+    // 019 (Codex round-27b P2 #4): HandBrake compression preserves
+    // the source folder hierarchy, so its staging dirs live at
+    // `<root>/<relative-source-subpath>/.tmp_handbrake_copiatorul3000_*/`,
+    // NOT at `<root>/.tmp_handbrake_*`. A non-recursive walk misses
+    // them entirely. Robocopy staging dirs ARE at the root, but a
+    // recursive walk catches them too (cheap, since once we identify
+    // a staging dir we don't recurse INTO it).
+    await _sweepRecursive(
+      rootDir,
+      thisHost: thisHost,
+      logService: logService,
+    );
+  }
+}
+
+Future<void> _sweepRecursive(
+  Directory dir, {
+  required String thisHost,
+  required LogService? logService,
+}) async {
+  final List<FileSystemEntity> children;
+  try {
+    children = await dir
+        .list(followLinks: false)
+        .toList()
+        .timeout(const Duration(seconds: 2));
+  } catch (e) {
+    logService?.warning(
+      'startup-sweep: list failed/timed-out for ${dir.path}: $e',
+      phase: LogPhase.recover,
+    );
+    return;
+  }
+  for (final child in children) {
+    if (child is! Directory) continue;
+    final name = p.basename(child.path);
+    // 019 T025 + round-27b P2 #4: matched staging dirs are deleted
+    // (host check), then we DO NOT recurse into them. Unmatched dirs
+    // get recursive descent so HandBrake's nested staging dirs are
+    // discoverable.
+    final isStaging = name.startsWith('.tmp_robocopy_') ||
+        name.startsWith('.tmp_handbrake_copiatorul3000_');
+    if (!isStaging) {
+      await _sweepRecursive(
+        child,
+        thisHost: thisHost,
+        logService: logService,
       );
       continue;
     }
-    for (final child in children) {
-      if (child is! Directory) continue;
-      final name = p.basename(child.path);
-      // 019 T025 (FR-016, US5): the more-specific
-      // `.tmp_handbrake_copiatorul3000_*` prefix narrows the false-
-      // positive sweep collision surface vs. a bare `.tmp_handbrake_*`
-      // matcher (operator-or-other-tool-created dirs are vastly less
-      // likely to start with our app name). The robocopy prefix stays
-      // as `.tmp_robocopy_*` for backwards compatibility with 018-era
-      // staging dirs.
-      if (!name.startsWith('.tmp_robocopy_') &&
-          !name.startsWith('.tmp_handbrake_copiatorul3000_')) {
-        continue;
-      }
-      final markerOwner = await _readMarkerOwner(child);
-      if (markerOwner == null) {
-        // Marker absent or unreadable — orphan from a process that
-        // crashed before/during marker write.
-      } else if (markerOwner.host != thisHost) {
-        // Foreign machine's marker on a shared NAS root. Not our
-        // problem; skip silently.
-        continue;
-      }
-      try {
-        await child.delete(recursive: true);
-        logService?.info(
-          'startup-sweep: removed orphan staging dir ${child.path} '
-          '(marker: ${markerOwner ?? "absent"})',
-          phase: LogPhase.recover,
-        );
-      } catch (e) {
-        logService?.warning(
-          'startup-sweep: delete failed for ${child.path}: $e',
-          phase: LogPhase.recover,
-        );
-      }
+    final markerOwner = await _readMarkerOwner(child);
+    if (markerOwner != null && markerOwner.host != thisHost) {
+      // Foreign machine's marker on a shared NAS root. Not our
+      // problem; skip silently.
+      continue;
+    }
+    try {
+      await child.delete(recursive: true);
+      logService?.info(
+        'startup-sweep: removed orphan staging dir ${child.path} '
+        '(marker: ${markerOwner ?? "absent"})',
+        phase: LogPhase.recover,
+      );
+    } catch (e) {
+      logService?.warning(
+        'startup-sweep: delete failed for ${child.path}: $e',
+        phase: LogPhase.recover,
+      );
     }
   }
 }

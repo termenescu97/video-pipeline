@@ -119,6 +119,30 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         .getSingleOrNull();
   }
 
+  /// 019 (FR-002, US1, Codex round-27b P2): same as [getNextQueuedJob]
+  /// but excludes the given job IDs. Used by `JobQueueService.startProcessing`'s
+  /// per-run skip set to ADVANCE past identity-paused jobs instead of
+  /// halting the entire queue. Without this, the original "skip → break"
+  /// pattern starved every later queued/paused job behind a single
+  /// bad card.
+  Future<Job?> getNextQueuedJobExcluding(Set<int> excludeJobIds) {
+    final query = select(jobs)
+      ..where(
+        (t) =>
+            t.status.equalsValue(JobStatus.queued) |
+            t.status.equalsValue(JobStatus.paused),
+      )
+      ..orderBy([
+        (t) => OrderingTerm.asc(t.sortOrder),
+        (t) => OrderingTerm.asc(t.createdAt),
+      ])
+      ..limit(1);
+    if (excludeJobIds.isNotEmpty) {
+      query.where((t) => t.id.isNotIn(excludeJobIds.toList()));
+    }
+    return query.getSingleOrNull();
+  }
+
   /// Returns the highest sortOrder currently assigned to any active
   /// (queued or paused) job, or 0 if none. Used to place new jobs at
   /// the end of the queue.
@@ -201,6 +225,28 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           status: Value(FileStatus.pending),
         ),
       );
+
+      // 019 (Codex round-27b P3 #5): clear stale forceDestDeleteApproved
+      // on every rescued job's files. The flag is operator-attribution
+      // (set by an explicit "Retry" click from the verify-mismatch
+      // banner) and has single-use semantics — _processTransfer reads
+      // and clears it on the next per-file iteration. If the app
+      // crashed AFTER the operator armed it but BEFORE the executor
+      // consumed it, the flag would survive and fire implicitly on
+      // next launch. Constitution Principle I (Human-in-the-loop)
+      // requires a fresh operator click for every destructive action.
+      if (rescuedJobIdSet.isNotEmpty) {
+        final rescuedIds = rescuedJobIdSet.toList();
+        await (update(db.jobFiles)
+              ..where((t) =>
+                  t.jobId.isIn(rescuedIds) &
+                  t.forceDestDeleteApproved.equals(true)))
+            .write(
+          const JobFilesCompanion(
+            forceDestDeleteApproved: Value(false),
+          ),
+        );
+      }
 
       // 017 (T046, FR-006): copied+pending verify rows stay at
       // status=completed — don't reset (would lose copy progress).

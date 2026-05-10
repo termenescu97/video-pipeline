@@ -66,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// (T060, FR-012).
   List<Job>? _celebrationBatch;
   StreamSubscription<QueueStateEvent>? _queueStateSub;
+  StreamSubscription<OperatorMessage>? _operatorMessageSub;
   Timer? _celebrationDismissTimer;
 
   /// Wall-clock time when the most recent run transitioned from idle
@@ -95,13 +96,37 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _queueStateSub = queueStateNotifier.events.listen(_handleQueueStateEvent);
+    // 019 (Codex round-27b P2 #1): operator-visible legacy-job banner
+    // and other one-shot warnings surface here as SnackBars.
+    _operatorMessageSub = queueStateNotifier.operatorMessages
+        .listen(_handleOperatorMessage);
   }
 
   @override
   void dispose() {
     _queueStateSub?.cancel();
+    _operatorMessageSub?.cancel();
     _celebrationDismissTimer?.cancel();
     super.dispose();
+  }
+
+  void _handleOperatorMessage(OperatorMessage message) {
+    if (!mounted) return;
+    final scheme = Theme.of(context).colorScheme;
+    final bg = message.severity == OperatorMessageSeverity.warning
+        ? scheme.errorContainer
+        : scheme.secondaryContainer;
+    final fg = message.severity == OperatorMessageSeverity.warning
+        ? scheme.onErrorContainer
+        : scheme.onSecondaryContainer;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: bg,
+        content: Text(message.text, style: TextStyle(color: fg)),
+        duration: const Duration(seconds: 8),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _handleQueueStateEvent(QueueStateEvent event) async {
