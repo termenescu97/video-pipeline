@@ -8,6 +8,7 @@ import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'confirmation_dialog.dart';
 import 'detail_tabs.dart';
 
 /// Compact dimmed variant for completed/failed jobs (history).
@@ -274,29 +275,26 @@ class JobCardDone extends StatelessWidget {
   Future<void> _acceptUnverifiedFiles(
       BuildContext context, List<int> ids) async {
     final messenger = ScaffoldMessenger.of(context);
-    final confirmed = await showDialog<bool>(
+    // 018 T005 (FR-004 + FR-006, US2, P1): trust-lowering action
+    // requires the typed-confirmation gate per the project's existing
+    // convention for destructive operations. Phrase: 'accept unverified'.
+    // The primitive enforces case-sensitive exact match and surfaces
+    // the inline case-hint on mismatch.
+    final confirmed = await ConfirmationDialog.showDestructive(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Accept unverified files?'),
-        content: Text(
-          '${ids.length} file(s) on disk could not be hashed (SHA-256 '
+      title: 'Accept unverified files?',
+      message: '${ids.length} file(s) on disk could not be hashed (SHA-256 '
           'subsystem failed). Accepting treats them as size-only '
           'verified — the bytes are kept; future verification will '
           'not re-run on this batch.\n\n'
           'Only proceed if you have already confirmed the bytes are '
-          'the version you want to keep.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Accept unverified')),
-        ],
-      ),
+          'the version you want to keep.\n\n'
+          'Type "accept unverified" below to proceed.',
+      confirmLabel: 'Accept unverified',
+      cancelLabel: 'Cancel',
+      typedConfirmation: 'accept unverified',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     for (final id in ids) {
       await jobFileDao.acceptUnverified(id);
     }
@@ -318,29 +316,27 @@ class JobCardDone extends StatelessWidget {
   Future<void> _acceptMismatchedFiles(
       BuildContext context, List<int> ids) async {
     final messenger = ScaffoldMessenger.of(context);
-    final confirmed = await showDialog<bool>(
+    // 018 T005 (FR-003 + FR-006, US2, P1): trust-lowering action
+    // requires the typed-confirmation gate. Mismatch is the most
+    // destructive of the three Accept paths — bytes are
+    // cryptographically proven different from source AND accepting
+    // can immediately unblock chained compression. Phrase:
+    // 'accept mismatch'.
+    final confirmed = await ConfirmationDialog.showDestructive(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Accept SHA-256 mismatch?'),
-        content: Text(
-          '${ids.length} file(s) on disk differ from source — '
+      title: 'Accept SHA-256 mismatch?',
+      message: '${ids.length} file(s) on disk differ from source — '
           'verification confirmed corruption. Accepting retains the '
           'corrupted bytes and clears the warning. The audit trail '
           'records this as an operator override.\n\n'
           'Only proceed if you have already confirmed the bytes on '
-          'disk are the version you want to keep.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Accept mismatch')),
-        ],
-      ),
+          'disk are the version you want to keep.\n\n'
+          'Type "accept mismatch" below to proceed.',
+      confirmLabel: 'Accept mismatch',
+      cancelLabel: 'Cancel',
+      typedConfirmation: 'accept mismatch',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     for (final id in ids) {
       await jobFileDao.acceptMismatch(id);
     }

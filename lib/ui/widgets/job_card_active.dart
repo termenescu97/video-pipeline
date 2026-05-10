@@ -10,6 +10,7 @@ import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
+import 'confirmation_dialog.dart';
 import 'detail_tabs.dart';
 import 'erase_drive_action.dart';
 import 'progress_bar.dart';
@@ -621,29 +622,25 @@ class _VerifyMismatchBanner extends StatelessWidget {
   /// from source. The audit trail (sourceHash, destinationHash,
   /// errorMessage) is preserved for post-mortem.
   Future<void> _skipAll(BuildContext context, List<int> fileIds) async {
-    final confirmed = await showDialog<bool>(
+    // 018 T006 (FR-005 + FR-006, US2, P1): Skip is the active-card
+    // analog of Accept-mismatched in JobCardDone. Same trust-lowering
+    // act, same typed-confirmation gate per the project's existing
+    // convention. Phrase: 'skip mismatch'.
+    final confirmed = await ConfirmationDialog.showDestructive(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Accept SHA-256 mismatch?'),
-        content: Text(
-          '${fileIds.length} file(s) on disk differ from source — '
+      title: 'Skip mismatched files?',
+      message: '${fileIds.length} file(s) on disk differ from source — '
           'verification confirmed corruption. Skipping retains the '
           'corrupted bytes and clears the warning. The audit trail '
           'records this as an operator override.\n\n'
           'Only proceed if you have already confirmed the bytes on '
-          'disk are the version you want to keep.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Accept mismatch')),
-        ],
-      ),
+          'disk are the version you want to keep.\n\n'
+          'Type "skip mismatch" below to proceed.',
+      confirmLabel: 'Skip mismatch',
+      cancelLabel: 'Cancel',
+      typedConfirmation: 'skip mismatch',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     for (final id in fileIds) {
       await jobFileDao.acceptMismatch(id);
     }
