@@ -13,6 +13,20 @@ The canonical input is `specs/v2.5.0-audit-findings.md` (committed at the start 
 
 This feature is the **last gate before tagging v2.5.0**. After it merges and Windows acceptance passes, the v2.5.0 tag goes out.
 
+## Clarifications
+
+### Session 2026-05-10
+
+- **Q1 — F-1 schema impact**: Where does `Job.sourceDriveSerial` live? → **A: New schema migration v8 → v9** with explicit `addColumn` + backfill rule. Legacy v8 jobs (created before this column existed) carry `null` and are treated as "could not verify" — the system surfaces a one-time banner per such job ("this job pre-dates drive-identity tracking — re-create to enable card-swap detection") and allows proceed without serial check. Documents the limitation honestly without bricking existing in-flight jobs. Fail-closed behavior applies only to jobs that DO have a `sourceDriveSerial` value.
+
+- **Q2 — F-2 rescan extension allowlist**: Which extensions count as "video files" for the post-enumeration card rescan? → **A: Reuse the existing allowlist from `lib/utils/constants.dart`** (the same one enumeration uses at job-create time). Symmetric criteria avoid surprise mismatches; if the team's allowlist needs tuning, it gets tuned in one place. Camera sidecar files (`.THM`, `.CTG`, etc.) excluded from both sides equally.
+
+- **Q3 — F-4 deferred-clear timing**: Within the success path, when exactly is `clearForceDestDeleteApproved` called? → **A: Immediately after `markFileCompleted(verified: false)`** — the moment robocopy returns success. The operator's force-delete approval was about THIS robocopy invocation, NOT about the verify axis. If verify fails after that, the verify-mismatch banner re-arms a fresh approval. Keeps the state machine conceptually clean.
+
+- **Q4 — F-5 HandBrake staging shape**: Sibling file or sibling directory for the staging path? → **B: Sibling directory** — `<dirname>/.tmp_handbrake_<tag>/<basename>`. Mirrors the robocopy staging-dir convention exactly; `.live` marker lives at `<dirname>/.tmp_handbrake_<tag>/.live`. The 018 startup sweep code path can be extended with a single matcher addition rather than learning a parallel sibling-file convention. Convention symmetry beats marginal disk-write savings.
+
+- **Q5 — Codex round-27 cadence**: One adversarial review at the end, or two across the lifecycle? → **B: Two rounds** — round 27a at plan/tasks completion (catches design-decision errors before code is written), round 27b post-implementation (catches code-level errors). Matches the 018 cadence (rounds 22 + 23 + 24 + 25 across the lifecycle); 018's round-22 plan review caught a P1 (typed-gate phrase enforcement) that would have been embedded in committed code if reviewed only post-implementation. The drive-identity + rescan + force-delete-deferred-clear policy decisions in 019 have similar risk profiles for plan-phase issues.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 — Drive-letter remap detected and refused (Priority: P1)
@@ -213,7 +227,7 @@ The 017A length-3 argv assertion lives in `process_runner.dart::runPowerShellInl
 - **SC-007 (F-D6)**: Path > 260 chars hashes correctly via `\\?\` prefix. Test via temp file at synthesized long path.
 - **SC-008 (F-D7)**: A 4-argv call to `_runPowerShell` throws AssertionError in debug builds. Test via direct call.
 - **SC-009 (gate)**: `flutter analyze` clean. `flutter test` passes 100% (target: 126 baseline + ~24 new from US1-US8 = ~150 tests).
-- **SC-010 (gate)**: One Codex `gpt-5.5 effort=high` adversarial-review round (round 27) over the merged 019 implementation produces zero new P1 findings. P2/P3 findings folded back if cheap; otherwise documented for v2.5.1.
+- **SC-010 (gate)**: TWO Codex `gpt-5.5 effort=high` adversarial-review rounds over the 019 lifecycle (per Q5 clarification). Round 27a fires after `/speckit-plan` + `/speckit-tasks` are committed, before any implementation begins — catches design-decision errors. Round 27b fires after the full 019 implementation lands, before merge — catches code-level errors. Each round's P1 findings MUST be folded back; P2 findings folded if cheap; P3 findings documented for v2.5.1. The merge gate requires zero open P1s from either round.
 
 ## Constitution Alignment
 
