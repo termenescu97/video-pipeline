@@ -57,6 +57,21 @@ class Jobs extends Table {
   TextColumn get verificationMode =>
       textEnum<VerificationMode>().withDefault(Constant(VerificationMode.size.name))();
 
+  /// 019 (v9, FR-001): WMI serial of the source SD card captured at
+  /// job-create time. Re-checked at every transfer-resume AND at
+  /// erase-eligibility evaluation; mismatch refuses the operation
+  /// (closes F-1: drive-letter remap silently transferring from the
+  /// wrong card and erasing it).
+  ///
+  /// Codex round-27a P1 fix: post-019, valid values are:
+  ///   - real serial string (e.g. "12345-67890") — check normally
+  ///   - sentinel `'__legacy_v8__'` — legacy bypass with one-time-per-
+  ///     launch banner (set ONLY by the v8→v9 migration backfill for
+  ///     pre-019 jobs; preserves in-flight work)
+  ///   - null — bug indicator, should be impossible (v9 job-creation
+  ///     refuses on null capture; the migration backfills all v8 rows)
+  TextColumn get sourceDriveSerial => text().nullable()();
+
   /// 017 (v8): mirror of count of JobFile rows where verifyStatus = unverified.
   /// Re-derived from JobFile rows by recoverStaleJobs (FR-007 / FR-018).
   IntColumn get unverifiedFiles =>
