@@ -49,6 +49,15 @@ class JobQueueService {
 
   bool _isProcessing = false;
   int? _currentJobId;
+  // 018 T010 (FR-008, US3): explicit stop signal observable to the
+  // processing loop at every iteration boundary. Distinct from
+  // _isProcessing so that startProcessing() can wait for an in-flight
+  // stopProcessing() to fully drain before flipping _isProcessing back
+  // to true — closes the race where two concurrent loops could both
+  // observe _isProcessing == false during the drain window and both
+  // start. Set synchronously in stopProcessing(); cleared by
+  // startProcessing() AFTER the prior _stopCompleter resolves.
+  bool _stopRequested = false;
   // Resolves when the processing loop has exited and all in-flight state
   // writes have completed. Used by graceful shutdown so the database is
   // never closed while the queue may still be writing.
@@ -152,8 +161,23 @@ class JobQueueService {
 
   /// Start processing the queue. Processes one job at a time.
   Future<void> startProcessing() async {
+    // 018 T010 (FR-008, US3): if a stopProcessing() is currently
+    // draining, await its completer BEFORE doing anything else. Without
+    // this, two concurrent startProcessing() calls during the drain
+    // window can both observe _isProcessing == false and both flip it
+    // to true, spawning two concurrent loops against the same queue.
+    final pending = _stopCompleter;
+    if (pending != null && !pending.isCompleted) {
+      await pending.future;
+    }
+    // RE-CHECK AND FLIP ATOMICALLY. Dart microtasks run to completion
+    // before the next microtask runs, so the lines below MUST NOT be
+    // separated by any `await`. If a refactor inserts an await between
+    // the re-check and the flip, the FR-008 race re-opens — even a
+    // logging await would be sufficient to break the invariant.
     if (_isProcessing) return;
     _isProcessing = true;
+    _stopRequested = false;
     _stoppedByUser = false;
     _queueStateNotifier?.notifyQueueRunningStarted();
 
@@ -161,7 +185,7 @@ class JobQueueService {
     var hadVerifyWarnings = false;
     var processedAny = false;
     try {
-      while (_isProcessing) {
+      while (_isProcessing && !_stopRequested) {
         final job = await _jobDao.getNextQueuedJob();
         if (job == null) {
           _isProcessing = false;
@@ -213,6 +237,13 @@ class JobQueueService {
   /// hash cancellation), so the caller can safely close the database
   /// once awaited.
   Future<void> stopProcessing() {
+    // 018 T010 (FR-008, US3): set _stopRequested SYNCHRONOUSLY at the
+    // top so any concurrent startProcessing() that arrives after this
+    // call (but before the loop drains) observes the request via the
+    // unresolved _stopCompleter and waits for drain. Mid-iteration loop
+    // checks also see the flag immediately on the next await
+    // resumption.
+    _stopRequested = true;
     // Reentrant: a second call (e.g., tray quit fired right after the UI
     // stop button) must observe the SAME pending completer until the
     // loop actually exits. Returning `Future.value()` here once the flag
@@ -221,6 +252,8 @@ class JobQueueService {
     if (pending != null) return pending.future;
     if (!_isProcessing) {
       // Either never started, or already finished cleanly — nothing to await.
+      // Reset the request flag so a future startProcessing() proceeds cleanly.
+      _stopRequested = false;
       return Future<void>.value();
     }
     final completer = Completer<void>();
@@ -244,49 +277,85 @@ class JobQueueService {
   /// Operator-attribution: only called from explicit "Resume
   /// compression" / "Accept" UI handlers, never from the executor.
   Future<bool> maybeChainCompression(int parentJobId) async {
-    final parent = await _jobDao.getJob(parentJobId);
-    if (parent == null) return false;
-    if (parent.type != JobType.transferAndCompress) return false;
-    if (await _jobDao.hasChainedChild(parentJobId)) return false;
-
-    // Codex round-16 P1 #2: refuse to chain if the parent is in any
-    // non-completed terminal state. A transferAndCompress with copy
-    // failures sits at status=failed; if the operator accepts only
-    // the verify warnings, the verify-axis check below would pass,
-    // and we'd silently spawn a compression child over the
-    // copy-completed subset — losing the failed files from the
-    // operator's intent. The only states from which compression may
-    // resume are: completed (clean transfer) or paused (operator
-    // explicitly resumed after recovery).
-    if (parent.status != JobStatus.completed &&
-        parent.status != JobStatus.paused) {
-      return false;
-    }
-
-    final files = await _jobFileDao.getFilesForJob(parentJobId);
-    // Defense in depth: any non-completed file row also blocks the
-    // chain. `failed` files are the round-16 P1 #2 trigger; pending /
-    // inProgress would mean the operator clicked Accept while the
-    // queue was still running (shouldn't happen via UI but the
-    // banner-disable-while-processing only covers the active card).
-    final hasNonCompletedRow =
-        files.any((f) => f.status != FileStatus.completed);
-    if (hasNonCompletedRow) return false;
-
-    final hasNonCleanVerify = files.any((f) =>
-        f.verifyStatus == VerifyStatus.mismatch ||
-        f.verifyStatus == VerifyStatus.unverified);
-    if (hasNonCleanVerify) return false;
-
-    await _createChainedCompressionJob(parent);
+    final created = await createChainedCompressionJobIfAbsent(parentJobId);
+    if (created == null) return false;
     _logService?.info(
       'Operator-resumed compression chain for transferAndCompress '
-      'parent #${parent.id}',
-      jobId: parent.id,
+      'parent #$parentJobId',
+      jobId: parentJobId,
       phase: LogPhase.finalize,
     );
     await startProcessing();
     return true;
+  }
+
+  /// 018 T008 (FR-007, US3, P2): centralized chain-creation gate.
+  /// Wraps `hasChainedChild` check + parent fetch + verify-axis gate
+  /// + insertion in a single Drift transaction. Two concurrent
+  /// invocations against the same parent will see the first
+  /// invocation's INSERT inside the transaction's read snapshot —
+  /// only one chained child is ever created.
+  ///
+  /// Replaces the prior "check + insert" pattern that was spread
+  /// across multiple awaits without a transaction. Reachable today
+  /// via Accept-mismatched + Accept-unverified clicked in quick
+  /// succession on the same job; round-22 P2 flagged the resulting
+  /// race that could spawn duplicate compression children competing
+  /// for the same destination path.
+  ///
+  /// Returns the new chained child's job id on success, `null` on
+  /// dedup hit OR any gate failure (parent missing / wrong type /
+  /// wrong status / non-completed file row / unresolved verify
+  /// warning / no compression-ready files).
+  ///
+  /// Both auto-chain (`_processJob` post-clean-transfer) and
+  /// operator-driven chain (`maybeChainCompression`) MUST route
+  /// through this method. Direct calls to `_createChainedCompressionJob`
+  /// from outside the gate would bypass the dedup invariant.
+  Future<int?> createChainedCompressionJobIfAbsent(int parentJobId) async {
+    // Inline the _safeWrite abandonment-check pattern: this method
+    // returns int? (the new child id), but _safeWrite is typed
+    // Future<void>. Mirroring the same drop-on-abandon + rethrow-
+    // otherwise semantics directly here avoids generifying _safeWrite
+    // and touching every existing caller.
+    if (_shutdownAbandoned) return null;
+    try {
+      return await _jobDao.transaction(() async {
+        final parent = await _jobDao.getJob(parentJobId);
+        if (parent == null) return null;
+        if (parent.type != JobType.transferAndCompress) return null;
+        // Dedup gate inside the transaction: a second concurrent
+        // invocation will see the first's INSERT here even though
+        // both invocations entered the transaction concurrently —
+        // SQLite serializes writes via BEGIN IMMEDIATE.
+        if (await _jobDao.hasChainedChild(parentJobId)) return null;
+
+        // Codex round-16 P1 #2: refuse to chain if the parent is in
+        // any non-completed terminal state. A transferAndCompress
+        // with copy failures sits at status=failed; chaining over
+        // the copy-completed subset would silently drop the failed
+        // files from the operator's intent.
+        if (parent.status != JobStatus.completed &&
+            parent.status != JobStatus.paused) {
+          return null;
+        }
+
+        final files = await _jobFileDao.getFilesForJob(parentJobId);
+        final hasNonCompletedRow =
+            files.any((f) => f.status != FileStatus.completed);
+        if (hasNonCompletedRow) return null;
+
+        final hasNonCleanVerify = files.any((f) =>
+            f.verifyStatus == VerifyStatus.mismatch ||
+            f.verifyStatus == VerifyStatus.unverified);
+        if (hasNonCleanVerify) return null;
+
+        return await _createChainedCompressionJob(parent);
+      });
+    } catch (_) {
+      if (_shutdownAbandoned) return null;
+      rethrow;
+    }
   }
 
   /// 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a single
@@ -390,7 +459,13 @@ class JobQueueService {
                 phase: LogPhase.finalize,
               );
             } else {
-              await _createChainedCompressionJob(job);
+              // 018 T009 (FR-007, US3): route through the centralized
+              // dedup gate. Both auto-chain (this site) and operator-
+              // driven chain (maybeChainCompression) MUST go through
+              // the same gate so the hasChainedChild check + insert
+              // is transactional. Direct calls would re-open the
+              // round-22 P2 race where two paths could both insert.
+              await createChainedCompressionJobIfAbsent(job.id);
             }
           }
           break;
@@ -1510,9 +1585,14 @@ class JobQueueService {
   /// Preserves the relative folder structure from the transfer destination
   /// so duplicate basenames in different folders cannot collide in the
   /// compression output.
-  Future<void> _createChainedCompressionJob(Job transferJob) async {
+  // 018 T008/T009 (FR-007): returns the new child's job id so the
+  // centralized gate `createChainedCompressionJobIfAbsent` can hand
+  // it back to callers. MUST only be called from inside that gate
+  // (or its transaction); calling directly from the outside bypasses
+  // the dedup invariant.
+  Future<int?> _createChainedCompressionJob(Job transferJob) async {
     final outputPath = transferJob.compressionOutputPath;
-    if (outputPath == null) return;
+    if (outputPath == null) return null;
 
     final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
     // Codex round-15 P1: filter on the v8 verify axis, not the legacy
@@ -1538,12 +1618,12 @@ class JobQueueService {
                 f.verifyStatus == VerifyStatus.notVerified))
         .toList();
 
-    if (ready.isEmpty) return;
+    if (ready.isEmpty) return null;
 
     final totalBytes = ready.fold<int>(0, (sum, f) => sum + f.fileSize);
     final baseOrder = await _jobDao.getMaxSortOrder();
 
-    await _jobDao.createJobWithFiles(
+    return await _jobDao.createJobWithFiles(
       job: JobsCompanion.insert(
         type: JobType.compression,
         status: JobStatus.queued,
