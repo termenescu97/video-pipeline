@@ -99,11 +99,11 @@ Tasks are grouped by phase from `plan.md`. Within a phase, tasks are sequenced �
   - Same load-bearing-conventions context as round-27a.
   - Hostile-review prompt: "The 019 implementation lands the 5 convergent + 3 bundled findings from the holistic audit. Round-27a reviewed the design. NOW review the CODE. Specifically attack: (a) any place the runtime behavior differs from the planned behavior; (b) test coverage gaps — does each FR have a test that would fail if the FR's protection were removed?; (c) the schema migration's interaction with the 018 beforeOpen invariants (FK pragma, idx, errorMessage cleanup); (d) the legacy-banner state (in-memory Set) — does it leak across app restarts in a way that re-shows the banner annoyingly OR fail to re-show after a crash mid-banner?; (e) the erase-rescan's interaction with the existing JobFile-completion-eligibility checks (does refusal happen at the RIGHT layer, or could a different code path bypass)? (f) HandBrake staging: what if HandBrake itself writes intermediate files OUTSIDE the staging dir (e.g., temp files in %TEMP%)? Does the staging-dir guarantee actually hold?"
   - Use `codex exec --model gpt-5.5 --effort high`.
-- [ ] **T040** Fold round-27b findings back. P1: MUST fold. P2: fold if cheap. P3: log in CLAUDE.md → "Open bugs deferred to v2.5.1". Re-run T038 verification gate after fixes.
+- [x] **T040** Fold round-27b findings back. P1: MUST fold. P2: fold if cheap. P3: log in CLAUDE.md → "Open bugs deferred to v2.5.1". Re-run T038 verification gate after fixes. — DONE: all 6 findings folded (commit 29f29e1); 161/161 tests passing.
 
 ## Phase 11 — Docs + merge prep
 
-- [ ] **T041** Update `CLAUDE.md`. Two-part:
+- [x] **T041** Update `CLAUDE.md`. Two-part:
   - **Add new section "v9 (019) Load-Bearing Conventions"** with the 8 invariants from plan.md Phase 11 list:
     - `Job.sourceDriveSerial` captured at create, re-checked at transfer-resume + erase-eligibility, fail-closed on null
     - Erase-eligibility rescans card content; refuses on unplanned files
@@ -115,7 +115,7 @@ Tasks are grouped by phase from `plan.md`. Within a phase, tasks are sequenced �
     - `drive_service::_runPowerShell` enforces length-3 argv via assertion
   - **Update "Project scope" section**: bump the v8 → v9 reference; note that v9 added one column with no data backfill.
   - **Update "Current State" table**: 019 → ✅ Complete (after merge).
-- [ ] **T042** Update `RELEASE_NOTES_v2.5.0.md`. Add a "Workflow-integrity hardening (019)" subsection summarizing:
+- [x] **T042** Update `RELEASE_NOTES_v2.5.0.md`. Add a "Workflow-integrity hardening (019)" subsection summarizing:
   - The holistic audit context (parallel Opus + Codex round 26 with same threat-model prompt)
   - 5 convergent findings (3 P1 + 2 P2) closed
   - 3 bundled cheap defenses
@@ -123,12 +123,12 @@ Tasks are grouped by phase from `plan.md`. Within a phase, tasks are sequenced �
   - Codex rounds 27a + 27b verdicts
   - Updated test count (126 → ~155)
   - Schema bump v8 → v9 (one column, no backfill)
-- [ ] **T043** Add to CLAUDE.md → "Open bugs deferred to v2.5.1": F-D1 (size-mode TOCTOU), F-D3 (sweep prefix collision), F-D4 (cross-machine NAS write race), F-D5 (DST/clock-jump mtime), F-D8 (eraseDrive Remove-Item -LiteralPath). One line per bullet with the source finding ID.
+- [x] **T043** Add to CLAUDE.md → "Open bugs deferred to v2.5.1": F-D1 (size-mode TOCTOU), F-D3 (sweep prefix collision), F-D4 (cross-machine NAS write race), F-D5 (DST/clock-jump mtime), F-D8 (eraseDrive Remove-Item -LiteralPath). One line per bullet with the source finding ID.
 
 ## Phase 12 — Merge prep handoff
 
-- [ ] **T044** Final analyzer + test gate: `flutter analyze --no-pub` clean; `flutter test` all passing. Commit any final cleanup.
-- [ ] **T045** Branch ready for the v2.5.0 merge sequence. Document for the operator:
+- [x] **T044** Final analyzer + test gate: `flutter analyze --no-pub` clean; `flutter test` all passing. Commit any final cleanup. — DONE: 0 analyzer issues, 161/161 tests passing.
+- [x] **T045** Branch ready for the v2.5.0 merge sequence. Document for the operator:
   - Merge order: `019-workflow-integrity-hardening` → `018-pre-tag-hardening` → `017-ux-restructuring` → `main`
   - Tag: `v2.5.0-pre`
   - GitHub Actions builds Windows .exe
