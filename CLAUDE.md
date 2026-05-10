@@ -85,6 +85,12 @@ lib/
     └── instance_lock.dart       # PID-based single-instance lock
 ```
 
+## Project scope: MVP / continuous-testing phase
+
+This is NOT a production deployment with real operator history at stake. Each test cycle installs a fresh build folder; the SQLite `.db` file at `%APPDATA%\com.example\video_pipeline\video_pipeline.db` survives across builds via path_provider's stable location, but its content is essentially throwaway state — if anything looks off, the operator can delete the `.db` and the next launch creates a fresh schema. Recommendations involving DB backups, integrity-check pragmas, schema rollback, or any "preserve operator history across upgrades" defenses are out of scope until v3.0 or later when there's real audit-trail value to protect.
+
+What IS in scope, always: bytes on disk. Source SD card content (typed-confirmation-gated erase, never automatic) and destination video files (`/XN /XC /XO` + executor-side delete gating + optional SHA-256 verify). Hash mismatch handling, source-data invariants, destination-overwrite guards, and the human-in-the-loop principle are non-negotiable regardless of MVP status. Defensive thinking should focus there.
+
 ## Current State (as of 2026-05-08)
 
 ### Completed Features (13 spec-kit features)
