@@ -484,18 +484,27 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         .get();
   }
 
-  /// 018 T027 (FR-016, US6): newest completed/failed job. The sweep
-  /// also walks this destination so an operator who finished a run,
+  /// 018 T027 (FR-016, US6): N most-recent terminal (completed OR
+  /// failed) jobs in completedAt-desc order. The sweep walks each
+  /// distinct destinationPath so the operator who finished a run,
   /// crashed, then re-launched still gets their orphans cleared even
   /// when the queued set is empty.
-  Future<Job?> getMostRecentCompletedJob() {
+  ///
+  /// Codex round-25 P2 corrected the original "most recent of either"
+  /// design: a recent FAILED job could displace the actually-most-
+  /// recent successful destination, leaving its leaked staging dirs
+  /// uncovered. Returning the last 10 is the cheapest defense — it
+  /// captures both the most-recent successful AND the most-recent
+  /// failed for typical operator histories without requiring two
+  /// separate queries.
+  Future<List<Job>> getRecentTerminalJobs({int limit = 10}) {
     return (select(jobs)
           ..where((t) =>
               t.status.equalsValue(JobStatus.completed) |
               t.status.equalsValue(JobStatus.failed))
           ..orderBy([(t) => OrderingTerm.desc(t.completedAt)])
-          ..limit(1))
-        .getSingleOrNull();
+          ..limit(limit))
+        .get();
   }
 
   /// 017B (Codex round-16 P1 #1): scoped requeue. Flips the Job row

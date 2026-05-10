@@ -133,6 +133,7 @@ A focused pre-tag pass ran AFTER 017A+017B implementation closed. Combined paral
 - **Round-22** (plan review): 1 P1 + 3 P2 + 6 P3. P1 — typed-gate phrase enforcement; folded into T005-T007 wording. All P2s folded into the plan; one P3 (CLAUDE.md "junk drawer") split T031 into add+archive.
 - **Round-23** (tasks review): 1 P1 + 7 P2 + 1 P3. P1 — chain-dedup gate must be transactional; T010 rewritten. P2s included `_processTransfer` task-ordering false-positive (Phase 7 dep graph corrected), counter-self-healing under-spec (T022 rewritten to use single-query JOIN), startup-sweep wiring layer (T027 rewritten as standalone helper).
 - **Round-24** (post-checkpoint-6c review): 1 P2 + 2 P3. P2 — size-mode resume gap created by T024 (the `verification_mode = 'sha256'` filter from Codex round-3 P2 #1 became stale; recovery branch had to learn size-mode re-verify). P3s — `watchAllJobs` correlated subquery cost (added `idx_job_files_job_id` index in beforeOpen), pure-SHA-256 Slack body wrongly always rendered `Size-only: 0` (omit when 0).
+- **Round-25** (US6 staging-sweep focused review): 2 P1 + 4 P2 + 1 P3. P1 #1 — cross-machine NAS false-positive deletion (machine A's marker swept by machine B); P1 #2 — cold-start hang on flaky NAS (sync `Directory.listSync`). Four of the five P1/P2 findings collapsed into one design simplification: rely on the existing OS InstanceLock + sweep-runs-first ordering invariants, and use ONLY `host=` in the marker for liveness decisions. PID + exe become diagnostic-only. Async `Directory.list()` with 2-second per-root timeout for NAS guard. `getMostRecentCompletedJob` replaced with `getRecentTerminalJobs(limit: 10)` to cover both successful and failed terminations (P2 #3). Test case 3 redesigned from "self pid+exe preserve" to "foreign host preserve".
 
 10 closed findings shipped in the 9 commits on `018-pre-tag-hardening`:
 - Per-file retry now a single transaction (`JobDao.applyPerFileRetry`); 4-case test with mid-transaction failure injection.
@@ -146,7 +147,7 @@ A focused pre-tag pass ran AFTER 017A+017B implementation closed. Combined paral
 - Size-mode `_processTransfer` mirrors SHA-256 sequence (markFileCompleted+credit BEFORE size verify); recovery branch handles size-mode + completed + pending; 3-case forward + recovery + rollback test.
 - Orphaned-staging-dir cold-start sweep with two-axis liveness (PID + exe match); 5-case test including SC-010 perf budget.
 
-Cumulative findings across all 24 rounds: **5 P1, ~36 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
+Cumulative findings across all 25 rounds: **7 P1, ~40 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
 
 ## Verification
 

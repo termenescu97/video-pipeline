@@ -90,8 +90,20 @@ class TransferService {
       // log triage points at the marker write, not the rethrow site.
       final markerFile = File(p.join(stagingDir.path, '.live'));
       try {
+        // Codex round-25 redesign: `host=` is the load-bearing field
+        // for sweep decisions. Cross-machine NAS scenario — machine A
+        // creates `.tmp_robocopy_*` on a shared NAS, machine B's cold-
+        // start sweep MUST NOT delete it. host-mismatch is a silent
+        // skip; pid+exe are kept for log triage on cleanup of OUR-host
+        // orphans only. The single-instance lock + sweep-runs-before-
+        // any-new-marker invariant means every same-host marker found
+        // at cold-start is by definition orphaned (no other live
+        // Copiatorul3000 on this machine; sweep finishes before this
+        // process writes any markers of its own).
         await markerFile.writeAsString(
-          'pid=$pid\nexe=${Platform.resolvedExecutable}\n',
+          'host=${Platform.localHostname}\n'
+          'pid=$pid\n'
+          'exe=${Platform.resolvedExecutable}\n',
           flush: true,
         );
       } catch (markerError, markerStack) {

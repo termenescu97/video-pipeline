@@ -12,15 +12,18 @@ import 'package:video_pipeline/services/startup_sweep.dart';
 
 // 018 T028 (FR-016, US6, P3, SC-010): startup-sweep behavior matrix.
 //
-// The sweep removes any `.tmp_robocopy_*` staging dir under a known
-// destination root whose `.live` marker is absent or stale (PID dead
-// OR PID's exe path doesn't match this process's resolvedExecutable).
+// Codex round-25 redesign: the only field that matters for a sweep
+// decision is `host=`. The OS InstanceLock guarantees at most one
+// Copiatorul3000 process per machine, and the sweep runs at cold
+// start BEFORE any new staging dir is created, so every same-host
+// marker found at sweep time is by definition orphaned.
 //
 // Cases:
-//   1. Marker absent → removed.
-//   2. Marker references a nonexistent PID + bogus exe path → removed.
-//   3. Marker references THIS process's PID + exe → NOT removed
-//      (live, would-be self-cleanup).
+//   1. Marker absent (same host implicit, no marker to skip) → removed.
+//   2. Marker with this host + a dead PID → removed (the PID/exe
+//      fields are diagnostic only; same-host = orphan).
+//   3. Marker with a FOREIGN host → preserved (cross-machine NAS;
+//      not our problem). Replaces the prior "self pid+exe" check.
 //   4. Destination root path doesn't exist (drive ejected before
 //      launch) → no error, no removal attempt.
 //   5. Wall-clock latency for a 3-root sweep with sample staging dirs
@@ -81,42 +84,51 @@ void main() {
   });
 
   test(
-      'case 2: marker with dead PID + bogus exe path is removed',
+      'case 2: marker with this host + dead PID + bogus exe path is removed',
       () async {
     final orphan = Directory(p.join(destRoot.path, '.tmp_robocopy_DEAD'))
       ..createSync();
-    // PID 99999 is essentially never alive on a fresh test runner.
-    // The exe path is intentionally absurd; either the PID-alive or
-    // the exe-match check should fail and trigger removal.
-    await File(p.join(orphan.path, '.live'))
-        .writeAsString('pid=99999\nexe=/nonexistent/path/to/exe\n');
-
-    await sweepOrphanedStagingDirs(jobDao);
-
-    expect(orphan.existsSync(), isFalse,
-        reason: 'A marker referencing a dead/foreign PID must NOT '
-            'shield the dir from sweep. The two-axis check (PID alive '
-            'AND exe matches) is the load-bearing safety against '
-            'Windows PID recycling — a coincidental notepad.exe at '
-            'the recorded PID must not block recovery.');
-  });
-
-  test(
-      'case 3: marker references THIS process — dir is NOT removed',
-      () async {
-    final live = Directory(p.join(destRoot.path, '.tmp_robocopy_LIVE'))
-      ..createSync();
-    await File(p.join(live.path, '.live')).writeAsString(
-      'pid=$pid\nexe=${Platform.resolvedExecutable}\n',
+    // Same-host marker. PID 99999 + nonsense exe are diagnostic-only
+    // post-round-25; the sweep treats every same-host marker as
+    // orphaned (single-instance lock + sweep-runs-first invariant).
+    await File(p.join(orphan.path, '.live')).writeAsString(
+      'host=${Platform.localHostname}\n'
+      'pid=99999\n'
+      'exe=/nonexistent/path/to/exe\n',
     );
 
     await sweepOrphanedStagingDirs(jobDao);
 
-    expect(live.existsSync(), isTrue,
-        reason: 'A staging dir whose marker matches OUR pid+exe is '
-            'this process\'s own active staging — the sweep MUST NOT '
-            'delete it. Self-deletion mid-transfer would corrupt an '
-            'in-flight robocopy.');
+    expect(orphan.existsSync(), isFalse,
+        reason: 'Same-host marker = orphan by definition. Single-'
+            'instance lock guarantees no other Copiatorul3000 process '
+            'on this machine, and sweep runs BEFORE we create any new '
+            'markers ourselves, so anything found here MUST be from '
+            'a crashed prior run.');
+  });
+
+  test(
+      'case 3: marker with FOREIGN host is NOT removed — cross-'
+      'machine NAS safety (Codex round-25 P1)', () async {
+    final foreign =
+        Directory(p.join(destRoot.path, '.tmp_robocopy_FOREIGN'))
+          ..createSync();
+    // A different machine wrote this marker (e.g. another video team
+    // workstation on the same NAS). We MUST NOT delete it — the
+    // other machine\'s transfer could be in-flight.
+    await File(p.join(foreign.path, '.live')).writeAsString(
+      'host=some-other-workstation\n'
+      'pid=$pid\n'
+      'exe=${Platform.resolvedExecutable}\n',
+    );
+
+    await sweepOrphanedStagingDirs(jobDao);
+
+    expect(foreign.existsSync(), isTrue,
+        reason: 'Cross-machine NAS scenario: another workstation\'s '
+            'live marker on a shared destination MUST be silently '
+            'preserved. PID + exe match this process by coincidence '
+            'but host mismatch is the load-bearing decision.');
   });
 
   test(
