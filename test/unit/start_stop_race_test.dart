@@ -176,6 +176,12 @@ void main() {
           createdAt: DateTime.now(),
           verificationMode: const Value(VerificationMode.size),
           sortOrder: Value(i),
+          // 019: bypass the new drive-identity re-check via the
+          // legacy v8 sentinel — these tests are about queue/race
+          // semantics, not identity tracking. Without this, the
+          // T007 check pauses the job (null serial = bug indicator)
+          // and the test deadlocks waiting for transferFile.
+          sourceDriveSerial: const Value('__legacy_v8__'),
         ),
         buildFiles: (jId) => [
           JobFilesCompanion.insert(

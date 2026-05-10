@@ -1058,6 +1058,36 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     final settings = await settingsDao.getSettings();
     final operatorName = settings?.operatorName;
 
+    // 019 T006 (FR-001 + FR-004, US1): capture WMI serial of the source
+    // path AT JOB-CREATE TIME. Codex round-27a P1 fix: fail-closed-on-
+    // null applies ONLY to transfer / transferAndCompress jobs (those
+    // are the types where an SD-card-source identity binding actually
+    // matters for the create→transfer→verify→erase chain). Compression
+    // jobs typically have non-removable sources (local NTFS folder,
+    // UNC share) for which getDriveIdentity legitimately returns null;
+    // refusing those would block the workflow entirely. The runtime
+    // check in `_processJob` (T007) skips compression jobs as well.
+    final isTransferType = _jobType == JobType.transfer ||
+        _jobType == JobType.transferAndCompress;
+    String? capturedSerial;
+    if (isTransferType) {
+      final identity = await driveService.getDriveIdentity(sourcePath);
+      capturedSerial = identity?.serialNumber;
+      if (capturedSerial == null || capturedSerial.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Could not identify SD card at $sourcePath — re-insert and retry.',
+              ),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     // Atomic creation: job + files + totals in one transaction. sortOrder
     // places the new job at the end of the active queue.
     final baseOrder = await jobDao.getMaxSortOrder();
@@ -1077,6 +1107,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
             : VerificationMode.size),
         sortOrder: Value(baseOrder + 1),
         createdAt: DateTime.now(),
+        sourceDriveSerial: Value(capturedSerial),
       ),
       buildFiles: (newJobId) => resolved
           .map((f) => JobFilesCompanion.insert(

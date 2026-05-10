@@ -162,6 +162,9 @@ void main() {
         destinationPath: tempDest.path,
         createdAt: DateTime.now(),
         verificationMode: const Value(VerificationMode.size),
+        // 019: legacy sentinel bypasses the drive-identity re-check;
+        // this test exercises size-mode progress order, not identity.
+        sourceDriveSerial: const Value('__legacy_v8__'),
       ),
       buildFiles: (jId) => [
         JobFilesCompanion.insert(
@@ -234,6 +237,8 @@ void main() {
         status: JobStatus.paused,
         sourcePath: tempSrc.path,
         destinationPath: tempDest.path,
+        // 019: legacy sentinel — bypass identity check.
+        sourceDriveSerial: const Value('__legacy_v8__'),
         createdAt: DateTime.now(),
         verificationMode: const Value(VerificationMode.size),
         // Bytes were credited in the prior run before shutdown.

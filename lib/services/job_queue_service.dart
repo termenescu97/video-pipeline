@@ -75,6 +75,23 @@ class JobQueueService {
   // inProgress rows on the next launch.
   bool _shutdownAbandoned = false;
 
+  /// 019 (FR-001, US1): sentinel value backfilled into Job.sourceDriveSerial
+  /// for pre-019 (v8) jobs by the v8→v9 migration. Used at runtime to
+  /// recognize legacy jobs and bypass the WMI re-check (preserves
+  /// in-flight v8 work). Real serials are non-empty hex/alphanumeric;
+  /// the underscore-bracketed shape makes accidental real-serial
+  /// collision essentially impossible.
+  static const String _legacyV8Sentinel = '__legacy_v8__';
+
+  /// 019 T007 (FR-002, US1): in-memory set of job IDs for which we've
+  /// already shown the "legacy v8 job" banner this app launch. Per the
+  /// Codex round-27a P3 clarification + Q1/A: "one-time per-launch"
+  /// — the Set resets at app start; legacy jobs surface the banner
+  /// once per launch each. Persisting this would be overkill for an
+  /// MVP-context migration concern (legacy jobs disappear once the
+  /// operator finishes them OR re-creates).
+  final Set<int> _legacyJobBannerShown = <int>{};
+
   // 017 (Codex round-2 P2 #2): the persistent force-delete approval now
   // lives on `JobFile.forceDestDeleteApproved`. The previous in-memory
   // _forceDestDeleteFileIds set was lost on app restart between the
@@ -184,10 +201,26 @@ class JobQueueService {
     var hadFailures = false;
     var hadVerifyWarnings = false;
     var processedAny = false;
+    // 019 (FR-002, US1): per-run skip set. When _processJob's identity
+    // re-check pauses a job (branches b/c/d in T007), we MUST NOT
+    // re-pick it on the next loop iteration — getNextQueuedJob returns
+    // both queued AND paused, which would otherwise spin forever on
+    // an identity mismatch. The operator regains the chance to retry
+    // by stopping + restarting the queue (fresh run, fresh skip set).
+    final skippedThisRun = <int>{};
     try {
       while (_isProcessing && !_stopRequested) {
         final job = await _jobDao.getNextQueuedJob();
         if (job == null) {
+          _isProcessing = false;
+          break;
+        }
+        if (skippedThisRun.contains(job.id)) {
+          // The next eligible job is the one we just identity-paused
+          // and getNextQueuedJob ordering put it back at the head.
+          // No way to skip past it without a richer query — exit the
+          // loop. Operator can stop + restart to retry after swapping
+          // the right card back in.
           _isProcessing = false;
           break;
         }
@@ -198,6 +231,13 @@ class JobQueueService {
         // Re-read the just-processed job to detect failure outcome.
         final after = await _jobDao.watchJob(job.id).first;
         if (after?.status == JobStatus.failed) hadFailures = true;
+        // 019 (FR-002): if _processJob paused this job (identity check
+        // refused or any other future paused-by-executor case), record
+        // it so the next iteration skips past instead of re-running
+        // the same refusal.
+        if (after?.status == JobStatus.paused) {
+          skippedThisRun.add(job.id);
+        }
         // Codex round-18 P2 #2: a SHA-256 transfer that ends with
         // mismatch/unverified files lands at JobStatus.completed (FR-004
         // — bytes are on disk; verify is a soft fail). Without this
@@ -424,6 +464,78 @@ class JobQueueService {
           error: 'Source path not found: ${job.sourcePath}',
         );
         return;
+      }
+      // 019 T007 (FR-002, US1): drive-identity re-check at transfer-resume.
+      // Only fires for transfer / transferAndCompress jobs (compression
+      // jobs have non-removable sources by design — see T006).
+      // Five-branch logic:
+      //   (a) sentinel '__legacy_v8__' → legacy bypass with one-time-
+      //       per-launch banner; preserves in-flight pre-019 work
+      //   (b) null sourceDriveSerial on a transfer-type job → bug
+      //       indicator (impossible post-019 because T005/T006 refuse
+      //       null at create); refuse defensively
+      //   (c) real serial AND current null → fail-closed ("could not
+      //       verify card identity")
+      //   (d) real serial AND current differs → refuse with mismatch
+      //       banner
+      //   (e) real serial AND current matches → proceed
+      final isTransferType = job.type == JobType.transfer ||
+          job.type == JobType.transferAndCompress;
+      if (isTransferType) {
+        final stored = job.sourceDriveSerial;
+        if (stored == _legacyV8Sentinel) {
+          // Branch (a): legacy bypass, one-time-per-launch banner
+          if (!_legacyJobBannerShown.contains(job.id)) {
+            _legacyJobBannerShown.add(job.id);
+            _logService?.warning(
+              'Job ${job.id} pre-dates drive-identity tracking — '
+              're-create to enable card-swap detection. Proceeding '
+              'without identity check.',
+              jobId: job.id,
+              phase: LogPhase.preflight,
+            );
+          }
+        } else if (stored == null || stored.isEmpty) {
+          // Branch (b): bug indicator (post-019 should never happen)
+          await _safeWrite(() => _jobDao.markJobPaused(
+                job.id,
+                reason: 'Internal error: missing identity sentinel '
+                    '(this should not happen post-019; please report).',
+              ));
+          _logService?.error(
+            'Job ${job.id} has null sourceDriveSerial on a transfer-type '
+            'job — bug indicator. Pausing for operator inspection.',
+            jobId: job.id,
+            phase: LogPhase.preflight,
+          );
+          return;
+        } else {
+          // Branches (c) (d) (e): real serial, do the WMI re-check
+          final currentIdentity =
+              await _driveService.getDriveIdentity(job.sourcePath);
+          final currentSerial = currentIdentity?.serialNumber;
+          if (currentSerial == null || currentSerial.isEmpty) {
+            // Branch (c): WMI flake or card removed
+            await _safeWrite(() => _jobDao.markJobPaused(
+                  job.id,
+                  reason:
+                      'Could not verify card identity at ${job.sourcePath} — '
+                      're-insert the original card and retry.',
+                ));
+            return;
+          }
+          if (currentSerial != stored) {
+            // Branch (d): wrong card at the same letter
+            await _safeWrite(() => _jobDao.markJobPaused(
+                  job.id,
+                  reason: 'Card identity mismatch at ${job.sourcePath} — '
+                      'original: $stored, current: $currentSerial. '
+                      'Re-insert the original card to resume.',
+                ));
+            return;
+          }
+          // Branch (e): match — fall through to existing logic
+        }
       }
       switch (job.type) {
         case JobType.transfer:
@@ -1499,6 +1611,29 @@ class JobQueueService {
         skipped++;
         continue;
       }
+      // 019 T005 (FR-001 + FR-004, US1): capture WMI serial of the source
+      // SD card AT JOB-CREATE TIME. Codex round-27a P1 fix — the
+      // load-bearing rule is fail-closed-on-null: if WMI returns null
+      // OR returns success but `serialNumber` is null/empty, REFUSE to
+      // create this job. Skip the card in the batch (other cards
+      // proceed normally) and add a conflict-style entry that the UI
+      // can surface to the operator. Without this rule, null in
+      // `Job.sourceDriveSerial` would ambiguously mean both
+      // "legacy v8 bypass" and "v9 capture failed" — the round-27a
+      // backdoor that the migration sentinel `'__legacy_v8__'` only
+      // closes if v9 capture is itself fail-closed.
+      final identity = await _driveService.getDriveIdentity(plan.drive.path);
+      final capturedSerial = identity?.serialNumber;
+      if (capturedSerial == null || capturedSerial.isEmpty) {
+        _logService?.warning(
+          'createBatchTransferJobs: refusing card at ${plan.drive.path} — '
+          'WMI getDriveIdentity returned no serial. Operator should re-insert '
+          'and retry.',
+          phase: LogPhase.preflight,
+        );
+        skipped++;
+        continue;
+      }
       orderIndex++;
       final totalBytes = plan.files.fold<int>(0, (sum, f) => sum + f.fileSize);
       try {
@@ -1511,6 +1646,7 @@ class JobQueueService {
             verificationMode: Value(verificationMode),
             sortOrder: Value(baseOrder + orderIndex),
             createdAt: DateTime.now(),
+            sourceDriveSerial: Value(capturedSerial),
           ),
           buildFiles: (newJobId) => plan.files
               .map((f) => JobFilesCompanion.insert(

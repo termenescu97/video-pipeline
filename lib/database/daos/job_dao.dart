@@ -359,6 +359,21 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     );
   }
 
+  /// 019 T008 (FR-002, US1): mark job as paused with an operator-visible
+  /// reason. The reason persists to `Job.errorMessage` so banners and
+  /// JobCard surfaces can render it directly. Distinct from
+  /// [markJobFailed] in that paused jobs are still resumable; the
+  /// operator decides whether to retry (e.g., re-insert the original
+  /// SD card) or delete.
+  Future<void> markJobPaused(int jobId, {String? reason}) {
+    return (update(jobs)..where((t) => t.id.equals(jobId))).write(
+      JobsCompanion(
+        status: const Value(JobStatus.paused),
+        errorMessage: Value(reason),
+      ),
+    );
+  }
+
   /// Update job totals after file enumeration.
   Future<void> updateJobTotals(int jobId, int totalFiles, int totalBytes) {
     return (update(jobs)..where((t) => t.id.equals(jobId))).write(

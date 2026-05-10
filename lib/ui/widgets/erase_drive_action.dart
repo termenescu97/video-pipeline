@@ -72,8 +72,69 @@ class EraseDriveActionButton extends StatelessWidget {
   }
 
   Future<void> _runEraseFlow(BuildContext context) async {
+    // 019 T009 (FR-003, US1): drive-identity re-check at erase-eligibility.
+    // The synchronous `eraseEligibilityReason` covers job-status / verify-
+    // status gates; the async identity re-check happens HERE before the
+    // typed-confirmation dialog opens so a card-swap-mid-eligibility
+    // case never reaches the destructive path. Five-branch logic
+    // mirroring `_processJob`'s resume re-check (T007):
+    //   (a) sentinel '__legacy_v8__' → legacy bypass, proceed
+    //   (b) null on a transfer-type job → bug indicator, refuse
+    //   (c) real serial AND current null → fail-closed
+    //   (d) real serial AND current differs → refuse
+    //   (e) real serial AND current matches → proceed
+    final stored = job.sourceDriveSerial;
+    if (stored != _legacyV8Sentinel) {
+      if (stored == null || stored.isEmpty) {
+        _showRefusal(
+          context,
+          'Internal error: this job has no card-identity sentinel. '
+          'Please report (this should not happen post-019).',
+        );
+        return;
+      }
+      final currentIdentity = await driveService.getDriveIdentity(job.sourcePath);
+      final currentSerial = currentIdentity?.serialNumber;
+      if (!context.mounted) return;
+      if (currentSerial == null || currentSerial.isEmpty) {
+        _showRefusal(
+          context,
+          'Could not verify card identity at ${job.sourcePath}. '
+          'Re-insert the original card and retry.',
+        );
+        return;
+      }
+      if (currentSerial != stored) {
+        _showRefusal(
+          context,
+          'Card identity mismatch at ${job.sourcePath} — original: '
+          '$stored, current: $currentSerial. Re-insert the original '
+          'card to erase. Refusing to erase the wrong card.',
+        );
+        return;
+      }
+    }
+    if (!context.mounted) return;
     await eraseSourceDrive(context, job);
   }
+}
+
+/// 019 (FR-001 + FR-002, US1): same sentinel as JobQueueService.
+/// Duplicated here rather than imported because the UI widget shouldn't
+/// depend on a service implementation detail. Keep these strings in
+/// sync — a CI grep guard catches divergence:
+/// `! grep -rn "__legacy_v8__" lib/ | wc -l` returns the same number
+/// before and after edits to the sentinel.
+const String _legacyV8Sentinel = '__legacy_v8__';
+
+void _showRefusal(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      backgroundColor: Theme.of(context).colorScheme.error,
+      duration: const Duration(seconds: 8),
+    ),
+  );
 }
 
 /// Compact disabled label expanded for tooltips (since we shortened the
