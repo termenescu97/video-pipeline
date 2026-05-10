@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite3;
 
 import 'package:video_pipeline/database/database.dart';
 import 'package:video_pipeline/database/tables.dart';
@@ -28,19 +27,26 @@ import 'package:video_pipeline/database/tables.dart';
 //      sets the child's parent_job_id to NULL (FK ON DELETE SET NULL
 //      annotation now actually fires).
 //
-// To simulate (3) we open the SAME SQLite file via TWO connections:
-//   - First, an AppDatabase open creates the schema (and runs the
-//     beforeOpen hook, but on an empty DB the cleanup is a no-op).
-//   - Then, we close AppDatabase and reopen the file via raw
-//     `package:sqlite3` (which doesn't run any Drift hooks). With
-//     FK enforcement off, we INSERT a parent + child and DELETE the
-//     parent — leaving the child with a dangling reference. This
-//     mirrors what an operator's existing v8 database carries
-//     today.
-//   - Then we close the raw connection and re-open via AppDatabase.
-//     The beforeOpen hook runs the dangling-FK cleanup BEFORE the
-//     pragma flip, so the child's parent_job_id is observably NULL
-//     after the open.
+// To simulate (3) we open the SAME SQLite file via two AppDatabase
+// instances. The first one runs beforeOpen (cleanup no-op on a
+// fresh DB, then sets pragma=ON), then the test FLIPS the pragma
+// off via `customStatement('PRAGMA foreign_keys = OFF')` for the
+// remainder of that connection — SQLite's pragma is per-connection,
+// so this is supported natively. With FK off we INSERT a parent +
+// child and DELETE the parent, leaving the child with a dangling
+// reference that mirrors what an operator's pre-release v8 database
+// carries today. We close, re-open via a fresh AppDatabase. The
+// second open's beforeOpen runs the dangling-FK cleanup BEFORE the
+// pragma flip, so the child's parent_job_id is observably NULL
+// after the open.
+//
+// Earlier draft of this test reached for `package:sqlite3` to do
+// the FK-off seeding. That added a direct dev_dependency, pinned
+// the test to an older sqlite3 (drift's transitive at the time
+// only resolves to ^2.x), and required a `// ignore:
+// deprecated_member_use` for `dispose()` instead of `close()`.
+// Three smells stacked. Switched to per-connection PRAGMA toggle —
+// zero extra dependencies, no ignore comments, fewer moving parts.
 
 void main() {
   late File dbFile;
@@ -88,54 +94,48 @@ void main() {
       'case 3: pre-existing dangling parent_job_id is cleaned to NULL on '
       'first open after this release (idempotent on subsequent opens)',
       () async {
-    // First open: create the schema. beforeOpen runs but the DB is
-    // empty so the cleanup is a no-op.
+    // Phase 1: open AppDatabase to create the schema. beforeOpen
+    // sets pragma=ON. Then flip the pragma off FOR THIS CONNECTION
+    // via customStatement (SQLite supports per-connection pragmas
+    // natively), insert parent + child, DELETE the parent — child
+    // now carries a dangling reference. This mirrors the pre-release
+    // state of an operator's database where the FK constraint
+    // annotation existed but enforcement was never on.
     {
       final db = AppDatabase.forTesting(NativeDatabase(dbFile));
-      await db.customSelect('SELECT 1').get(); // force open
+      await db.customStatement('PRAGMA foreign_keys = OFF');
+      await db.customStatement(
+        "INSERT INTO jobs (id, type, status, source_path, "
+        "destination_path, created_at, sort_order, completed_files, "
+        "completed_bytes, total_files, total_bytes, verification_mode, "
+        "unverified_files) "
+        "VALUES (100, 'transferAndCompress', 'completed', '/tmp/src', "
+        "'/tmp/dst', ${DateTime.now().millisecondsSinceEpoch ~/ 1000}, "
+        "0, 0, 0, 0, 0, 'size', 0)",
+      );
+      await db.customStatement(
+        "INSERT INTO jobs (id, type, status, source_path, "
+        "destination_path, created_at, sort_order, completed_files, "
+        "completed_bytes, total_files, total_bytes, verification_mode, "
+        "unverified_files, parent_job_id) "
+        "VALUES (200, 'compression', 'queued', '/tmp/dst', '/tmp/out', "
+        "${DateTime.now().millisecondsSinceEpoch ~/ 1000}, 1, 0, 0, 0, "
+        "0, 'size', 0, 100)",
+      );
+      await db.customStatement('DELETE FROM jobs WHERE id = 100');
+      // Sanity check the dangling state pre-cleanup.
+      final danglingRow = await db
+          .customSelect('SELECT parent_job_id FROM jobs WHERE id = 200')
+          .getSingle();
+      expect(danglingRow.read<int?>('parent_job_id'), 100,
+          reason: 'Pre-cleanup the child still references the deleted '
+              'parent (FK was off for this connection).');
       await db.close();
     }
 
-    // Now open the file via raw sqlite3 with FK enforcement OFF.
-    // This simulates the pre-release state of an operator's database
-    // where the FK constraint annotation existed but the pragma was
-    // never set. Insert a parent + child, then DELETE the parent —
-    // leaving the child with a dangling parent_job_id.
-    final raw = sqlite3.sqlite3.open(dbFile.path);
-    raw.execute('PRAGMA foreign_keys = OFF');
-    // Parent job (id=100). Required columns from the Jobs schema.
-    raw.execute(
-      "INSERT INTO jobs (id, type, status, source_path, destination_path, "
-      "created_at, sort_order, completed_files, completed_bytes, total_files, "
-      "total_bytes, verification_mode, unverified_files) "
-      "VALUES (100, 'transferAndCompress', 'completed', '/tmp/src', '/tmp/dst', "
-      "${DateTime.now().millisecondsSinceEpoch ~/ 1000}, 0, 0, 0, 0, 0, 'size', 0)",
-    );
-    // Child compression job (id=200) with parent_job_id=100.
-    raw.execute(
-      "INSERT INTO jobs (id, type, status, source_path, destination_path, "
-      "created_at, sort_order, completed_files, completed_bytes, total_files, "
-      "total_bytes, verification_mode, unverified_files, parent_job_id) "
-      "VALUES (200, 'compression', 'queued', '/tmp/dst', '/tmp/out', "
-      "${DateTime.now().millisecondsSinceEpoch ~/ 1000}, 1, 0, 0, 0, 0, 'size', 0, 100)",
-    );
-    // Make the parent disappear with FK enforcement off — child now
-    // holds a dangling reference. This is what an operator's existing
-    // v8 database may already carry.
-    raw.execute('DELETE FROM jobs WHERE id = 100');
-    // Sanity check the dangling state pre-cleanup.
-    final danglingRow = raw.select(
-        'SELECT parent_job_id FROM jobs WHERE id = 200');
-    expect(danglingRow.single['parent_job_id'], 100,
-        reason: 'Pre-cleanup the child still references the deleted '
-            'parent (FK was off when we inserted+deleted).');
-    // sqlite3 2.x API uses dispose; close() lands in 3.x. The pubspec
-    // pin is 2.9.4 (transitive via drift) so dispose stays correct.
-    // ignore: deprecated_member_use
-    raw.dispose();
-
-    // Re-open via AppDatabase. The beforeOpen hook runs the cleanup
-    // BEFORE the pragma flip — child's parent_job_id should be NULL.
+    // Phase 2: re-open via a fresh AppDatabase. beforeOpen runs the
+    // dangling-FK cleanup BEFORE the pragma flip — child's
+    // parent_job_id should be NULL.
     final db = AppDatabase.forTesting(NativeDatabase(dbFile));
     addTearDown(db.close);
     final cleanedRow = await db
