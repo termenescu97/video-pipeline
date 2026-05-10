@@ -131,10 +131,16 @@ class SlackService {
     final operator = (job.operatorName != null && job.operatorName!.isNotEmpty)
         ? '\nOperator: ${job.operatorName}'
         : '';
+    // Codex round-24 P3: omit `Size-only: 0` when there are no size-mode
+    // files. Otherwise pure SHA-256 transfer messages would always
+    // include the field, contradicting the "behavior unchanged for
+    // SHA-256-only transfers" promise on the public API. The field
+    // appears only when a size-mode count is actually present.
+    final sizeOnlySegment = notVerified > 0 ? ' · Size-only: $notVerified' : '';
     return '$emoji *Transfer Complete*\n'
         'Job: ${job.id}$operator\n'
         'Files: $completedFiles/${job.totalFiles}\n'
-        'Verified: $verifiedFiles · Size-only: $notVerified · Unverified: $unverifiedFiles · Mismatch: $mismatchedFiles\n'
+        'Verified: $verifiedFiles$sizeOnlySegment · Unverified: $unverifiedFiles · Mismatch: $mismatchedFiles\n'
         'Size: $totalGb\n'
         'Duration: $duration min\n'
         '$verdict';

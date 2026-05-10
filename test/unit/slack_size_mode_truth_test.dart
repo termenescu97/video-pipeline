@@ -97,8 +97,18 @@ void main() {
         reason: 'Pure SHA-256 transfers must keep the established '
             'round-20 phrasing. The T014 signature change must NOT '
             'regress this.');
-    expect(body.contains('size-only'), isFalse,
-        reason: 'No size-only count on a pure SHA-256 run.');
+    // Codex round-24 P3: case-sensitive check. The body field is
+    // "Size-only" (capitalized); the prior `body.contains('size-only')`
+    // assertion was a false negative because it asked for the
+    // lowercase form. The field is omitted entirely when the count is
+    // zero, so a pure SHA-256 run must contain neither variant.
+    expect(body.contains('Size-only'), isFalse,
+        reason: 'No size-only count on a pure SHA-256 run. The '
+            'Size-only field is omitted entirely (not rendered as '
+            '"Size-only: 0") to preserve the "behavior unchanged for '
+            'SHA-256-only transfers" promise.');
+    expect(body.toLowerCase().contains('size-only'), isFalse,
+        reason: 'Belt-and-braces lowercase check.');
   });
 
   test(

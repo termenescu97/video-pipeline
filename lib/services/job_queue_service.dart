@@ -528,8 +528,58 @@ class JobQueueService {
         completedBytes += file.fileSize;
 
         if (job.verificationMode != VerificationMode.sha256) {
-          // Size-mode files leave verifyStatus at default 'pending'
-          // forever (Codex M5). Nothing to do beyond tallying.
+          // Codex round-24 P2: 018 T024 made size-mode rows reachable
+          // in the abandoned-mid-verify state too (markFileCompleted
+          // is now written BEFORE verifyTransfer; a shutdown between
+          // those two writes leaves verifyStatus=pending). Re-run the
+          // size verification just like the SHA-256 branch below.
+          // Bytes are already credited (the prior run's
+          // updateJobProgress ran before shutdown); finalize the
+          // verify axis only.
+          progressNotifier.value = ProgressData(
+            currentFileName: 'Verifying (recovered): ${file.fileName}',
+          );
+          final verified = await _transferService.verifyTransfer(
+            sourceFile: file.sourceFilePath,
+            destinationFile: file.destinationFilePath,
+          );
+          progressNotifier.value = null;
+          if (!_isProcessing) break;
+          if (verified) {
+            await _safeWrite(
+                () => _jobFileDao.markFileSizeOnlyVerified(file.id));
+            notVerifiedCount++;
+            _logService?.info(
+              'Recovered ${file.fileName} (size-verified)',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.recover,
+            );
+          } else {
+            // Verify failure on a recovered size-mode row: bytes on
+            // disk don't match. Roll back the credit (mirrors T024's
+            // forward-path failure handling) and mark the file failed.
+            await _safeWrite(() => _jobFileDao.markFileFailed(
+                  file.id,
+                  'Verification failed: size mismatch (recovered)',
+                ));
+            failedCount++;
+            completedCount--;
+            completedBytes -= file.fileSize;
+            await _safeWrite(() => _jobDao.updateJobProgress(
+                  job.id,
+                  completedFiles: completedCount,
+                  completedBytes: completedBytes,
+                ));
+            _logService?.warning(
+              'Recovered ${file.fileName} size mismatch',
+              jobId: job.id,
+              fileIndex: completedCount + failedCount,
+              totalFiles: files.length,
+              phase: LogPhase.recover,
+            );
+          }
           continue;
         }
 

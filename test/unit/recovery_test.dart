@@ -156,7 +156,16 @@ void main() {
 
   test(
       'recoverStaleJobs is a no-op when nothing was abandoned', () async {
-    // Fully-finished job: no inProgress rows, no completed+pending rows.
+    // Fully-finished job: no inProgress rows, no completed+pending
+    // rows. Codex round-24 P2: the verifyStatus must be set to a
+    // terminal state (notVerified for the default size-mode run).
+    // Before round-24 the SHA-256 filter in getRescuedJobIds masked
+    // size-mode `completed+pending` rows; that was the very bug the
+    // round caught (T024 made size-mode rows reachable in that
+    // state mid-flight). After round-24 the filter is gone, so a
+    // genuinely clean completed size-mode row must look like one
+    // that completed verifyTransfer — verifyStatus=notVerified +
+    // verified=true (the markFileSizeOnlyVerified terminal state).
     final jobId = await jobDao.createJobWithFiles(
       job: JobsCompanion.insert(
         type: JobType.transfer,
@@ -173,6 +182,8 @@ void main() {
           fileName: 'IMG_0.MP4',
           fileSize: 100,
           status: FileStatus.completed,
+          verified: const Value(true),
+          verifyStatus: const Value(VerifyStatus.notVerified),
         ),
       ],
       totalBytes: 100,

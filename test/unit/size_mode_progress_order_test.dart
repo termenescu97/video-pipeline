@@ -215,6 +215,83 @@ void main() {
   });
 
   test(
+      'recovery: size-mode file abandoned mid-verify '
+      '(status=completed, verifyStatus=pending) is re-verified on '
+      'next launch — Codex round-24 P2', () async {
+    // Hand-seed the post-abandonment state directly: T024 created
+    // this state by writing markFileCompleted BEFORE verifyTransfer.
+    // A shutdown between the two writes leaves the row at
+    // status=completed && verifyStatus=pending with bytes already
+    // credited. Without the round-24 fix, the executor's resume-
+    // time switch was treating these as "already done" and
+    // continuing — verifyTransfer never re-ran, so the job could
+    // be marked as passed even though verify never finished.
+    final jobId = await jobDao.createJobWithFiles(
+      job: JobsCompanion.insert(
+        type: JobType.transfer,
+        // Persisted state: paused (rescue path flips inProgress →
+        // paused; getNextQueuedJob includes paused).
+        status: JobStatus.paused,
+        sourcePath: tempSrc.path,
+        destinationPath: tempDest.path,
+        createdAt: DateTime.now(),
+        verificationMode: const Value(VerificationMode.size),
+        // Bytes were credited in the prior run before shutdown.
+        completedFiles: const Value(1),
+        completedBytes: const Value(1024),
+        totalFiles: const Value(1),
+        totalBytes: const Value(1024),
+      ),
+      buildFiles: (jId) => [
+        JobFilesCompanion.insert(
+          jobId: jId,
+          sourceFilePath: '${tempSrc.path}/IMG_0.MP4',
+          destinationFilePath: '${tempDest.path}/IMG_0.MP4',
+          fileName: 'IMG_0.MP4',
+          fileSize: 1024,
+          // Post-abandonment: copy succeeded, verify never ran.
+          status: FileStatus.completed,
+          // verifyStatus defaults to pending — exactly the state
+          // a Phase-B drain leaves behind in T024's restructured
+          // size-mode branch.
+        ),
+      ],
+      totalBytes: 1024,
+    );
+
+    // Sanity: confirm the rescue selector picks this job up.
+    final rescued = await jobDao.getRescuedJobIds();
+    expect(rescued.contains(jobId), isTrue,
+        reason: 'getRescuedJobIds must include size-mode jobs with '
+            'completed+pending file rows. Round-24 dropped the '
+            "stale `j.verification_mode = 'sha256'` filter.");
+
+    // Pre-create the destination file so verifyTransfer can stat it.
+    await File('${tempDest.path}/IMG_0.MP4').writeAsBytes(
+        List<int>.filled(1024, 0));
+
+    // Resume the queue. The executor's recovery branch must re-run
+    // verifyTransfer for size-mode + completed + pending and
+    // finalize the verify axis.
+    final loop = queue.startProcessing();
+    await transferService.verifyEnteredCompleter.future;
+    transferService.verifyRelease.complete(true);
+    await loop;
+
+    final files = await jobFileDao.getFilesForJob(jobId);
+    expect(files.first.verifyStatus, VerifyStatus.notVerified,
+        reason: 'After recovery, the row must reach the size-mode '
+            'verified terminal state. Without the fix it would stay '
+            'at verifyStatus=pending forever.');
+    expect(files.first.verified, isTrue);
+
+    final after = await jobDao.getJob(jobId);
+    expect(after!.completedBytes, 1024,
+        reason: 'Bytes from the pre-abandonment credit are preserved '
+            '(no double-count on recovery; no rollback on success).');
+  });
+
+  test(
       'rollback: verify failure undoes the credited bytes '
       '(completedBytes back to 0, file at status=failed)', () async {
     final jobId = await enqueueSizeModeJob();

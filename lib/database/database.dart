@@ -286,6 +286,21 @@ class AppDatabase extends _$AppDatabase {
           "WHERE status = 'failed') "
           "AND error_message IS NOT NULL",
         );
+        // Codex round-24 P3: index `job_files.job_id`. The 018 T022
+        // self-healing reads (getJob, watchJob, watchAllJobs,
+        // watchCompletedJobs) all run a correlated subquery
+        // `SELECT COUNT(*) FROM job_files WHERE job_id = jobs.id AND
+        // verify_status = 'unverified'`. SQLite does NOT auto-index
+        // foreign keys, so without this index the subquery is a full
+        // table scan per emitted job — `watchAllJobs` × N jobs × M
+        // files-per-job is O(N·M) per emission, and the `job_files`
+        // table is mutated by the high-frequency progress notifier so
+        // emissions are frequent. `IF NOT EXISTS` keeps this idempotent
+        // for both fresh installs (post-onCreate) and existing-v8 dbs.
+        await customStatement(
+          'CREATE INDEX IF NOT EXISTS idx_job_files_job_id '
+          'ON job_files(job_id)',
+        );
         await customStatement('PRAGMA foreign_keys = ON');
       },
     );

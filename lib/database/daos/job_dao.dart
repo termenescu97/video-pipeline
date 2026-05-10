@@ -415,23 +415,31 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// Returns deduplicated job IDs. Caller iterates and calls
   /// recomputeCountersFromFiles per ID after stale-row mutations.
   Future<Set<int>> getRescuedJobIds() async {
-    // Codex round-3 P2 #1: the third UNION arm is restricted to SHA-256
-    // jobs. Size-mode jobs leave verifyStatus=pending forever (size
-    // checks happen inline via TransferService.verifyTransfer; there is
-    // no SHA-256 phase to abandon mid-flight), so including them would
-    // cause every completed size-mode row to be re-rescued on every
-    // launch.
+    // Codex round-3 P2 #1 (now stale, see below): the third UNION arm
+    // was originally restricted to SHA-256 jobs because size-mode
+    // verify ran INLINE (TransferService.verifyTransfer) before the
+    // file row was written, so a size-mode `completed+pending` state
+    // could never exist mid-flight.
+    //
+    // Codex round-24 P2: 018 T024 restructured the size-mode branch to
+    // mirror SHA-256: markFileCompleted(verified: false) is now
+    // written BEFORE verifyTransfer, then markFileSizeOnlyVerified
+    // finalizes after. A shutdown between those two writes leaves the
+    // size-mode row at `status=completed && verifyStatus=pending` —
+    // an abandoned-mid-verify state that's structurally identical to
+    // the SHA-256 case and MUST be rescued the same way. The SHA-256
+    // filter is dropped; the executor's recovery branch handles both
+    // verify modes correctly (size-mode re-runs verifyTransfer;
+    // SHA-256 re-runs the hash pair).
     final rows = await customSelect(
       '''
       SELECT DISTINCT id AS job_id FROM jobs WHERE status = 'inProgress'
       UNION
       SELECT DISTINCT job_id FROM job_files WHERE status = 'inProgress'
       UNION
-      SELECT DISTINCT jf.job_id FROM job_files jf
-        INNER JOIN jobs j ON j.id = jf.job_id
-        WHERE jf.status = 'completed'
-          AND jf.verify_status = 'pending'
-          AND j.verification_mode = 'sha256'
+      SELECT DISTINCT job_id FROM job_files
+        WHERE status = 'completed'
+          AND verify_status = 'pending'
       ''',
     ).get();
     return rows.map((r) => r.read<int>('job_id')).toSet();
