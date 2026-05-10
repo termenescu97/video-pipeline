@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
@@ -42,10 +43,52 @@ class DriveService {
   ///
   /// [tag] is a short label written to the log on failure so post-mortem
   /// can tell which call site failed (identity vs free-space vs erase).
+  /// 019 T032 (FR-020, US8): runtime length-3 argv invariant guard.
+  /// Codex round-27a P2 fix: Dart `assert` is stripped from
+  /// `flutter build windows --release`, so a debug-only assert
+  /// provides zero production protection. Use `if (...) throw` so the
+  /// check fires in release builds too.
+  ///
+  /// The invariant: every PS subprocess call MUST pass exactly
+  /// `['-NoProfile', '-Command', script]` to PowerShell. The 017A
+  /// length-3 argv root cause was that `-Command` silently drops
+  /// trailing argv elements; `$args[0]` was never populated, so
+  /// operator-supplied paths were dropped on the floor. Re-opening
+  /// this hole at any helper site re-creates the v2.4.0 cascade.
+  ///
+  /// Extracted as a standalone `@visibleForTesting` function so unit
+  /// tests can verify the throw fires without spawning a real
+  /// PowerShell subprocess.
+  @visibleForTesting
+  static void checkPsArgvShape(List<String> args, String tag) =>
+      _checkPsArgvShape(args, tag);
+
+  static void _checkPsArgvShape(List<String> args, String tag) {
+    if (args.length != 2 || args[0] != '-Command') {
+      throw StateError(
+        'PS argv invariant violated in $tag: args after -NoProfile must be '
+        "exactly ['-Command', script]. Got: $args. See 017A length-3 argv "
+        'invariant in CLAUDE.md.',
+      );
+    }
+  }
+
   Future<ProcessResult?> _runPowerShell(
     List<String> args, {
     required String tag,
   }) async {
+    // Codex round-27a P2 fix: Dart `assert` is stripped from
+    // `flutter build windows --release`, so a debug-only assert
+    // provides zero production protection. Use `if (...) throw` so the
+    // check fires in release builds too.
+    //
+    // The invariant: every PS subprocess call MUST pass exactly
+    // `['-NoProfile', '-Command', script]` to PowerShell. The 017A
+    // length-3 argv root cause was that `-Command` silently drops
+    // trailing argv elements; `$args[0]` was never populated, so
+    // operator-supplied paths were dropped on the floor. Re-opening
+    // this hole at any helper site re-creates the v2.4.0 cascade.
+    _checkPsArgvShape(args, tag);
     try {
       final result = await Process.run('powershell', ['-NoProfile', ...args]);
       if (result.exitCode != 0) {

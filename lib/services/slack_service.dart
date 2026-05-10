@@ -26,10 +26,15 @@ class SlackService {
   }
 
   Future<void> _send(String text) async {
-    final url = await _getWebhookUrl();
-    if (url == null) return;
-
+    // 019 T027 (FR-018, US6): _getWebhookUrl call moved INSIDE the try
+    // block. Codex round-26 P2 [LIKELY]: a SettingsDao failure (DB
+    // locked, schema error, etc.) was previously propagating up into
+    // the calling pipeline phase — Slack notifications are best-effort
+    // by design (Constitution V) so that violation could turn an
+    // observability call into a pipeline-killing exception.
     try {
+      final url = await _getWebhookUrl();
+      if (url == null) return;
       await _dio.post(
         url,
         data: {'text': text},
@@ -40,7 +45,7 @@ class SlackService {
       );
       logService.info('Slack notification sent');
     } catch (e) {
-      logService.error('Slack notification failed: $e');
+      logService.error('Slack notification failed (settings or send): $e');
     }
   }
 
