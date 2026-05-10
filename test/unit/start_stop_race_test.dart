@@ -47,9 +47,10 @@ class _NoopSlackService extends SlackService {
   Future<void> notifyTransferCompleted({
     required Job job,
     required int completedFiles,
-    int? verifiedFiles,
-    int? unverifiedFiles,
-    int? mismatchedFiles,
+    required int verifiedFiles,
+    required int unverifiedFiles,
+    required int mismatchedFiles,
+    int? notVerifiedFiles,
   }) async {}
   @override
   Future<void> notifyTransferFailed({

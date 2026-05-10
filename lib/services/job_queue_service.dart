@@ -500,6 +500,18 @@ class JobQueueService {
     var verifiedCount = 0;
     var unverifiedCount = 0;
     var mismatchedCount = 0;
+    // 018 T015 (FR-014): size-mode (verifyStatus=notVerified) tally.
+    // Counted distinctly from `verifiedCount` (cryptographic) so the
+    // Slack notification can render the round-20-mirror passed-label
+    // ("$N size-verified · Passed") instead of the misleading bare-zero
+    // "Verified: 0 ... Passed" wording. Two increment sites: (a) below
+    // in the resume-time completed-row switch (counts pre-existing
+    // notVerified rows from a resumed job) and (b) immediately after
+    // markFileSizeOnlyVerified in the size-mode forward branch
+    // (counts newly-processed size-mode successes; the local `file`
+    // snapshot is still pending verify so we increment based on the
+    // commit fact, not on file.verifyStatus).
+    var notVerifiedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
@@ -623,7 +635,11 @@ class JobQueueService {
             break;
           case VerifyStatus.notVerified:
             // Size-mode baseline — bytes match by size, no SHA-256 was
-            // attempted. Counted neither as verified nor as warning.
+            // attempted. 018 T015: counted into `notVerifiedCount` so
+            // the Slack notification uses the round-20-mirror passed-
+            // label phrasing ("$N size-verified · Passed") instead of
+            // the misleading bare-zero "Verified: 0" wording.
+            notVerifiedCount++;
             break;
         }
         continue;
@@ -935,39 +951,80 @@ class JobQueueService {
           // backfill) so size-mode rows are visibly distinct from
           // SHA-256 subsystem failures (`unverified`). HistorySurface
           // and Slack treat notVerified as the size-mode baseline.
+          //
+          // 018 T024 (FR-015, US5, P3): restructure to mirror the
+          // SHA-256 branch EXACTLY. Bytes credited IMMEDIATELY after
+          // robocopy success (regardless of subsequent verify outcome),
+          // then verify, then either finalize (markFileSizeOnlyVerified)
+          // or undo the credit + mark failed. Without this, a
+          // verifyTransfer-blocking I/O stall on a 161 GB job would
+          // freeze the operator's progress bar at the previous file's
+          // boundary even though robocopy already returned success —
+          // the same 0/27 freeze pattern that motivated 017A's
+          // SHA-256-branch decoupling, just in a different verify mode.
+          // Codex round-22 P1 corrected the original "swap markFileSize-
+          // OnlyVerified before verifyTransfer" plan; the credit must
+          // come BEFORE verify, not the verify-axis write.
+          await _safeWrite(() =>
+              _jobFileDao.markFileCompleted(file.id, verified: false));
+          completedCount++;
+          completedBytes += file.fileSize;
+          await _safeWrite(() => _jobDao.updateJobProgress(
+                job.id,
+                completedFiles: completedCount,
+                completedBytes: completedBytes,
+              ));
+          _logService?.info(
+            'Copied ${file.fileName}',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.transfer,
+          );
+
           final verified = await _transferService.verifyTransfer(
             sourceFile: file.sourceFilePath,
             destinationFile: file.destinationFilePath,
           );
+
+          // 017 (T046)-equivalent: cancellation mid-verify leaves the
+          // file at status=completed + verifyStatus=pending. Don't
+          // overwrite — recoverStaleJobs handles re-entry. Bytes stay
+          // credited (they're on disk).
+          if (!_isProcessing) {
+            break;
+          }
+
           if (verified) {
             await _safeWrite(
                 () => _jobFileDao.markFileSizeOnlyVerified(file.id));
-            completedCount++;
-            completedBytes += file.fileSize;
-            _logService?.info(
-              'Copied ${file.fileName} (size-verified)',
-              jobId: job.id,
-              fileIndex: completedCount,
-              totalFiles: files.length,
-              phase: LogPhase.transfer,
-            );
+            // 018 T015: tally for the end-of-loop Slack notification.
+            notVerifiedCount++;
           } else {
+            // Size mismatch — bytes are NOT trustworthy. Undo the
+            // credit and mark the file failed so the queue can either
+            // route through notifyJobFailed (if no other files
+            // succeeded) or surface as a per-file warning. Mirror the
+            // SHA-256 mismatch pattern: counter rollback is the cost
+            // of decoupling the credit from verify.
             await _safeWrite(() => _jobFileDao.markFileFailed(
                   file.id,
                   'Verification failed: size mismatch',
                 ));
             failedCount++;
+            completedCount--;
+            completedBytes -= file.fileSize;
+            await _safeWrite(() => _jobDao.updateJobProgress(
+                  job.id,
+                  completedFiles: completedCount,
+                  completedBytes: completedBytes,
+                ));
             _logService?.warning(
               'Size mismatch for ${file.fileName}',
               jobId: job.id,
               phase: LogPhase.verify,
             );
           }
-          await _safeWrite(() => _jobDao.updateJobProgress(
-                job.id,
-                completedFiles: completedCount,
-                completedBytes: completedBytes,
-              ));
         }
       } else {
         await _safeWrite(() =>
@@ -1056,8 +1113,8 @@ class JobQueueService {
     // Slack warning prefix below. Operator decides next action.
     _logService?.info(
       'Job completed — $completedCount transferred, '
-      '$verifiedCount verified, $unverifiedCount unverified, '
-      '$mismatchedCount mismatch',
+      '$verifiedCount verified, $notVerifiedCount size-verified, '
+      '$unverifiedCount unverified, $mismatchedCount mismatch',
       jobId: job.id,
       phase: LogPhase.finalize,
     );
@@ -1065,12 +1122,16 @@ class JobQueueService {
     // 017 (T043, FR-016): Slack call expanded with per-state verify
     // counts. Warning prefix fires automatically when
     // mismatchedCount > 0 or unverifiedCount > 0.
+    // 018 T015 (FR-014): pass notVerifiedFiles so size-mode runs render
+    // "$N size-verified · Passed" instead of the misleading bare-zero
+    // "Verified: 0 ... Passed".
     await _slackService.notifyTransferCompleted(
       job: job,
       completedFiles: completedCount,
       verifiedFiles: verifiedCount,
       unverifiedFiles: unverifiedCount,
       mismatchedFiles: mismatchedCount,
+      notVerifiedFiles: notVerifiedCount,
     );
   }
 
