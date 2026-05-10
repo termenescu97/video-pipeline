@@ -78,6 +78,33 @@ class TransferService {
       final tag = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
       stagingDir = Directory(p.join(destDir, '.tmp_robocopy_$tag'));
       await stagingDir.create(recursive: true);
+      // 018 T026 (FR-016, US6): write a `.live` marker so the startup
+      // sweeper (T027) can distinguish staging dirs left by THIS
+      // running process (must NOT delete) from orphaned staging dirs
+      // left by a prior crashed run on this machine (safe to delete).
+      // The marker holds the OS PID + the executable path; the sweeper
+      // verifies both before treating the dir as live. Inner try/catch
+      // on cleanup so a delete failure doesn't mask the original
+      // marker-write failure (Codex round-23 P2). The
+      // `Error.throwWithStackTrace` preserves the original stack so the
+      // log triage points at the marker write, not the rethrow site.
+      final markerFile = File(p.join(stagingDir.path, '.live'));
+      try {
+        await markerFile.writeAsString(
+          'pid=$pid\nexe=${Platform.resolvedExecutable}\n',
+          flush: true,
+        );
+      } catch (markerError, markerStack) {
+        try {
+          await stagingDir.delete(recursive: true);
+        } catch (cleanupError) {
+          logService?.warning(
+            'Marker write failed AND cleanup failed: $cleanupError',
+            phase: LogPhase.transfer,
+          );
+        }
+        Error.throwWithStackTrace(markerError, markerStack);
+      }
       robocopyDestDir = stagingDir.path;
     } else {
       robocopyDestDir = destDir;

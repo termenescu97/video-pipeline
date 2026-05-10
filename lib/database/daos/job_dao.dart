@@ -473,6 +473,31 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.isIn(jobIds))).get();
   }
 
+  /// 018 T027 (FR-016, US6): non-terminal job listing for the
+  /// startup-sweep destination-root collection. The sweep needs every
+  /// destination directory currently expected to be in use so it can
+  /// look for orphaned `.tmp_robocopy_*` staging dirs left by a
+  /// crashed prior run.
+  Future<List<Job>> getJobsByStatuses(Set<JobStatus> statuses) {
+    if (statuses.isEmpty) return Future.value(const <Job>[]);
+    return (select(jobs)..where((t) => t.status.isInValues(statuses.toList())))
+        .get();
+  }
+
+  /// 018 T027 (FR-016, US6): newest completed/failed job. The sweep
+  /// also walks this destination so an operator who finished a run,
+  /// crashed, then re-launched still gets their orphans cleared even
+  /// when the queued set is empty.
+  Future<Job?> getMostRecentCompletedJob() {
+    return (select(jobs)
+          ..where((t) =>
+              t.status.equalsValue(JobStatus.completed) |
+              t.status.equalsValue(JobStatus.failed))
+          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)])
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
   /// 017B (Codex round-16 P1 #1): scoped requeue. Flips the Job row
   /// back to `queued` and resets aggregate counters so the queue
   /// scheduler can pick it up — but does NOT touch any JobFile rows.
