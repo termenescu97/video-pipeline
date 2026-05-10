@@ -223,9 +223,19 @@ class AppDatabase extends _$AppDatabase {
             // with copy-error rows (Phase 5) keep status='failed'.
             // completedAt is preserved if already set; we don't
             // back-date it here.
+            // 018 T017 (FR-012): clear error_message on the same rows.
+            // The lifted job's status flips from 'failed' to
+            // 'completed', but the previously-stored error_message
+            // (e.g. "5/10 files transferred, 5 failed copy") would
+            // otherwise remain on the now-completed row — UI surfaces
+            // reading that field would render a stale failure message
+            // on a job marked as completed (operator confusion).
+            // Setting it NULL is the correct semantic: there is no
+            // ongoing error to report for a job that's now considered
+            // completed.
             await customStatement('''
               UPDATE jobs
-              SET status = 'completed'
+              SET status = 'completed', error_message = NULL
               WHERE status = 'failed'
                 AND id IN (
                   SELECT DISTINCT job_id FROM job_files
