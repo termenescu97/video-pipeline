@@ -1529,14 +1529,31 @@ class JobQueueService {
     final cardPlans = <_CardTransferPlan>[];
     for (final drive in drives) {
       final drivePath = drive.path;
-      final files = await Directory(drivePath)
-          .list(recursive: true)
-          .where((e) => e is File)
-          .where((e) {
-            final ext = p.extension(e.path).toLowerCase();
-            return videoExtensions.contains(ext);
-          })
-          .toList();
+      // 019 T016 (FR-008 + FR-009, US3): mirror the source-side
+      // symlink hardening from `DriveService.listVideoFiles` (T015)
+      // here. `followLinks: false` + per-entry type check filters out
+      // junctions / symbolic links so the planned set stays bounded
+      // to the SD card. See drive_service.dart::listVideoFiles for
+      // the full rationale (Windows junctions are reparse points).
+      final files = <FileSystemEntity>[];
+      await for (final entity
+          in Directory(drivePath).list(recursive: true, followLinks: false)) {
+        final type =
+            await FileSystemEntity.type(entity.path, followLinks: false);
+        if (type == FileSystemEntityType.link) {
+          _logService?.warning(
+            'createBatchTransferJobs: skipped symlink at ${entity.path}',
+            phase: LogPhase.preflight,
+          );
+          continue;
+        }
+        if (entity is File) {
+          final ext = p.extension(entity.path).toLowerCase();
+          if (videoExtensions.contains(ext)) {
+            files.add(entity);
+          }
+        }
+      }
 
       if (files.isEmpty) {
         cardPlans.add(_CardTransferPlan.empty(drive));
