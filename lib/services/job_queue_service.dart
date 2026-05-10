@@ -315,19 +315,24 @@ class JobQueueService {
         phase: LogPhase.recover,
       );
     }
-    await _safeWrite(() => _jobFileDao.resetFileForRetry(
-          fileId,
-          forceDestDeleteApproved: forceDestDelete,
+    // 018 T003 (FR-001 + FR-002, US1): single atomic call replaces
+    // the prior two-write sequence (resetFileForRetry +
+    // requeueJobForFileRetry). Either the entire retry intent is
+    // persisted or none of it is — eliminates the "ghost pending"
+    // failure mode where a crash between the two writes left the
+    // file at status=pending while the parent stayed at
+    // status=completed (no recovery arm matched, intent lost).
+    //
+    // Public signature unchanged. Existing callers see no surface
+    // change. Codex round-16 P1 #1's per-file-scoped semantics are
+    // preserved (resetFileForRetry is still the inner row reset; we
+    // do NOT route through resetJobForRetry which would arm every
+    // verifyMismatch row).
+    await _safeWrite(() => _jobDao.applyPerFileRetry(
+          jobId: file.jobId,
+          fileId: fileId,
+          forceDestDelete: forceDestDelete,
         ));
-    // Codex round-16 P1 #1: requeueJobForFileRetry is the per-file-
-    // scoped requeue helper. The previous `resetJobForRetry` is the
-    // job-level "Retry all" action — it arms every verifyMismatch row
-    // for force-delete AND resets every failed/pending file. Using it
-    // for a per-file retry would silently re-copy/delete unrelated
-    // destinations the operator never approved (e.g., "Retry verify
-    // on 1 unverified file" was force-deleting separate mismatch
-    // rows in the same job).
-    await _safeWrite(() => _jobDao.requeueJobForFileRetry(file.jobId));
   }
 
   Future<void> _processJob(Job job) async {

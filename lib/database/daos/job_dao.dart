@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../services/log_service.dart';
 import '../database.dart';
@@ -430,6 +431,58 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     // unverified_files for free, so this single call subsumes the
     // round-17 _recomputeUnverifiedForFile semantics for the parent.
     await transaction(() async {
+      await (update(jobs)..where((t) => t.id.equals(jobId))).write(
+        const JobsCompanion(
+          status: Value(JobStatus.queued),
+          errorMessage: Value(null),
+          completedAt: Value(null),
+        ),
+      );
+      await recomputeCountersFromFiles(jobId);
+    });
+  }
+
+  /// 018 T002 (FR-001 + FR-002, US1, P1): atomic per-file retry.
+  ///
+  /// Combines what `JobQueueService.retryFile` previously did via TWO
+  /// separate `_safeWrite` calls (`resetFileForRetry` then
+  /// `requeueJobForFileRetry`) into ONE Drift transaction. Either the
+  /// entire retry intent is persisted, or none of it is.
+  ///
+  /// The pre-018 design was reachable with a "ghost pending" failure
+  /// mode: crash between the file reset and the parent requeue would
+  /// leave the file at `status=pending, verifyStatus=pending` while
+  /// the parent stayed at `status=completed`. None of the recovery
+  /// arms in `getRescuedJobIds` match this state, so the retry intent
+  /// silently disappeared.
+  ///
+  /// Calls `db.jobFileDao.resetFileForRetry` inside the wrapping
+  /// transaction (Drift transactions nest cleanly per project
+  /// convention; preserves all of resetFileForRetry's load-bearing
+  /// semantics — startedAt preservation, verify axis clear,
+  /// _recomputeUnverifiedForFile call — without duplicating them
+  /// here). Then runs the parent requeue + counter recompute that
+  /// `requeueJobForFileRetry` does, also inside the same transaction.
+  ///
+  /// [testOnlyMidTransactionHook] is a failure-injection seam used
+  /// exclusively by `test/unit/retry_atomicity_test.dart` to assert
+  /// atomicity. It fires AFTER the file reset and BEFORE the parent
+  /// update. Production callers MUST leave it null.
+  Future<void> applyPerFileRetry({
+    required int jobId,
+    required int fileId,
+    required bool forceDestDelete,
+    @visibleForTesting
+    Future<void> Function()? testOnlyMidTransactionHook,
+  }) async {
+    await transaction(() async {
+      await db.jobFileDao.resetFileForRetry(
+        fileId,
+        forceDestDeleteApproved: forceDestDelete,
+      );
+      if (testOnlyMidTransactionHook != null) {
+        await testOnlyMidTransactionHook();
+      }
       await (update(jobs)..where((t) => t.id.equals(jobId))).write(
         const JobsCompanion(
           status: Value(JobStatus.queued),
