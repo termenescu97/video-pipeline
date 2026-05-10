@@ -808,17 +808,19 @@ class JobQueueService {
       }
 
       // 017 (US2, T040, FR-005, Codex H2 + round-2 P2 #2 + round-3 P2 #2):
-      // consume the persisted force-delete approval ONCE per processing
-      // pass, regardless of dest existence or which branch we land in
-      // below. Reading + clearing here gives us correct single-use
-      // semantics even when the dest was deleted before this pass: the
-      // approval is consumed even if no delete happens. A re-mismatch
-      // on the next pass requires a fresh banner Retry click.
+      // read the persisted force-delete approval. The local
+      // `forceDestDelete` variable drives the in-loop delete decision
+      // below.
+      //
+      // 019 T019 (FR-010, US4): the column-CLEAR has been moved
+      // downstream — see the post-`markFileCompleted` site. The
+      // previous top-of-loop clear was eagerly consuming the operator's
+      // intent BEFORE the work happened; cancel/crash mid-robocopy
+      // would launder the approval and the next pass would re-hit the
+      // same corrupt destination without forcing replacement (Codex
+      // round-26 convergent P2 — both auditors flagged). The deferred
+      // clear preserves operator intent on failure paths.
       final forceDestDelete = file.forceDestDeleteApproved;
-      if (forceDestDelete) {
-        await _safeWrite(
-            () => _jobFileDao.clearForceDestDeleteApproved(file.id));
-      }
 
       // 015 — pre-robocopy safety + cleanup. Runs BEFORE markFileStarted
       // because we read file.startedAt to detect "ever attempted" and
@@ -1019,6 +1021,17 @@ class JobQueueService {
           // until the hash check resolves it. Two _safeWrite calls per
           // Codex H1 — gating-the-bug-back is now structurally impossible.
           await _safeWrite(() => _jobFileDao.markFileCompleted(file.id, verified: false));
+          // 019 T020 (FR-010, US4): clear the operator's force-delete
+          // approval HERE — only after robocopy + markFileCompleted
+          // landed successfully. Cancel/crash before this point
+          // preserves the column so the next pass re-honors the
+          // intent. Verify-axis outcomes (mismatch / unverified) re-arm
+          // a fresh approval via the banner; the operator's intent for
+          // THIS robocopy invocation is now consumed (Q3/A clarification).
+          if (forceDestDelete) {
+            await _safeWrite(
+                () => _jobFileDao.clearForceDestDeleteApproved(file.id));
+          }
           completedCount++;
           completedBytes += file.fileSize;
           await _safeWrite(() => _jobDao.updateJobProgress(
@@ -1129,6 +1142,14 @@ class JobQueueService {
           // come BEFORE verify, not the verify-axis write.
           await _safeWrite(() =>
               _jobFileDao.markFileCompleted(file.id, verified: false));
+          // 019 T020 (FR-010, US4): clear force-delete approval — same
+          // post-markFileCompleted timing as the SHA-256 path. The
+          // operator's intent for THIS robocopy invocation is consumed
+          // on success; cancel/crash before this point preserves it.
+          if (forceDestDelete) {
+            await _safeWrite(
+                () => _jobFileDao.clearForceDestDeleteApproved(file.id));
+          }
           completedCount++;
           completedBytes += file.fileSize;
           await _safeWrite(() => _jobDao.updateJobProgress(

@@ -220,6 +220,12 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
         const JobFilesCompanion(
           verifyStatus: Value(VerifyStatus.notVerified),
           failureKind: Value(FailureKind.none),
+          // 019 T021 (FR-012, US4): clear stale force-delete approval
+          // alongside the verify-axis flip. The operator's accept
+          // supersedes their prior Retry intent; without this clear,
+          // a later re-run could mis-fire the (now-stale) force-delete
+          // on a file the operator already accepted.
+          forceDestDeleteApproved: Value(false),
           errorMessage: Value(
               'Operator accepted SHA-256 subsystem failure — bytes on disk '
               'retained without cryptographic verification.'),
@@ -262,6 +268,11 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
       const JobFilesCompanion(
         verifyStatus: Value(VerifyStatus.verified),
         failureKind: Value(FailureKind.none),
+        // 019 T021 (FR-012, US4): clear stale force-delete approval
+        // alongside the verify-axis flip. Operator's accept supersedes
+        // any prior Retry intent — without this clear, a later re-run
+        // would force-delete a file the operator already accepted.
+        forceDestDeleteApproved: Value(false),
         errorMessage: Value(
             'Operator accepted SHA-256 mismatch — bytes on disk differ '
             'from source but were retained by explicit operator approval.'),
