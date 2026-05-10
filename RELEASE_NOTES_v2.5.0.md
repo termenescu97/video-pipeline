@@ -156,6 +156,16 @@ Cumulative findings across all 25 rounds: **7 P1, ~40 P2, 1 documented FP** (Cod
 - `flutter test` — 126 tests pass (78 baseline + 48 from feature 018's regression matrix).
 - CI grep guard: `! grep -rn '\$args\[' lib/` returns 0 matches.
 
+### Pre-flight safety (operator does this BEFORE step 1)
+
+The structural changes in v2.5.0 are extensive (schema v8, executor restructure, ~400 lines of new test coverage, 25 Codex rounds). All known-knowns are closed. The protections below bound the worst-case unknown-unknown — taking five minutes here costs nothing if everything works and saves an irreversible loss if it doesn't.
+
+- **P0. Manually back up the database file.** Before launching v2.5.0 for the first time, copy `%APPDATA%\com.example\video_pipeline\video_pipeline.db` to `video_pipeline.db.pre-v2.5.0.bak` (same folder). The v7→v8 migration runs ONCE and is forward-only — if it produces wrong content (vs. crashing, which Drift's transaction handles cleanly) there is no automatic rollback. With the manual backup, downgrade procedure is: close v2.5.0 → copy the .bak back over the .db → reinstall v2.4.0.
+- **P0. Keep the v2.4.0 .exe on disk.** The previously-installed v2.4.0 .exe (or its GitHub Releases zip) is your rollback target. Do NOT delete it until v2.5.0 has run successfully end-to-end at least 3 times.
+- **P1. Smoke test with one small card BEFORE the 161 GB run.** Connect a single SD card with ~10 GB and run a transferAndCompress against a temp destination (e.g. `E:\v2.5.0-smoke\`). Watch for: progress bar advances during transfer, file counter increments live, INFO lines in `copiatorul3000.log` for each successful copy + verify, no PowerShell parser errors. If anything looks off here, STOP and report — do NOT proceed to the 161 GB run.
+- **P1. Source data invariant check.** SD cards stay in the camera/reader during the entire run. Do NOT format the card on the camera until the v2.5.0 run reports clean and you've spot-checked at least 3 destination files (open one, scrub through, confirm playback). The app's "Erase drive" action is a separate operator step requiring typed-confirmation; it is never automatic.
+- **P2. Diagnostics screenshot before tagging promotion.** After the 161 GB run completes, open Settings → Diagnostics, screenshot the panel (instance-lock state, log path, HandBrake detection, recent failures section). This artifact lives with the release for future post-mortem.
+
 ### Windows acceptance (operator runs on workstation — T067)
 
 1. **Re-run the failing scenario.** Same SD card transferAndCompress, 27 files, 161 GB, `H:\` → `E:\Studio Termene\Brut - To compress\test\Canon_Reels_H`. Expected: progress bar advances during transfer phase (bytes credited live); file counter increments live; phase indicator transitions Transfer → Verify → Compress; all hashes succeed; no PowerShell parser errors in log; INFO lines for each successful copy and verify with `[job=N file=K/27 phase=...]` prefix.
@@ -176,6 +186,13 @@ Cumulative findings across all 25 rounds: **7 P1, ~40 P2, 1 documented FP** (Cod
 - Tag `v2.5.0-pre`. GitHub Actions builds Windows .exe.
 - Operator runs full acceptance.
 - Promote to `v2.5.0` after acceptance (delete the `-pre` suffix).
+
+### Recovery procedures (if something breaks after promote)
+
+- **Symptom: app launches but the queue/history shows stale or wrong counts.** Self-healing reads (018 T022) will correct on the next emission. If the persisted counter remains wrong across restarts, file an issue with `video_pipeline.db` attached.
+- **Symptom: app crashes on launch immediately after upgrade.** Most likely a migration assertion. Restore the `.pre-v2.5.0.bak` over the .db (per P0 above) and reinstall v2.4.0 from GitHub Releases.
+- **Symptom: a transfer reports completed but a destination file is missing/corrupt.** Source SD card is intact (we do not auto-erase). Re-run a per-file Retry from the JobCardDone menu, or re-create the job. The job's audit tab shows the source/destination hashes for every file in SHA-256 mode — diff those.
+- **Symptom: orphaned `.tmp_robocopy_*` dirs in destination.** Cold-start sweep removes them on next launch (018 T027). If you see them persisting across restarts, check the `.live` marker's `host=` field — if it says another machine, that's working as designed (cross-machine NAS guard).
 
 ## Deferred to v3.0
 
