@@ -126,13 +126,33 @@ Both features went through the full spec-kit pipeline (`/speckit-specify` → `/
 - 017B: 9 rounds — covered the round-7 P1 robocopy-rename overwrite (staging-dir fix), case-collision detection in single-job + newFolder paths, persisted SourcesPanel collapse, HistorySurface details wiring, mismatch Skip flow, VerifyStatus.notVerified for size-mode, conflict-rename collision-aware suffix helper, Slack failure-truth, transferAndCompress auto-chain gating, unverified recovery + chain resume after Accept, compression-ready filter on the v8 axis.
 - Bundled rounds 17–20: counter-recompute on per-file retry (round-17 P2 + round-18 P2 #1), success-celebration suppression on verify warnings (round-18 P2 #2), v8 migration backfill of hash-only v7 failures to status=completed so Accept paths reach them (round-19 P2), per-file-retry blast radius scoping (round-20 P2 #1), size-mode parent file count in chained-compression Slack ping (round-20 P2 #2).
 
-Cumulative findings: **4 P1, ~32 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
+### Pre-tag hardening (018)
+
+A focused pre-tag pass ran AFTER 017A+017B implementation closed. Combined parallel Opus-max-thinking + Codex round-21 reviews surfaced 10 concerns; spec-kit feature 018 (`specs/018-pre-tag-hardening/`) addressed them in 35 ordered tasks across 7 user stories. Three additional Codex rounds during 018:
+
+- **Round-22** (plan review): 1 P1 + 3 P2 + 6 P3. P1 — typed-gate phrase enforcement; folded into T005-T007 wording. All P2s folded into the plan; one P3 (CLAUDE.md "junk drawer") split T031 into add+archive.
+- **Round-23** (tasks review): 1 P1 + 7 P2 + 1 P3. P1 — chain-dedup gate must be transactional; T010 rewritten. P2s included `_processTransfer` task-ordering false-positive (Phase 7 dep graph corrected), counter-self-healing under-spec (T022 rewritten to use single-query JOIN), startup-sweep wiring layer (T027 rewritten as standalone helper).
+- **Round-24** (post-checkpoint-6c review): 1 P2 + 2 P3. P2 — size-mode resume gap created by T024 (the `verification_mode = 'sha256'` filter from Codex round-3 P2 #1 became stale; recovery branch had to learn size-mode re-verify). P3s — `watchAllJobs` correlated subquery cost (added `idx_job_files_job_id` index in beforeOpen), pure-SHA-256 Slack body wrongly always rendered `Size-only: 0` (omit when 0).
+
+10 closed findings shipped in the 9 commits on `018-pre-tag-hardening`:
+- Per-file retry now a single transaction (`JobDao.applyPerFileRetry`); 4-case test with mid-transaction failure injection.
+- Typed-confirmation gate on Accept-mismatch / Accept-unverified / Skip-mismatch via `ConfirmationDialog.showDestructive`; 8-case test across 3 phrases.
+- Chain-dedup centralized via `createChainedCompressionJobIfAbsent` (in-transaction `hasChainedChild` guard); 4-case stress test.
+- `_stopRequested` flag pattern with no-await between re-check and flip; 3-case race test using a shared release completer.
+- `PRAGMA foreign_keys = ON` set in `beforeOpen` (was previously unset; `parentJobId ON DELETE SET NULL` was dead code); 5-case FK + cleanup test.
+- Stale `error_message` cleanup on lifted jobs — both inline in Phase 7 SET clause AND in `beforeOpen` for retroactive coverage; 3-case test.
+- `markFileUnverifiedAndIncrement` atomic primitive replaces the previous two-`_safeWrite` sequence at both forward and recovery sites; 9-case counter-consistency test.
+- Self-healing JOIN aggregate on `getJob`/`watchJob`/`watchAllJobs`/`watchCompletedJobs`; same test as above covers all four paths in both drift directions; reconciliation gated to drift-only.
+- Size-mode `_processTransfer` mirrors SHA-256 sequence (markFileCompleted+credit BEFORE size verify); recovery branch handles size-mode + completed + pending; 3-case forward + recovery + rollback test.
+- Orphaned-staging-dir cold-start sweep with two-axis liveness (PID + exe match); 5-case test including SC-010 perf budget.
+
+Cumulative findings across all 24 rounds: **5 P1, ~36 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
 
 ## Verification
 
 ### Pre-build (macOS)
 - `flutter analyze` clean (0 issues).
-- `flutter test` — 78 tests pass.
+- `flutter test` — 126 tests pass (78 baseline + 48 from feature 018's regression matrix).
 - CI grep guard: `! grep -rn '\$args\[' lib/` returns 0 matches.
 
 ### Windows acceptance (operator runs on workstation — T067)
