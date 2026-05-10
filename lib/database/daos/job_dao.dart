@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
@@ -17,14 +19,45 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// to copiatorul3000.log.
   LogService? logService;
 
+  /// 018 T022 (FR-013, US5, P3): self-healing read paths. The four
+  /// operator-facing reads ([getJob], [watchJob], [watchAllJobs],
+  /// [watchCompletedJobs]) join `jobs` to a per-job aggregate
+  /// sub-select that computes `actual_unverified = COUNT(*) FROM
+  /// job_files WHERE verify_status = 'unverified'`. The returned
+  /// [Job.unverifiedFiles] is the JOIN result, not the persisted
+  /// column. Persisted `jobs.unverified_files` becomes a denormalized
+  /// cache for write paths that don't go through these reads; the
+  /// reads always self-correct without an extra round-trip.
+  ///
+  /// Single query per emission keeps the SQLite cost identical to the
+  /// previous `select(jobs)` shape — the sub-select is row-local.
+  /// Codex round-23 P2 corrected the original "wrap each method with
+  /// per-row COUNT round-trips" plan; that would have multiplied query
+  /// load on the high-traffic UI streams.
+  static const String _jobsWithSelfHealedUnverifiedSelect = '''
+    SELECT jobs.*,
+      (SELECT COUNT(*) FROM job_files
+         WHERE job_id = jobs.id AND verify_status = 'unverified'
+      ) AS actual_unverified
+    FROM jobs
+  ''';
+
+  Job _mapWithSelfHealedUnverified(QueryRow row) {
+    final base = jobs.map(row.data);
+    final actual = row.read<int>('actual_unverified');
+    return base.unverifiedFiles == actual
+        ? base
+        : base.copyWith(unverifiedFiles: actual);
+  }
+
   /// Watch all jobs ordered by sort order (queue order).
   Stream<List<Job>> watchAllJobs() {
-    return (select(jobs)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.sortOrder),
-            (t) => OrderingTerm.asc(t.createdAt),
-          ]))
-        .watch();
+    return customSelect(
+      '$_jobsWithSelfHealedUnverifiedSelect '
+      'ORDER BY sort_order ASC, created_at ASC',
+      readsFrom: {jobs, jobFiles},
+    ).watch().map(
+        (rows) => rows.map(_mapWithSelfHealedUnverified).toList());
   }
 
   /// Persist a new queue ordering (T065 fix from Codex Phase 9 review —
@@ -55,10 +88,16 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.status.equalsValue(status))).watch();
   }
 
-  /// Watch a single job by ID (efficient).
+  /// Watch a single job by ID (efficient). 018 T022: self-healed
+  /// `unverifiedFiles` via the join in
+  /// [_jobsWithSelfHealedUnverifiedSelect].
   Stream<Job?> watchJob(int jobId) {
-    return (select(jobs)..where((t) => t.id.equals(jobId)))
-        .watchSingleOrNull();
+    return customSelect(
+      '$_jobsWithSelfHealedUnverifiedSelect WHERE id = ?',
+      variables: [Variable.withInt(jobId)],
+      readsFrom: {jobs, jobFiles},
+    ).watch().map(
+        (rows) => rows.isEmpty ? null : _mapWithSelfHealedUnverified(rows.first));
   }
 
   /// Get the next queued or paused job (first in queue).
@@ -398,9 +437,24 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return rows.map((r) => r.read<int>('job_id')).toSet();
   }
 
-  /// Get a single job by ID.
-  Future<Job?> getJob(int jobId) {
-    return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
+  /// Get a single job by ID. 018 T022: self-healed `unverifiedFiles`
+  /// via the join, plus a fire-and-forget reconciliation that fixes
+  /// the persisted `jobs.unverified_files` cache when the read
+  /// detected drift. Reconciliation is gated to drift-only so a
+  /// steady-state read never schedules a write — avoids write storms
+  /// on the hot path.
+  Future<Job?> getJob(int jobId) async {
+    final row = await customSelect(
+      '$_jobsWithSelfHealedUnverifiedSelect WHERE id = ?',
+      variables: [Variable.withInt(jobId)],
+      readsFrom: {jobs, jobFiles},
+    ).getSingleOrNull();
+    if (row == null) return null;
+    final base = jobs.map(row.data);
+    final actual = row.read<int>('actual_unverified');
+    if (base.unverifiedFiles == actual) return base;
+    unawaited(recomputeCountersFromFiles(jobId));
+    return base.copyWith(unverifiedFiles: actual);
   }
 
   /// 017B (FR-B10): batched job lookup for the Diagnostics → Recent
@@ -518,16 +572,17 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         .get();
   }
 
-  /// Watch completed and failed jobs (history).
+  /// Watch completed and failed jobs (history). 018 T022: self-healed
+  /// `unverifiedFiles` via the join in
+  /// [_jobsWithSelfHealedUnverifiedSelect].
   Stream<List<Job>> watchCompletedJobs() {
-    return (select(jobs)
-          ..where(
-            (t) =>
-                t.status.equalsValue(JobStatus.completed) |
-                t.status.equalsValue(JobStatus.failed),
-          )
-          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
-        .watch();
+    return customSelect(
+      "$_jobsWithSelfHealedUnverifiedSelect "
+      "WHERE status IN ('completed', 'failed') "
+      "ORDER BY completed_at DESC",
+      readsFrom: {jobs, jobFiles},
+    ).watch().map(
+        (rows) => rows.map(_mapWithSelfHealedUnverified).toList());
   }
 
   /// Reset a failed job for retry — set status to queued, clear error.

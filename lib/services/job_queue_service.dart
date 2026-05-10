@@ -536,8 +536,15 @@ class JobQueueService {
         if (!_isProcessing) break;
 
         if (sourceHash == null || destHash == null) {
-          await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
-          await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+          // 018 T021 (FR-013, US5): atomic single-transaction variant
+          // replaces the previous two `_safeWrite`s. If a Phase-B drain
+          // had timed out between them, the row write could land while
+          // the counter increment got dropped, leaving Job.unverifiedFiles
+          // permanently under-counted. The local `unverifiedCount++`
+          // stays — it's the in-memory tally for the end-of-loop Slack
+          // notification, separate from the persisted Job counter.
+          await _safeWrite(
+              () => _jobFileDao.markFileUnverifiedAndIncrement(file.id));
           unverifiedCount++;
           _logService?.warning(
             'Recovered ${file.fileName}: SHA-256 subsystem failed',
@@ -874,8 +881,10 @@ class JobQueueService {
             // 017 (US1, FR-003 unverified): hash subsystem failed (PS
             // broken, etc.). Bytes are on disk but cryptographic trust
             // is NOT established. Soft failure — operator sees ⚠ chip.
-            await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
-            await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+            // 018 T021 (FR-013): atomic variant — see recovery branch
+            // above for rationale.
+            await _safeWrite(
+                () => _jobFileDao.markFileUnverifiedAndIncrement(file.id));
             unverifiedCount++;
             _logService?.warning(
               'SHA-256 subsystem failed for ${file.fileName}: could not compute hash',
