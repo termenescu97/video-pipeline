@@ -239,6 +239,45 @@ class AppDatabase extends _$AppDatabase {
           });
         }
       },
+      // 018 T001 (FR-009 + FR-010 + FR-012): connection-open hook.
+      // Drift's MigrationStrategy.beforeOpen runs AFTER onCreate/onUpgrade
+      // and BEFORE any DAO query lands (verified by Codex round-22 P3).
+      //
+      // Order of statements is load-bearing:
+      //   1. NULL out any pre-existing dangling parent_job_id rows.
+      //      Without this, flipping the FK pragma in step 3 would
+      //      surface deferred constraint failures on the FIRST write
+      //      that touches an offending row — operators who deleted a
+      //      parent before the v2.5.0 release would see unfamiliar
+      //      errors that look unrelated to this feature.
+      //   2. NULL out stale errorMessage on jobs that the v8 migration
+      //      lifted from failed → completed. Idempotent — re-runs are
+      //      no-ops because of the `error_message IS NOT NULL` filter.
+      //      Catches existing-v8 testers retroactively (the migration
+      //      itself only fires for `from < 8` and won't re-clear).
+      //   3. Enable foreign_keys enforcement. Per-connection setting
+      //      (SQLite docs); MUST be set on every connection-open.
+      //
+      // Cleanup statements 1 + 2 are fire-and-forget no-ops at typical
+      // project scale (sub-millisecond per Codex round-22 P3 SCAN
+      // analysis). Step 3 is one PRAGMA write.
+      beforeOpen: (details) async {
+        await customStatement(
+          'UPDATE jobs SET parent_job_id = NULL '
+          'WHERE parent_job_id IS NOT NULL '
+          'AND parent_job_id NOT IN (SELECT id FROM jobs)',
+        );
+        await customStatement(
+          "UPDATE jobs SET error_message = NULL "
+          "WHERE status = 'completed' "
+          "AND id IN (SELECT DISTINCT job_id FROM job_files "
+          "WHERE verify_status IN ('mismatch', 'unverified')) "
+          "AND id NOT IN (SELECT DISTINCT job_id FROM job_files "
+          "WHERE status = 'failed') "
+          "AND error_message IS NOT NULL",
+        );
+        await customStatement('PRAGMA foreign_keys = ON');
+      },
     );
   }
 }
