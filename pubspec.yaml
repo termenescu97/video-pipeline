@@ -72,6 +72,13 @@ dev_dependencies:
   drift_dev: ^2.0.0
   build_runner: ^2.0.0
 
+  # 018 T013: raw sqlite3 access used in fk_pragma_and_cleanup_test
+  # to seed dangling FK rows with FK enforcement off (simulating the
+  # pre-release state of an operator's database). Already a transitive
+  # dep via drift; declared here for direct use per the
+  # depend_on_referenced_packages lint.
+  sqlite3: ^2.0.0
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
