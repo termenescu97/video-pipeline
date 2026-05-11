@@ -116,6 +116,7 @@ What IS in scope, always: bytes on disk. Source SD card content (typed-confirmat
 | 017B - UX Restructuring | `017-ux-restructuring` | implementation complete | 🟡 v2.5.0-pending QA |
 | 018 - Pre-tag Hardening | `018-pre-tag-hardening` | 28/28 | 🟡 v2.5.0-pending QA |
 | 019 - Workflow Integrity Hardening | `019-workflow-integrity-hardening` | 40/46 | 🟡 v2.5.0-pending QA |
+| 020 - v2.5.1 Field Findings | `019-workflow-integrity-hardening` (skeleton) | n/a yet | ⚪ slot pre-created, populate post-acceptance |
 
 **Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions built Windows .exe)
 **Previous release**: v2.3.0 (tagged, built via GitHub Actions)
