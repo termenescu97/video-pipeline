@@ -146,7 +146,13 @@ class _CopyAllCardsDialogState extends State<CopyAllCardsDialog> {
     var destination = _destination!;
     while (true) {
       ConflictResolution? lastChoice;
-      final ({int created, int skipped, List<String> conflicts}) result;
+      final ({
+        int created,
+        int skipped,
+        int identityRefused,
+        List<String> identityRefusedPaths,
+        List<String> conflicts
+      }) result;
       try {
         result = await jobQueueService.createBatchTransferJobs(
           selectedDrives,
@@ -199,11 +205,23 @@ class _CopyAllCardsDialogState extends State<CopyAllCardsDialog> {
         final String msg;
         if (result.created == 0 && result.conflicts.isNotEmpty) {
           msg = 'All files already exist at destination — no jobs created.';
-        } else if (result.skipped > 0) {
-          msg =
-              'Created ${result.created} jobs, skipped ${result.skipped} empty cards';
         } else {
-          msg = 'Created ${result.created} jobs';
+          // 019 (Codex round-27b P2 #3): identity-refused is reported
+          // distinctly from "empty cards" so the operator knows whether
+          // to re-insert (identity capture failed) or accept (truly
+          // empty card).
+          final parts = <String>['Created ${result.created} jobs'];
+          if (result.skipped > 0) {
+            parts.add('skipped ${result.skipped} empty cards');
+          }
+          if (result.identityRefused > 0) {
+            parts.add(
+              'refused ${result.identityRefused} card'
+              "${result.identityRefused == 1 ? '' : 's'} "
+              '(could not read serial — re-insert and retry)',
+            );
+          }
+          msg = parts.join(', ');
         }
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(msg)));

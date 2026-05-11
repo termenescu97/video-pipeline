@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../database/database.dart';
 import '../../database/tables.dart';
@@ -72,8 +73,139 @@ class EraseDriveActionButton extends StatelessWidget {
   }
 
   Future<void> _runEraseFlow(BuildContext context) async {
+    // 019 T009 (FR-003, US1): drive-identity re-check at erase-eligibility.
+    // The synchronous `eraseEligibilityReason` covers job-status / verify-
+    // status gates; the async identity re-check happens HERE before the
+    // typed-confirmation dialog opens so a card-swap-mid-eligibility
+    // case never reaches the destructive path. Five-branch logic
+    // mirroring `_processJob`'s resume re-check (T007):
+    //   (a) sentinel '__legacy_v8__' → legacy bypass, proceed
+    //   (b) null on a transfer-type job → bug indicator, refuse
+    //   (c) real serial AND current null → fail-closed
+    //   (d) real serial AND current differs → refuse
+    //   (e) real serial AND current matches → proceed
+    final stored = job.sourceDriveSerial;
+    if (stored != _legacyV8Sentinel) {
+      if (stored == null || stored.isEmpty) {
+        _showRefusal(
+          context,
+          'Internal error: this job has no card-identity sentinel. '
+          'Please report (this should not happen post-019).',
+        );
+        return;
+      }
+      final currentIdentity = await driveService.getDriveIdentity(job.sourcePath);
+      final currentSerial = currentIdentity?.serialNumber;
+      if (!context.mounted) return;
+      if (currentSerial == null || currentSerial.isEmpty) {
+        _showRefusal(
+          context,
+          'Could not verify card identity at ${job.sourcePath}. '
+          'Re-insert the original card and retry.',
+        );
+        return;
+      }
+      if (currentSerial != stored) {
+        _showRefusal(
+          context,
+          'Card identity mismatch at ${job.sourcePath} — original: '
+          '$stored, current: $currentSerial. Re-insert the original '
+          'card to erase. Refusing to erase the wrong card.',
+        );
+        return;
+      }
+    }
+
+    // 019 T011-T013 (FR-005 — FR-007, US2): erase-time card-content
+    // reconciliation. Closes F-2 (convergent P1 — both auditors
+    // CERTAIN): the operator queues a batch, the camera flushes a
+    // final clip after enumeration, the batch runs, the operator
+    // clicks Erase — the new clip is destroyed because eligibility
+    // only checks PLANNED files, not what's currently on the card.
+    //
+    // Re-enumerate via the same `listVideoFiles` allowlist used at
+    // job-creation time (Q2/A — symmetric criteria avoid surprise
+    // mismatches; the allowlist lives in lib/utils/constants.dart).
+    // Build the planned-paths set with case-insensitive normalization
+    // (NTFS is case-insensitive). Diff: any file present on the card
+    // AND not in the planned set → refusal with count + sample of 5.
+    final planned = await jobFileDao.getFilesForJob(job.id);
+    final currentScan = await driveService.listVideoFiles(job.sourcePath);
+    if (!context.mounted) return;
+    final refusalMessage = unplannedFilesRefusalMessage(
+      plannedSourcePaths: planned.map((f) => f.sourceFilePath).toList(),
+      currentFiles: currentScan.files.map((e) => e.path).toList(),
+    );
+    if (refusalMessage != null) {
+      _showRefusal(context, refusalMessage);
+      return;
+    }
+    // Files in the planned set but missing from the card are NOT a
+    // refusal — operator-driven deletion is permitted (their
+    // destinations are already verified per the existing
+    // eraseEligibilityReason logic).
+
+    if (!context.mounted) return;
     await eraseSourceDrive(context, job);
   }
+}
+
+/// 019 (FR-001 + FR-002, US1): same sentinel as JobQueueService.
+/// Duplicated here rather than imported because the UI widget shouldn't
+/// depend on a service implementation detail. Keep these strings in
+/// sync — a CI grep guard catches divergence:
+/// `! grep -rn "__legacy_v8__" lib/ | wc -l` returns the same number
+/// before and after edits to the sentinel.
+const String _legacyV8Sentinel = '__legacy_v8__';
+
+/// 019 T011-T013 (FR-005 — FR-007, US2): erase-time card-content
+/// reconciliation. Returns a refusal message if the current SD card
+/// contains video files not in the planned set, or `null` if the
+/// erase is safe to proceed.
+///
+/// Path comparison uses `p.canonicalize` + `toLowerCase()` — NTFS is
+/// case-insensitive AND the SD card may be exFAT (case-sensitive)
+/// formatted on some non-Windows systems. The case-insensitive
+/// normalization avoids false negatives on cards with mixed-case
+/// directory entries.
+///
+/// Files in the planned set but missing from the card are NOT a
+/// refusal — operator-driven deletion is permitted (their
+/// destinations are already verified per the existing
+/// `eraseEligibilityReason` synchronous gate).
+///
+/// Refusal message includes a sample of up to 5 filenames + ellipsis
+/// when more, keeping the SnackBar scannable.
+///
+/// Extracted as a `@visibleForTesting` pure function so unit tests
+/// can verify the diff without booting the full widget tree.
+@visibleForTesting
+String? unplannedFilesRefusalMessage({
+  required List<String> plannedSourcePaths,
+  required List<String> currentFiles,
+}) {
+  final plannedNormalized =
+      plannedSourcePaths.map((s) => p.canonicalize(s).toLowerCase()).toSet();
+  final unplanned = currentFiles
+      .where((f) => !plannedNormalized.contains(p.canonicalize(f).toLowerCase()))
+      .toList();
+  if (unplanned.isEmpty) return null;
+  final sampleNames =
+      unplanned.take(5).map((f) => p.basename(f)).join(', ');
+  final ellipsis = unplanned.length > 5 ? '...' : '';
+  return '${unplanned.length} file(s) added to card after job created '
+      '($sampleNames$ellipsis) — re-create job or remove files '
+      'before erase. Refusing to erase unplanned content.';
+}
+
+void _showRefusal(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      backgroundColor: Theme.of(context).colorScheme.error,
+      duration: const Duration(seconds: 8),
+    ),
+  );
 }
 
 /// Compact disabled label expanded for tooltips (since we shortened the

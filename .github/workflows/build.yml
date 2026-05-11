@@ -21,6 +21,21 @@ jobs:
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter analyze
+
+      # 019 (Codex round-27b P3 #6): permanent CI guard against the
+      # PowerShell `$args[0]` cascade — the v2.4.0 root-cause pattern
+      # that 017A retired. PowerShell silently drops trailing argv
+      # after `-Command`, so any reintroduction would land a path-
+      # dependent injection / silent failure. Fail the build on a
+      # single hit anywhere under lib/.
+      - name: PowerShell argv guard
+        shell: bash
+        run: |
+          if grep -rn '\$args\[' lib/; then
+            echo "::error::Found '\$args[' in lib/ — see 017A T032 / CLAUDE.md v8 conventions"
+            exit 1
+          fi
+
       - run: flutter build windows --release
 
       - name: Create release archive

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
@@ -7,6 +8,32 @@ import '../utils/process_runner.dart';
 import '../utils/ps_escape.dart';
 import '../utils/robocopy_parser.dart';
 import 'log_service.dart';
+
+/// 019 T029 (FR-019, US7): prepend `\\?\` to paths > 240 chars for use
+/// with PowerShell `Get-FileHash -LiteralPath`.
+///
+/// PowerShell 5.1 (the default on Windows 11 without explicit upgrade)
+/// cannot read paths > 260 chars without this prefix — long-path
+/// files would otherwise fail `Get-FileHash` forever, leaving the
+/// operator stuck in `verifyStatus=unverified` retry loop with no
+/// recovery path. The 240 threshold leaves headroom for any prefix-
+/// handling quirks (the prefix itself is 4 chars; the buffer covers
+/// PowerShell's internal limits).
+///
+/// **Scope**: PowerShell-specific. Do NOT propagate the prefix into
+/// robocopy/HandBrake argv — those have their own long-path handling
+/// on Windows 10+ and the `\\?\` prefix changes path semantics they
+/// don't accept (no `..` resolution, no relative paths, no `/`).
+///
+/// **Codex round-27a P2 follow-up**: this Dart-side prefix construction
+/// is verified by [test/unit/long_path_hash_test.dart] for the
+/// shape-level invariants (prefix added past threshold, omitted
+/// below). Whether PS 5.1 actually accepts the prefixed path under
+/// `-LiteralPath` semantics requires Windows-side manual verification
+/// (operator T067 step in RELEASE_NOTES).
+@visibleForTesting
+String longPathPrefixed(String path) =>
+    path.length > 240 ? r'\\?\' + path : path;
 
 /// Callback for reporting transfer progress.
 typedef TransferProgressCallback = void Function(FileProgressEvent event);
@@ -239,10 +266,14 @@ class TransferService {
       // string. PS single-quoted literals don't expand $var or backticks;
       // doubling the only literal-special char (') closes injection. Length-3
       // argv invariant enforced by runPowerShellInline.
+      //
+      // 019 T029 (FR-019, US7): paths > 240 chars get the `\\?\` long-path
+      // prefix. See [longPathPrefixed] for full rationale.
+      final pathForPS = longPathPrefixed(filePath);
       final exitCode = await runner.runPowerShellInline(
         tag: 'computeFileHash',
         script:
-            "(Get-FileHash -LiteralPath '${escapePsLiteral(filePath)}' -Algorithm SHA256).Hash",
+            "(Get-FileHash -LiteralPath '${escapePsLiteral(pathForPS)}' -Algorithm SHA256).Hash",
         onStdoutLine: (line) {
           final t = line.trim();
           if (t.isNotEmpty) captured.writeln(t);

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
@@ -42,10 +43,54 @@ class DriveService {
   ///
   /// [tag] is a short label written to the log on failure so post-mortem
   /// can tell which call site failed (identity vs free-space vs erase).
+  /// 019 T032 (FR-020, US8): runtime length-3 argv invariant guard.
+  /// Codex round-27a P2 fix: Dart `assert` is stripped from
+  /// `flutter build windows --release`, so a debug-only assert
+  /// provides zero production protection. Use `if (...) throw` so the
+  /// check fires in release builds too.
+  ///
+  /// The invariant: every PS subprocess call MUST pass exactly
+  /// `['-NoProfile', '-Command', script]` to PowerShell. The 017A
+  /// length-3 argv root cause was that `-Command` silently drops
+  /// trailing argv elements after the script string, so the PowerShell
+  /// dollar-args positional indexing was never populated and
+  /// operator-supplied paths were dropped on the floor. Re-opening
+  /// this hole at any helper site re-creates the v2.4.0 cascade.
+  ///
+  /// Extracted as a standalone `@visibleForTesting` function so unit
+  /// tests can verify the throw fires without spawning a real
+  /// PowerShell subprocess.
+  @visibleForTesting
+  static void checkPsArgvShape(List<String> args, String tag) =>
+      _checkPsArgvShape(args, tag);
+
+  static void _checkPsArgvShape(List<String> args, String tag) {
+    if (args.length != 2 || args[0] != '-Command') {
+      throw StateError(
+        'PS argv invariant violated in $tag: args after -NoProfile must be '
+        "exactly ['-Command', script]. Got: $args. See 017A length-3 argv "
+        'invariant in CLAUDE.md.',
+      );
+    }
+  }
+
   Future<ProcessResult?> _runPowerShell(
     List<String> args, {
     required String tag,
   }) async {
+    // Codex round-27a P2 fix: Dart `assert` is stripped from
+    // `flutter build windows --release`, so a debug-only assert
+    // provides zero production protection. Use `if (...) throw` so the
+    // check fires in release builds too.
+    //
+    // The invariant: every PS subprocess call MUST pass exactly
+    // `['-NoProfile', '-Command', script]` to PowerShell. The 017A
+    // length-3 argv root cause was that `-Command` silently drops
+    // trailing argv elements after the script string, so the PowerShell
+    // dollar-args positional indexing was never populated and
+    // operator-supplied paths were dropped on the floor. Re-opening
+    // this hole at any helper site re-creates the v2.4.0 cascade.
+    _checkPsArgvShape(args, tag);
     try {
       final result = await Process.run('powershell', ['-NoProfile', ...args]);
       if (result.exitCode != 0) {
@@ -124,7 +169,34 @@ class DriveService {
     final files = <FileSystemEntity>[];
     final skippedPaths = <String>[];
     try {
-      await for (final entity in dir.list(recursive: true)) {
+      // 019 T015 (FR-008 + FR-009, US3): source-side reparse-point
+      // hardening. `followLinks: false` prevents Directory.list from
+      // walking INTO symlink targets — which on Windows includes
+      // junctions (reparse points). Without this, a junction at the
+      // source pointing into the destination tree would cause copy-
+      // back-over-source; a junction loop pins the UI; a junction
+      // to an unrelated path silently expands the planned set
+      // outside the SD card.
+      //
+      // Per-entry FileSystemEntity.type(..., followLinks: false) is
+      // defense-in-depth for Windows specifically: junctions are
+      // reparse points whose enumeration behavior under
+      // Directory.list(followLinks: false) differs from POSIX
+      // symbolic links. The per-entry check reliably distinguishes
+      // link types regardless of how the parent listing handled
+      // them — one syscall per entry, cheap relative to subsequent
+      // file I/O.
+      await for (final entity
+          in dir.list(recursive: true, followLinks: false)) {
+        final type =
+            await FileSystemEntity.type(entity.path, followLinks: false);
+        if (type == FileSystemEntityType.link) {
+          _logService?.warning(
+            'Skipped symlink at ${entity.path}',
+            phase: LogPhase.preflight,
+          );
+          continue;
+        }
         if (entity is File) {
           final ext = p.extension(entity.path).toLowerCase();
           if (videoExtensions.contains(ext)) {
@@ -288,7 +360,22 @@ if (-not \$logical) { return }
     }
 
     final testFiles = <File>[];
-    await for (final entity in sourceDir.list(recursive: true)) {
+    // 019 T017 (FR-008 + FR-009, US3): same source-side symlink guard
+    // as listVideoFiles. prepTestCards walks an operator-chosen folder
+    // for test videos; a symlinked entry could expand the test-card
+    // contents outside the intended source. Apply the same
+    // followLinks: false + per-entry type check.
+    await for (final entity
+        in sourceDir.list(recursive: true, followLinks: false)) {
+      final type =
+          await FileSystemEntity.type(entity.path, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        _logService?.warning(
+          'prepTestCards: skipped symlink at ${entity.path}',
+          phase: LogPhase.preflight,
+        );
+        continue;
+      }
       if (entity is File) {
         final ext = p.extension(entity.path).toLowerCase();
         if (videoExtensions.contains(ext)) {

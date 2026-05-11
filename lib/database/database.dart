@@ -23,7 +23,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration {
@@ -246,6 +246,34 @@ class AppDatabase extends _$AppDatabase {
                   WHERE status = 'failed'
                 )
             ''');
+          });
+        }
+        if (from < 9) {
+          // 019 T002 (FR-001, US1): schema v9 — add Job.sourceDriveSerial
+          // for SD-card-identity binding across the create→transfer→
+          // verify→erase chain. Closes F-1 (drive-letter remap silently
+          // transfers from the wrong card and erases it).
+          //
+          // Codex round-27a P1 fix: backfill all existing rows with the
+          // sentinel `'__legacy_v8__'`. After this migration, valid
+          // values for `source_drive_serial` are:
+          //   - real WMI serial (e.g. "12345-67890") → check normally
+          //   - sentinel '__legacy_v8__' → legacy bypass with one-time-
+          //     per-launch banner (preserves in-flight pre-019 work)
+          //   - null → bug indicator, impossible post-019 (v9 job-create
+          //     refuses on null capture)
+          // Without the backfill, null would ambiguously mean both
+          // "legacy" and "v9 capture failed at create-time" — accidentally
+          // granting the legacy bypass to v9 jobs that should fail-closed.
+          //
+          // Wrapped in a transaction so a mid-migration crash leaves the
+          // DB at v8 cleanly.
+          await transaction(() async {
+            await m.addColumn(jobs, jobs.sourceDriveSerial);
+            await customStatement(
+              "UPDATE jobs SET source_drive_serial = '__legacy_v8__' "
+              'WHERE source_drive_serial IS NULL',
+            );
           });
         }
       },

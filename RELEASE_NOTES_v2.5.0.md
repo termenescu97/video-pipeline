@@ -149,12 +149,38 @@ A focused pre-tag pass ran AFTER 017A+017B implementation closed. Combined paral
 
 Cumulative findings across all 25 rounds: **7 P1, ~40 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
 
+### Workflow-integrity hardening (019)
+
+After 018 closed, the operator asked "what next to make sure we have done everything we could to make this bulletproof for going to production with real video data." That question seeded a holistic threat-model audit: parallel Opus + Codex agents (Codex round 26) each ran the same 5-tier framework — source data loss, destination corruption, subprocess attack surface, state/counter correctness, operational resilience — across the entire codebase, not just feature deltas. The audit surfaced workflow-level invariants that 25 incremental review rounds had missed because each round was scoped to a single feature.
+
+**Convergent findings (both auditors flagged independently)** — 5 closed:
+- F-1 (P1 CERTAIN both): drive-letter remap on reinsert — paused job stores `Job.sourcePath = 'E:\\'`; if reinsert mounts as `F:\\`, retry hits not-found OR worse, hits a different camera's card with similar folder structure. Closed by `Job.sourceDriveSerial` capture-at-create + WMI re-check at transfer-resume + erase-eligibility (5-branch logic with sentinel for v8 migration).
+- F-2 (P1 CERTAIN both): erase-time card-content reconciliation — operator queues batch, camera flushes one more clip 30s later, batch runs, operator clicks Erase; the new clip is destroyed because eligibility only verified PLANNED files, not what's currently on the card. Closed by `unplannedFilesRefusalMessage` (case-insensitive `p.canonicalize` + `toLowerCase`).
+- F-3 (P1 LIKELY Opus + P2 Codex): source-side symlink guard — 017B added DEST-side `followLinks: false`; the source mirror was never added. Closed by adding the same `followLinks: false` + per-entry type check to `DriveService.listVideoFiles`, `prepTestCards`, and `JobQueueService.createBatchTransferJobs` enumeration.
+- F-4 (P2 both): `forceDestDeleteApproved` clear ordering — top-of-loop clear races with operator-driven Retry banner clicks landing AFTER iteration started. Closed by moving the clear to AFTER `markFileCompleted(verified: false)` in BOTH SHA-256 and size-mode paths. Round-27b extended this with a recovery-time clear so a crash-survived flag can't fire implicitly.
+- F-5 (P2 both): HandBrake compression staging-dir convention — 017A added `.tmp_robocopy_*` staging for transfer; compression still wrote partial `.mp4`s directly to dest. Closed by mirroring the staging-dir pattern with `.tmp_handbrake_copiatorul3000_*` prefix; sweep matcher updated; sweep walk made recursive (round-27b P2 #4 — HandBrake preserves source folder hierarchy, nested staging dirs were missed by non-recursive walk).
+
+**Bundled cheap defenses** — 3:
+- Slack `_getWebhookUrl()` moved INSIDE `_send`'s try block (settings-load failure no longer propagates to main pipeline).
+- SHA-256 hash long-path prefix `\\?\` for paths > 240 chars.
+- `drive_service::_runPowerShell` length-3 argv enforcement via runtime `StateError` (not `assert` — `flutter build windows --release` strips asserts) + permanent CI grep guard against the `$args[` pattern.
+
+**Single-auditor findings explicitly deferred to v2.5.1** — 5 (rationale per CLAUDE.md "Deferred to v2.5.1"): F-D1 (size-mode TOCTOU between robocopy and verifyTransfer), F-D3 (sweep prefix collision with unrelated tools), F-D4 (cross-machine NAS staging-tag collision), F-D5 (DST/clock-jump mtime cutoff), F-D8 (eraseDrive Remove-Item -LiteralPath re-verify after symlink guard).
+
+**Codex review verdicts**:
+- **Round-27a** (post-design adversarial review): 1 P1 + 5 P2 + 3 P3. P1 — sentinel ambiguity (null in `sourceDriveSerial` would mean both "legacy v8" AND "v9 capture failed"), closed by explicit `'__legacy_v8__'` sentinel backfilled at migration + fail-closed-at-create rule. P2s folded: Dart `assert` strips in release builds (replaced with runtime `StateError`), HandBrake rename atomicity wrap, prefix-narrowing for sweep matcher, long-path threshold tuning, single vs batch identity-refused error semantics.
+- **Round-27b** (post-implement adversarial review): 0 P1 + 4 P2 + 2 P3. All folded: legacy-job banner now surfaces via new `QueueStateNotifier.operatorMessages` stream → SnackBar (was log-only); queue starvation closed via new `getNextQueuedJobExcluding(Set<int>)` so the executor advances past identity-paused jobs; batch identity-refusal reported as distinct `identityRefused` axis; HandBrake sweep made recursive; recovery branch clears stale `forceDestDeleteApproved`; CI grep guard added to `.github/workflows/build.yml`.
+
+Schema bump v8 → v9: one new column `Job.sourceDriveSerial`, sentinel-backfilled (`'__legacy_v8__'`) for existing v8 rows in a single Drift transaction. No data backfill loss — sentinel is the authoritative "this row pre-dates identity tracking" marker, and the executor's branch (a) handles it explicitly with a one-time-per-launch operator-visible banner.
+
+Test count: 126 (post-018) → **161 passing** after 019 (added 35 cases across 9 new test files: migration_v8_to_v9, handbrake_staging, slack_settings_failure, long_path_hash, runpowershell_argv_guard, drive_identity_check, force_delete_deferred_clear, source_symlink_guard, erase_rescan).
+
 ## Verification
 
 ### Pre-build (macOS)
 - `flutter analyze` clean (0 issues).
-- `flutter test` — 126 tests pass (78 baseline + 48 from feature 018's regression matrix).
-- CI grep guard: `! grep -rn '\$args\[' lib/` returns 0 matches.
+- `flutter test` — 161 tests pass (78 baseline + 48 from 018 + 35 from 019).
+- CI grep guard: `! grep -rn '\$args\[' lib/` returns 0 matches; the same guard now runs as a workflow step on every tagged build (`.github/workflows/build.yml`).
 
 ### Pre-flight safety (operator does this BEFORE step 1)
 
@@ -182,10 +208,49 @@ If the app behaves weirdly in ways unrelated to the actual file transfer (UI sta
 12. **UI — Diagnostics → Recent failures.** Lists jobs with non-clean verify outcomes; tapping a row opens the job's detail tabs.
 13. **Workflow — auto-chain gate.** transferAndCompress with one mismatch row does NOT spawn a chained compression job. Operator clicks Accept on the mismatch row in JobCardDone; SnackBar reports "compression chain resumed"; the chained compression job appears in the queue.
 
+#### 019-specific must-fix verification (added by holistic audit)
+
+14. **Card-swap guard at transfer-resume (F-1).** Create a transferAndCompress job for SD card "A" mounted at `H:\`. Stop the queue mid-transfer. Eject card A, insert a different card "B" at the same drive letter. Resume. Expected: job pauses with banner "Card identity mismatch at H:\ — original: <serial-A>, current: <serial-B>. Re-insert the original card to resume." Card B is NOT touched. Re-insert card A → resume succeeds.
+15. **Erase-time card rescan (F-2).** Create + complete a transfer for 5 files on SD card "A". Before clicking Erase, copy ONE additional file to the card via Explorer (simulate camera flush). Click Erase → typed-confirmation dialog. Expected: refusal message "1 file(s) added to the card since the job was created — including <filename>". Erase is BLOCKED until operator deletes the new file or re-creates the job.
+16. **Source-side symlink guard (F-3).** On the SD card root, create a symlink/junction pointing to a directory OUTSIDE the card (`mklink /J H:\leak C:\Users\...\Documents`). Create a transfer job. Expected: planned set excludes the symlink target's contents; log shows `createBatchTransferJobs: skipped symlink at H:\leak`. Without this guard, the destination would silently expand to include unrelated documents.
+17. **Force-delete deferred clear (F-4).** Trigger a verify mismatch on file K. Click Retry from the banner. Mid-retry (after robocopy returns but before next file iteration), force-kill the app. Relaunch. Expected: file K's `forceDestDeleteApproved` is cleared during recovery — the next manual Retry requires a FRESH banner click. No implicit re-fire of the destructive flag.
+18. **HandBrake nested staging dir sweep.** Run a transferAndCompress that produces a nested output structure (`E:\out\Camera1\Day1\file.mp4`). Force-kill mid-compression so a `.tmp_handbrake_copiatorul3000_*` dir is left under `E:\out\Camera1\Day1\`. Relaunch. Expected: cold-start sweep walks recursively and removes the orphan staging dir; INFO log line `startup-sweep: removed orphan staging dir <path>`.
+19. **Long-path SHA-256 (T031 manual gate).** Create a destination path > 260 chars (deeply nested folder hierarchy). Run a SHA-256-mode transfer. Expected: hash succeeds — the `\\?\` prefix correctly enables long-path semantics in PowerShell 5.1's `Get-FileHash -LiteralPath`. Without the prefix, the call would fail with "FileNotFoundException" despite the file existing.
+20. **Legacy-job banner SnackBar.** Migrate a v8-era `.db` to v9 (or manually `UPDATE jobs SET source_drive_serial = '__legacy_v8__' WHERE id = N`). Resume that job. Expected: SnackBar appears at the bottom of the screen: "Job pre-dates drive-identity tracking — re-create to enable card-swap detection. Proceeding without identity check." Same job resumed again in the same launch does NOT re-show the SnackBar (one-time-per-launch).
+21. **Batch identity-refused vs empty-card distinction.** Insert two SD cards, one with WMI returning a serial, one where WMI returns null (simulate by ejecting at the right moment, or use a card reader that strips identity). Run "Copy All Cards". Expected: SnackBar reports "Created 1 jobs, refused 1 card (could not read serial — re-insert and retry)" — distinct from "skipped N empty cards".
+
 ### Pre-release
-- Tag `v2.5.0-pre`. GitHub Actions builds Windows .exe.
-- Operator runs full acceptance.
-- Promote to `v2.5.0` after acceptance (delete the `-pre` suffix).
+
+**Merge sequence** (older feature branches first so each merge integrates cleanly with the next):
+
+```bash
+# From main, fast-forward through each feature branch in order
+git checkout main
+git merge --no-ff 017-executor-correctness
+git merge --no-ff 017-ux-restructuring
+git merge --no-ff 018-pre-tag-hardening
+git merge --no-ff 019-workflow-integrity-hardening
+
+# Tag the pre-release (GitHub Actions: builds Windows .exe + uploads zip
+# to GitHub Releases under v2.5.0-pre).
+git tag v2.5.0-pre
+git push origin main v2.5.0-pre
+```
+
+The `-pre` suffix keeps the build out of `/releases/latest` so end-users on v2.4.0 don't auto-prompt to upgrade until acceptance passes.
+
+**Acceptance + promote**:
+1. Operator downloads the v2.5.0-pre Windows .exe from GitHub Releases.
+2. Operator runs the focused 4-tier checklist in **`OPERATOR_QA_v2.5.0.md`** (extracted from the 21 steps above into Pre-flight → Smoke (15 min) → 161 GB run (4 hours unattended) → UI (30 min) → optional negative tests). Tier 1 + 2 + 3 are mandatory for ship; Tier 4 is "try to break it on purpose" and not blocking.
+3. Findings logged to `specs/020-v2.5.1-field-findings/spec.md` → "Operator-reported findings". Don't keep findings in chat scrollback — they get lost.
+4. After clean acceptance: re-tag without the `-pre` suffix.
+
+```bash
+git tag v2.5.0          # same commit as v2.5.0-pre
+git push origin v2.5.0
+```
+
+GitHub Actions builds again, uploads `v2.5.0` zip to Releases, and the in-app update prompt now points operators on v2.4.0 to v2.5.0.
 
 ### Recovery procedures (if something breaks after promote)
 

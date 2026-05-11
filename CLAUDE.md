@@ -91,9 +91,9 @@ This is NOT a production deployment with real operator history at stake. Each te
 
 What IS in scope, always: bytes on disk. Source SD card content (typed-confirmation-gated erase, never automatic) and destination video files (`/XN /XC /XO` + executor-side delete gating + optional SHA-256 verify). Hash mismatch handling, source-data invariants, destination-overwrite guards, and the human-in-the-loop principle are non-negotiable regardless of MVP status. Defensive thinking should focus there.
 
-## Current State (as of 2026-05-08)
+## Current State (as of 2026-05-11)
 
-### Completed Features (13 spec-kit features)
+### Completed Features (19 spec-kit features)
 
 | Feature | Branch | Tasks | Status |
 |---------|--------|-------|--------|
@@ -114,13 +114,40 @@ What IS in scope, always: bytes on disk. Source SD card content (typed-confirmat
 | 016 - Graceful Shutdown Race Hardening | merged into v2.4.0 | n/a | ✅ Complete (bundled) |
 | 017A - Executor Correctness (data-safety pass) | `017-executor-correctness` | implementation complete | 🟡 v2.5.0-pending QA |
 | 017B - UX Restructuring | `017-ux-restructuring` | implementation complete | 🟡 v2.5.0-pending QA |
+| 018 - Pre-tag Hardening | `018-pre-tag-hardening` | 28/28 | 🟡 v2.5.0-pending QA |
+| 019 - Workflow Integrity Hardening | `019-workflow-integrity-hardening` | 40/46 | 🟡 v2.5.0-pending QA |
+| 020 - v2.5.1 Field Findings | `019-workflow-integrity-hardening` (skeleton) | n/a yet | ⚪ slot pre-created, populate post-acceptance |
 
-**Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions building Windows .exe)
+**Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions built Windows .exe)
 **Previous release**: v2.3.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 392 (390 across 014 + 015 + 016 bundles)
-**In flight (v2.5.0)**: operator's 2026-05-08 Windows test exposed three executor blockers (PowerShell positional-args cascade, 0/27 progress freeze, hash-failure-treated-as-job-failure) PLUS three UX failures (open-all-the-time panels, filter-pill wrap, fragile cross-job history). 017A is the executor-correctness half; 017B is the UX restructuring half; both ship under the v2.5.0 tag. Schema bumped to v8: `VerifyStatus` enum (5 states: pending/verified/mismatch/unverified/notVerified), `FailureKind` enum, `Job.parentJobId`, `Job.unverifiedFiles`, `JobFile.forceDestDeleteApproved`, `AppSettings.sourcesPanelCollapsed`. **20 Codex adversarial-review rounds** across both branches; cumulative findings: 4 P1, ~32 P2, 1 documented FP. Awaiting operator Windows acceptance (T067) before tagging `v2.5.0`.
+**Total tasks implemented**: 461 (392 through v2.4.0 + 069 across 017A + 017B + 018 + 019)
 
-> **QA status**: T114 (Windows manual QA) is the operator's responsibility on the workstation. Update prompt is gated by Constitution Principle VI — never silent — so operators see and approve the v2.3 → v2.4 transition before applying.
+**In flight (v2.5.0)**: four feature branches implementation-complete and merge-ready, awaiting the documented merge sequence + operator Windows acceptance before tagging.
+
+The v2.5.0 release scope grew through three pressures, each captured in its own feature:
+
+1. **017A + 017B** (operator's 2026-05-08 Windows test failure). Three executor blockers (PowerShell positional-args cascade, 0/27 progress freeze, hash-failure-treated-as-job-failure) PLUS three UX failures (open-all-the-time panels, filter-pill wrap, fragile cross-job history). 017A is the executor-correctness half; 017B is the UX restructuring half. Schema bumped to v8.
+2. **018** (pre-tag hardening). Focused concurrency / atomicity / freshness pass before tagging — per-file retry atomicity, typed-gate phrase enforcement, chain-dedup transactional gate, FK pragma in beforeOpen, JOIN-based self-healing of `unverifiedFiles`, orphaned staging-dir cold-start sweep with `host=`-only liveness check.
+3. **019** (workflow-integrity hardening, holistic threat-model audit). The operator's question after 018 — "what next to make sure we have done everything we could to make this bulletproof for going to production with real video data" — seeded a holistic audit (parallel Opus + Codex agents, same 5-tier framework) that caught **5 convergent workflow-level invariants 25 incremental review rounds had missed**. F-1 (drive-letter remap on reinsert), F-2 (erase-time card-content reconciliation), F-3 (source-side symlink guard), F-4 (forceDestDeleteApproved clear ordering), F-5 (HandBrake compression staging-dir convention). +3 bundled defenses. Schema bumped to v9 (`Job.sourceDriveSerial` with sentinel-backfill `'__legacy_v8__'` for v8 rows in a single transaction).
+
+**27 Codex adversarial-review rounds** total across all four branches (017A: 6, 017B: 9, 018: 4, 019: 8). Cumulative findings: ~7 P1, ~45 P2, 1 documented FP — all resolved or explicitly rejected with rationale. Round-27b (the final review) returned **0 P1**; only P2/P3 — diminishing-returns territory.
+
+**Test count**: 161/161 passing on `019-workflow-integrity-hardening`. `flutter analyze` clean.
+
+**Direction**: stop reviewing pre-ship; let the operator field-test. The cycle of "one more review will catch it" hits real diminishing returns past round-27b. The actual ship-gate is the 21-step Windows acceptance in `RELEASE_NOTES_v2.5.0.md` (13 baseline from 017 + 8 019-specific), not Codex round 28. Issues found in the field bundle into v2.5.1.
+
+**Merge sequence** (documented in RELEASE_NOTES_v2.5.0.md "Pre-release"):
+```
+main ← 017-executor-correctness ← 017-ux-restructuring ← 018-pre-tag-hardening ← 019-workflow-integrity-hardening
+                                                                                    ↓
+                                                                               tag v2.5.0-pre
+                                                                                    ↓
+                                                                          operator runs 21-step acceptance
+                                                                                    ↓
+                                                                               tag v2.5.0 (promote)
+```
+
+> **QA status**: Operator-run on the Windows workstation; no autonomous gate beyond the green CI build. Update prompt is gated by Constitution Principle VI — never silent.
 
 ### What Works
 
@@ -272,6 +299,21 @@ Feature 018 was the pre-tag hardening pass before v2.5.0. Across 24 Codex advers
 
 - **Sweep depends on InstanceLock + sweep-runs-first (`lib/main.dart`)** — `sweepOrphanedStagingDirs` runs immediately after `recoverStaleJobs` and BEFORE `JobQueueService` construction. Two upstream invariants make the simplified host-only liveness check safe: (1) `InstanceLock` (`lib/utils/instance_lock.dart`) guarantees at most one Copiatorul3000 process per machine, AND (2) sweep is the first code path that touches `.tmp_robocopy_*` directories on cold start — no new markers are written until `JobQueueService` exists. Reordering startup so the sweep fires AFTER another process could have written markers, OR removing the InstanceLock, would re-open the false-positive deletion bugs Codex round-25 closed.
 
+### v9 (019) Load-Bearing Conventions
+
+Feature 019 was the holistic threat-model audit pass. Triggered by the operator's question after 018 ("what next to make sure we have done everything we could to make this bulletproof"); satisfied by parallel Opus + Codex audits each running the same 5-tier framework (source data loss / destination corruption / subprocess attack surface / state-counter correctness / operational resilience). 5 convergent findings (3 P1 + 2 P2) closed; 3 cheap defenses bundled. Schema bumped v8→v9: one new column `Job.sourceDriveSerial`, sentinel-backfilled for v8 rows.
+
+- **`Job.sourceDriveSerial` is fail-closed at create AND re-checked at transfer-resume (`lib/services/job_queue_service.dart::createBatchTransferJobs` + `_processJob` + `lib/ui/screens/create_job_screen.dart`)** — captured via `DriveService.getDriveIdentity` for every transfer / transferAndCompress job at creation; null OR empty serial REFUSES the job (single-card path) or reports `identityRefused` separately from `skipped` (batch path, Codex round-27b P2 #3). At transfer-resume, the executor re-checks via 5-branch logic: (a) sentinel `'__legacy_v8__'` → bypass with one-time-per-launch operator-visible banner via `QueueStateNotifier.operatorMessages`, (b) null on transfer-type job → bug indicator, pause, (c) real serial + current null → fail-closed pause "could not verify card identity", (d) real serial + current differs → pause with mismatch banner, (e) match → proceed. Without this rule, null could ambiguously mean "legacy v8 bypass" OR "v9 capture failed" — the round-27a backdoor that the migration sentinel only closes if v9 capture is itself fail-closed. `drive_identity_check_test.dart` (5 cases).
+- **Erase-eligibility rescans card content; refuses on unplanned files (`lib/ui/widgets/erase_drive_action.dart::unplannedFilesRefusalMessage`)** — `@visibleForTesting` pure function compares the planned source set against a fresh card scan via case-insensitive `p.canonicalize` + `toLowerCase`. Closes F-2 (operator queues batch, camera flushes one more clip 30s later, batch runs, operator clicks Erase — that new clip would be destroyed by an eligibility check that only verified PLANNED files). Diff is one-way: card-superset triggers refusal, card-subset does not (operator-driven deletion is permitted). Sample truncates at 5 with `...` ellipsis. `erase_rescan_test.dart` (6 cases).
+- **Source-side enumeration uses `followLinks: false` + per-entry `FileSystemEntity.type` check (`lib/services/drive_service.dart::listVideoFiles` + `prepTestCards` + `lib/services/job_queue_service.dart::createBatchTransferJobs`)** — mirrors the 017B dest-side hardening to the source side. Closes F-3: a junction at source pointing into the destination tree creates an enumeration cycle; a symlink to an unrelated path silently expands the planned set outside the SD card. Symlinks/junctions are SKIPPED + logged; cycles complete in bounded time. `source_symlink_guard_test.dart` (3 cases).
+- **`clearForceDestDeleteApproved` happens AFTER `markFileCompleted(verified: false)`, NOT at top of iteration (`lib/services/job_queue_service.dart::_processTransfer`)** — closes F-4: top-of-loop clear would race with operator-driven Retry banner clicks landing AFTER the iteration started but BEFORE robocopy returned. The clear must follow the post-copy state write so single-use semantics fire only after the executor has actually consumed the approval. Mirrored in BOTH SHA-256 and size-mode paths. Recovery branch ALSO clears stale `forceDestDeleteApproved` on every rescued file (Codex round-27b P3 #5) so a crash-survived flag can't fire implicitly on next launch — Constitution Principle I requires a fresh operator click. `force_delete_deferred_clear_test.dart` (4 cases).
+- **HandBrake compression uses staging-dir convention symmetric with transfer pipeline (`lib/services/compression_service.dart::compressFile`)** — writes into `<dirname>/.tmp_handbrake_copiatorul3000_<tag>/`, then `File.rename` to the final path on success. `.live` marker with `host=${Platform.localHostname}` + `pid` + `exe`; rename wrapped in try/catch with cleanup on failure; the more-specific prefix narrows sweep false-positive surface vs. a bare `.tmp_handbrake_*` matcher. `startup_sweep` matcher accepts BOTH `.tmp_robocopy_*` AND `.tmp_handbrake_copiatorul3000_*`, AND walks recursively (Codex round-27b P2 #4) so nested staging dirs under the compression hierarchy are discoverable — `<root>/<sub>/.tmp_handbrake_*/` would otherwise be missed. `handbrake_staging_test.dart` (4 cases).
+- **Slack `_getWebhookUrl()` runs INSIDE `_send`'s try block (`lib/services/slack_service.dart`)** — settings-load failures in the Slack helper must NOT propagate to the main pipeline (Constitution Principle V — observability never blocks data path). Previously thrown above the try block. `slack_settings_failure_test.dart` (1 case) verifies SettingsDao throw on getSettings is swallowed by every notify call.
+- **SHA-256 hashing prepends `\\?\` for paths > 240 chars (`lib/services/transfer_service.dart::longPathPrefixed`)** — `@visibleForTesting` top-level helper. PowerShell 5.1 + `Get-FileHash -LiteralPath` requires the long-path prefix above the Windows MAX_PATH boundary. Threshold is 240 (not 260) for headroom on the suffix added by hash output formatting. `long_path_hash_test.dart` (4 cases) pins the script-shape transformation.
+- **`drive_service::_runPowerShell` enforces length-3 argv via runtime guard, not assert (`lib/services/drive_service.dart`)** — `if (...) throw StateError(...)` because `flutter build windows --release` strips Dart asserts. Extracted as `@visibleForTesting static void checkPsArgvShape(args, tag)` so the regression test can call it directly without a real PowerShell subprocess. CI grep guard added to `.github/workflows/build.yml` (Codex round-27b P3 #6) — `! grep -rn '\$args\[' lib/` fails the build on any reintroduction of the v2.4.0 PowerShell cascade pattern. `runpowershell_argv_guard_test.dart` (5 cases).
+- **`createBatchTransferJobs` return shape carries `identityRefused` distinctly from `skipped` (`lib/services/job_queue_service.dart`)** — Codex round-27b P2 #3. Operator UI surfaces "refused N cards (could not read serial — re-insert and retry)" separately from "skipped N empty cards" so they know whether to re-insert (capture failed) or accept (truly empty). Consumers must destructure the new fields: `({int created, int skipped, int identityRefused, List<String> identityRefusedPaths, List<String> conflicts})`.
+- **`recoverStaleJobs` clears stale `forceDestDeleteApproved` on every rescued file (`lib/database/daos/job_dao.dart`)** — Codex round-27b P3 #5. The flag is operator-attribution (set by an explicit "Retry" click from the verify-mismatch banner) with single-use semantics; if the app crashed AFTER arming but BEFORE consumption, the flag would fire implicitly on next launch. The clear is inside the recovery transaction alongside the inProgress→pending file resets.
+
 ### Known Issues (from review-report-v2.md)
 
 **Critical (fixed in 007-critical-bug-fixes)**:
@@ -338,13 +380,23 @@ None known as of v2.4.0. The robocopy overwrite-guard CRITICAL flagged in the v2
 Deferred to v2.5 (no operator-visible behavior change):
 - **`ConfirmationDialog.showCritical` consolidation for the SD erase path.** The erase dialog has its own bespoke typed-confirmation gate (`erase_drive_action.dart`) that satisfies FR-047 in spirit but doesn't route through the canonical primitive added in Phase 14. Bundle with the next feature that ships a destructive action (currently planned: NAS upload "Disconnect & wipe local cache" in v3.0).
 
+Deferred to v2.5.1 (single-auditor-only findings from 019 audit; not load-bearing for the bytes-on-disk contract):
+- **F-D1** (Codex-only, P3): size-mode TOCTOU between robocopy success and `verifyTransfer` size read — the destination could be modified by an external process in the gap. Probability is vanishingly low (operator's own machine, dest path freshly created), and the SHA-256 path is already TOCTOU-immune. Bundle when the next feature touches `_processTransfer`.
+- **F-D3** (Opus-only, P3): startup_sweep prefix collision — an unrelated tool that creates `.tmp_robocopy_*` directories in the same destination root would have those dirs deleted (foreign-host marker would save them, but absent-marker would not). Mitigated by the more-specific `.tmp_handbrake_copiatorul3000_*` prefix; the bare `.tmp_robocopy_*` matcher is kept for backwards compat with 018-era staging dirs. Tighten when 018 staging dirs are guaranteed to have aged out.
+- **F-D4** (Codex-only, P3): cross-machine NAS write race — two operators on different machines targeting the same NAS root could both write `.live` markers in the same staging dir name (microsecond tag collision is astronomically unlikely but theoretically possible). The host check on read is the load-bearing primitive; collision-by-tag would require a v2.5.1 UUID upgrade to the staging tag.
+- **F-D5** (Opus-only, P3): DST/clock-jump mtime cutoff — `Job.createdAt` baseline TOCTOU guard could mis-classify a foreign intrusion as own-partial if the clock jumps backward (DST end, NTP correction). The window is small (1h DST shift); operator-visible attack surface is essentially zero on a single-operator workstation.
+- **F-D8** (Codex-only, P3): `eraseDrive` `Remove-Item -LiteralPath` already migrated to inline-script pattern in 017A. The remaining concern was a hypothetical DCIM subdirectory with embedded special chars surviving the erase — re-verify after the 019 source-side symlink guard if a real case appears in the field.
+
+Deferred to v3.0:
+- Selective file copy (PM-10) — operator can't pick a subset of files to transfer; entire DCIM tree is enumerated. Multi-camera shoots where a subset is unusable would benefit.
+
 ### Review & Quality Process
 
 - **Codex plugin installed** (`openai/codex-plugin-cc`) — enables `/codex:adversarial-review` and `/codex:rescue` for GPT-powered code reviews
 - **Adversarial review pattern**: after implementing a feature, run a review before merging. Has caught command injection, data loss bugs, and Constitution violations.
 - **Known false positives**: QA-5 (dropdown param correct in Flutter 3.41.9), QA-7 (Dart event loop makes race guard correct)
 
-#### Codex Adversarial-Review Cadence (validated in 015 + 016)
+#### Codex Adversarial-Review Cadence (validated in 015 + 016, refined through v2.5.0)
 
 The pattern that worked across this session for data-safety-critical features:
 
@@ -354,12 +406,23 @@ The pattern that worked across this session for data-safety-critical features:
 - The reviewer's CANNOT VERIFY findings still require investigation; they may be wrong, but they're rarely worthless. Resolve them by reading the code, not by handwaving.
 - If the reviewer flags 9 findings, applying 8 of them with explicit pushback on the 9th is normal and good. Track which were rejected and why so future sessions don't relitigate.
 
-### v3.0 Roadmap
+#### Stop conditions — when reviewing more is the wrong move (lesson from v2.5.0)
 
-- **v2.5 (next release)**: NAS upload automation. Bundle `ConfirmationDialog.showCritical` consolidation for the SD-erase path so the bespoke typed-confirmation in `erase_drive_action.dart` finally routes through the canonical primitive. NAS feature ships its own "Disconnect & wipe local cache" destructive action — same dialog primitive should serve both.
+The v2.5.0 cycle taught us a hard lesson: incremental adversarial reviews hit diminishing returns past a certain point, and chasing "one more review" is a trap that delays operator field-testing without producing better code.
+
+- **Stop when the P1 trajectory collapses.** When two consecutive rounds return zero P1 (round-27b on 019 was the explicit example), additional same-framing rounds will mostly produce P3-grade nits. Going from 27 to 28 to 29 rounds doesn't catch the next class of bug — a different lens does.
+- **Holistic > incremental for workflow-level invariants.** 25 incremental review rounds on 017A + 017B + 018 missed the 5 workflow-level F-1 through F-5 findings that 019's holistic threat-model audit caught in one pass. If incremental rounds are returning P3-only, the next high-value move is a different framing (e.g. a 5-tier threat-model audit covering the whole codebase, parallel-agent same-prompt convergence) — not another round of the same.
+- **Real-world is the load-bearing gate, not review #N+1.** Past the diminishing-returns point, the bug class that matters is "what real Windows operator workflow with real bytes on disk will surface that no review framework predicted." Ship to operator (via `-pre` tag), let them run the 21-step acceptance, fold what they find into v2.5.1.
+- **The cycle warning sign**: when you find yourself saying "we're 1 review away from solid" for the third time on the same release, that's not the truth — that's the cycle. Ship the `-pre` tag instead.
+
+### Roadmap
+
+- **v2.5.0 (in flight, awaiting operator acceptance)**: workflow-integrity hardening (017A + 017B + 018 + 019 bundle). NAS upload was originally planned for this slot but slipped — the operator's 2026-05-08 Windows test failure triggered a data-safety pass that consumed the release.
+- **v2.5.1 (post-operator-acceptance)**: anything the operator finds during the 21-step Windows acceptance. Plus the 5 explicitly-deferred 019 P3 findings (F-D1 size-mode TOCTOU, F-D3 sweep prefix collision, F-D4 cross-machine NAS write race, F-D5 DST/clock-jump mtime, F-D8 eraseDrive Remove-Item -LiteralPath re-verify) — each documented in "Open Bugs → Deferred to v2.5.1".
+- **v2.6.0 (next feature release)**: NAS upload automation. Ships its own "Disconnect & wipe local cache" destructive action; bundle `ConfirmationDialog.showCritical` consolidation for the SD-erase path at the same time so both routes go through the canonical primitive.
   - Convention going forward: any new destructive action defaults to `ConfirmationDialog.showCritical`. Bespoke gates require a written reason.
 - **v3.0 (from PM review)**:
-  - **Tier 1**: auto-detect SD cards (replace polling), dashboard stats, ~~SHA-256 verification~~ (done in 011), ~~NAS upload~~ (now v2.5).
+  - **Tier 1**: auto-detect SD cards (replace polling), dashboard stats, ~~SHA-256 verification~~ (done in 011), ~~NAS upload~~ (now v2.6.0).
   - **Tier 2**: Job templates, scheduled jobs, multi-machine sync, selective file copy (PM-10).
   - **Tier 3**: Cloud backup, metadata extraction, team activity feed.
 
@@ -381,12 +444,16 @@ git push origin vX.Y.Z
 ## Key Files for Context
 
 - `.specify/memory/constitution.md` — project principles (6 rules)
-- `specs/006-review-findings/review-report-v2.md` — latest review (30 issues + roadmap)
+- `RELEASE_NOTES_v2.5.0.md` — full operator-facing changelog + 21-step Windows acceptance + merge sequence
+- `OPERATOR_QA_v2.5.0.md` — focused 4-tier acceptance checklist extracted for the operator's actual workstation use (Pre-flight → Smoke → 161 GB run → UI → optional negative tests). Uses checkbox markdown so progress can be tracked.
+- `specs/019-workflow-integrity-hardening/` — most recent feature spec, plan, tasks, holistic-audit framework
+- `specs/018-pre-tag-hardening/plan.md` — pre-tag concurrency / atomicity invariants
+- `specs/006-review-findings/review-report-v2.md` — historical review (30 issues + roadmap, all closed)
 - `specs/001-video-pipeline-automation/spec.md` — original feature spec
 - `specs/001-video-pipeline-automation/plan.md` — original architecture plan
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/018-pre-tag-hardening/plan.md
+specs/019-workflow-integrity-hardening/plan.md
 <!-- SPECKIT END -->
