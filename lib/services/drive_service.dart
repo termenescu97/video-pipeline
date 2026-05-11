@@ -52,7 +52,8 @@ class DriveService {
   /// The invariant: every PS subprocess call MUST pass exactly
   /// `['-NoProfile', '-Command', script]` to PowerShell. The 017A
   /// length-3 argv root cause was that `-Command` silently drops
-  /// trailing argv elements; `$args[0]` was never populated, so
+  /// trailing argv elements after the script string, so the PowerShell
+  /// dollar-args positional indexing was never populated and
   /// operator-supplied paths were dropped on the floor. Re-opening
   /// this hole at any helper site re-creates the v2.4.0 cascade.
   ///
@@ -85,7 +86,8 @@ class DriveService {
     // The invariant: every PS subprocess call MUST pass exactly
     // `['-NoProfile', '-Command', script]` to PowerShell. The 017A
     // length-3 argv root cause was that `-Command` silently drops
-    // trailing argv elements; `$args[0]` was never populated, so
+    // trailing argv elements after the script string, so the PowerShell
+    // dollar-args positional indexing was never populated and
     // operator-supplied paths were dropped on the floor. Re-opening
     // this hole at any helper site re-creates the v2.4.0 cascade.
     _checkPsArgvShape(args, tag);
