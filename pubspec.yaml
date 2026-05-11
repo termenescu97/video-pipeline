@@ -30,6 +30,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # 017 (R-A6): grapheme-cluster-safe string truncation for LogService
+  # subprocess stderr handling. Already a transitive dep of Flutter; promoted
+  # to a direct dep so the lint passes and the import is explicit.
+  characters: ^1.4.0
 
   # Windows APIs for drive detection
   win32: ^5.0.0

@@ -13,6 +13,7 @@ import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
 import '../../services/job_queue_service.dart';
+import '../../services/planned_file.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
@@ -59,7 +60,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   Timer? _planDebounce;
   int _planScanGen = 0;
   String? _scannedSourcePath;
-  List<_PlannedFile> _scannedFiles = const <_PlannedFile>[];
+  List<PlannedFile> _scannedFiles = const <PlannedFile>[];
   int _scannedTotalBytes = 0;
   bool _planScanInProgress = false;
   int? _planFileCount;
@@ -156,7 +157,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         _planConflictCount = null;
         _planLongPathCount = null;
         _scannedSourcePath = null;
-        _scannedFiles = const <_PlannedFile>[];
+        _scannedFiles = const <PlannedFile>[];
         _scannedTotalBytes = 0;
       });
       return;
@@ -181,12 +182,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       final scan = await driveService.listVideoFiles(sourcePath);
       if (gen != _planScanGen || !mounted) return;
       var totalBytes = 0;
-      final files = <_PlannedFile>[];
+      final files = <PlannedFile>[];
       for (final entity in scan.files) {
         try {
           final size = await File(entity.path).length();
           totalBytes += size;
-          files.add(_PlannedFile(
+          files.add(PlannedFile(
             sourcePath: entity.path,
             destinationPath: '', // populated in destination pass
             fileName: p.basename(entity.path),
@@ -276,7 +277,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
       // the cache is keyed on path alone. Clear the cache on every
       // refresh so the next recompute re-walks the source.
       _scannedSourcePath = null;
-      _scannedFiles = const <_PlannedFile>[];
+      _scannedFiles = const <PlannedFile>[];
       _scannedTotalBytes = 0;
     });
     _schedulePlanRecompute();
@@ -868,19 +869,29 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
     // proceed. No mid-flow modal.
 
     // Build planned file list with sizes.
-    final planned = <_PlannedFile>[];
+    final planned = <PlannedFile>[];
     var totalBytes = 0;
     for (final entity in videoFiles) {
       final size = await File(entity.path).length();
       totalBytes += size;
       final relativePath = p.relative(entity.path, from: sourcePath);
-      planned.add(_PlannedFile(
+      planned.add(PlannedFile(
         sourcePath: entity.path,
         destinationPath: p.join(effectiveDestination, relativePath),
         fileName: p.basename(entity.path),
         fileSize: size,
       ));
     }
+
+    // 017 (T058 / Codex H3 + round-4 P2 #2): break case-only NTFS
+    // collisions WITHIN the planned set before conflict preflight. The
+    // batch path runs the equivalent check via
+    // JobQueueService._normalizeCaseCollisionsAcrossPlans; this is the
+    // single-job mirror. Without it, two source files like
+    // `DCIM/IMG_001.MOV` and `dcim/img_001.mov` from a case-sensitive
+    // source land at the same NTFS destination key and silently
+    // overwrite each other mid-batch.
+    jobQueueService.normalizeCaseCollisions([planned]);
 
     // Check disk space before creating.
     if (_destinationFreeSpace != null &&
@@ -1097,8 +1108,8 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   /// 015: `overwrite` stamps `wasOverwriteApproved` for files whose
   /// dest exists at preflight (was a no-op pre-015). The executor
   /// honors that flag absolutely so /XN /XC /XO can be always-on.
-  List<_PlannedFile> _applyResolution(
-      List<_PlannedFile> files, ConflictResolution resolution) {
+  List<PlannedFile> _applyResolution(
+      List<PlannedFile> files, ConflictResolution resolution) {
     if (resolution == ConflictResolution.overwrite) {
       // Stamp every file whose dest currently exists; leave the rest
       // unchanged so a TOCTOU intrusion onto a previously-empty dest
@@ -1109,7 +1120,7 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               : f)
           .toList();
     }
-    final kept = <_PlannedFile>[];
+    final kept = <PlannedFile>[];
     for (final f in files) {
       final exists = File(f.destinationPath).existsSync();
       if (!exists) {
@@ -1137,40 +1148,9 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
   }
 }
 
-/// Internal: a single planned destination prior to job creation.
-/// TODO(refactor): consolidate with job_queue_service._PlannedFile —
-/// see specs/014-ui-redesign Codex Phase 14 review.
-class _PlannedFile {
-  final String sourcePath;
-  final String destinationPath;
-  final String fileName;
-  final int fileSize;
-
-  /// 015: stamped `true` by `_applyResolution` when the operator chose
-  /// `Overwrite` AND this file's dest existed at preflight time.
-  final bool wasOverwriteApproved;
-
-  const _PlannedFile({
-    required this.sourcePath,
-    required this.destinationPath,
-    required this.fileName,
-    required this.fileSize,
-    this.wasOverwriteApproved = false,
-  });
-
-  _PlannedFile copyWith({
-    String? destinationPath,
-    bool? wasOverwriteApproved,
-  }) =>
-      _PlannedFile(
-        sourcePath: sourcePath,
-        destinationPath: destinationPath ?? this.destinationPath,
-        fileName: fileName,
-        fileSize: fileSize,
-        wasOverwriteApproved:
-            wasOverwriteApproved ?? this.wasOverwriteApproved,
-      );
-}
+/// 017 (T026): the duplicate `_PlannedFile` definition that lived here
+/// has been consolidated into `lib/services/planned_file.dart` per Codex
+/// M7 + R-A9. Importing the shared `PlannedFile` from there.
 
 // _FreeSpaceSentence retired in US8 (T067-T069). The verdict sentence
 // now lives inside lib/ui/widgets/plan_summary_panel.dart (private

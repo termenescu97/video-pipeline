@@ -119,8 +119,18 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// (crash, power loss, kill). Moves them and their in-progress files back
   /// to a resumable state so the operator can review and manually resume.
   ///
-  /// Per the spec, recovery moves to [JobStatus.paused] (not [JobStatus.queued])
-  /// so the operator must explicitly resume after reviewing.
+  /// 017 (T046-T048, FR-006/FR-007/FR-018): also detects
+  /// `status=completed && verifyStatus=pending` rows (NEW v8 stale state —
+  /// abandoned shutdown mid-verify). These stay at `status=completed`;
+  /// `_processTransfer`'s recovery branch (T046) re-enters verify-only
+  /// on next launch — bytes are NOT re-credited.
+  ///
+  /// After all stale-row mutations, re-derives Job aggregate counters
+  /// once per rescued job from per-row state (FR-018).
+  ///
+  /// Per the spec, recovery moves to [JobStatus.paused] (not
+  /// [JobStatus.queued]) so the operator must explicitly resume after
+  /// reviewing.
   Future<void> recoverStaleJobs() async {
     // Capture the rows BEFORE the update so we know which jobs we
     // touched (and so the log entry has source/dest paths). Reading
@@ -129,6 +139,12 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     final rescuedJobs = await (select(jobs)
           ..where((t) => t.status.equalsValue(JobStatus.inProgress)))
         .get();
+
+    // 017 (T046, FR-018): the rescued-job set per the spec's union
+    // definition — jobs.status=inProgress UNION jobs with files in
+    // inProgress UNION jobs with files in completed+verifyStatus=pending.
+    // Used at the end for per-job counter re-derivation.
+    final rescuedJobIdSet = await getRescuedJobIds();
 
     await transaction(() async {
       await (update(jobs)
@@ -145,6 +161,36 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           status: Value(FileStatus.pending),
         ),
       );
+
+      // 017 (T046, FR-006): copied+pending verify rows stay at
+      // status=completed — don't reset (would lose copy progress).
+      // _processTransfer's loop has a recovery branch that re-runs
+      // verify-only for these. We don't mutate them here.
+      //
+      // Codex round-5 P2 #1: but the parent job needs to land in a
+      // schedulable state — getNextQueuedJob filters out completed/
+      // failed jobs, so a rescued job whose ONLY stale signal is a
+      // completed+pending verify row would never re-enter
+      // _processTransfer. Flip such jobs to paused so the operator
+      // can explicitly resume from history.
+      if (rescuedJobIdSet.isNotEmpty) {
+        final rescuedIds = rescuedJobIdSet.toList();
+        await (update(jobs)
+              ..where((t) =>
+                  t.id.isIn(rescuedIds) &
+                  (t.status.equalsValue(JobStatus.completed) |
+                      t.status.equalsValue(JobStatus.failed))))
+            .write(const JobsCompanion(status: Value(JobStatus.paused)));
+      }
+
+      // 017 (T048, FR-018): re-derive Job-level counters once per
+      // rescued job after all stale-row mutations. Iterates the
+      // union set; safe to call recomputeCountersFromFiles inside
+      // the same transaction (Drift uses SAVEPOINT semantics so
+      // nested transaction calls do not deadlock).
+      for (final jobId in rescuedJobIdSet) {
+        await recomputeCountersFromFiles(jobId);
+      }
     });
 
     _recoveredJobIds
@@ -159,13 +205,26 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
       logService?.warning(
         'Crash recovery: rescued ${rescuedJobs.length} in-progress '
         'job(s) to paused state',
+        phase: LogPhase.recover,
       );
       for (final job in rescuedJobs) {
         logService?.warning(
           '  Recovered job #${job.id}: '
           '${job.sourcePath} → ${job.destinationPath}',
+          jobId: job.id,
+          phase: LogPhase.recover,
         );
       }
+    }
+    // 017 (T046): summary of the broader rescued set (includes the
+    // copied+pending case which doesn't appear in `rescuedJobs`).
+    final extraRescued = rescuedJobIdSet.length - rescuedJobs.length;
+    if (extraRescued > 0) {
+      logService?.info(
+        'Recovery: re-derived counters for $extraRescued additional job(s) '
+        'with copied-but-unverified files (FR-018)',
+        phase: LogPhase.recover,
+      );
     }
   }
 
@@ -270,6 +329,74 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     );
   }
 
+  /// 017 (T031, FR-003): bump Job.unverifiedFiles by 1 when a file's
+  /// hash subsystem failed (verifyStatus=unverified). Verified and
+  /// mismatched counts are derived from JobFile rows on read — no
+  /// stored column for those.
+  Future<void> incrementUnverified(int jobId) async {
+    await customStatement(
+      'UPDATE jobs SET unverified_files = unverified_files + 1 WHERE id = ?',
+      [jobId],
+    );
+  }
+
+  /// 017 (T032, FR-007/FR-018): re-derive Job-level aggregate counters
+  /// from per-file state. Called once per rescued job at the END of
+  /// recoverStaleJobs (after all stale-row mutations) so counters
+  /// match the persisted truth, regardless of which stale states were
+  /// detected. Single statement — Drift transaction is the caller's
+  /// responsibility if multi-job batching is needed.
+  Future<void> recomputeCountersFromFiles(int jobId) async {
+    await customStatement('''
+      UPDATE jobs
+      SET
+        completed_files = (
+          SELECT COUNT(*) FROM job_files
+          WHERE job_id = ? AND status = 'completed'
+        ),
+        completed_bytes = COALESCE((
+          SELECT SUM(file_size) FROM job_files
+          WHERE job_id = ? AND status = 'completed'
+        ), 0),
+        unverified_files = (
+          SELECT COUNT(*) FROM job_files
+          WHERE job_id = ? AND verify_status = 'unverified'
+        )
+      WHERE id = ?
+    ''', [jobId, jobId, jobId, jobId]);
+  }
+
+  /// 017 (T033, FR-018): the rescued-job set for recovery. Union of:
+  ///   (a) Job.status='inProgress' (existing v2.4.0 path)
+  ///   (b) jobs with at least one JobFile in inProgress state (existing)
+  ///   (c) jobs with at least one JobFile in completed+verifyStatus=pending
+  ///       (NEW v8 — abandoned shutdown mid-verify)
+  ///
+  /// Returns deduplicated job IDs. Caller iterates and calls
+  /// recomputeCountersFromFiles per ID after stale-row mutations.
+  Future<Set<int>> getRescuedJobIds() async {
+    // Codex round-3 P2 #1: the third UNION arm is restricted to SHA-256
+    // jobs. Size-mode jobs leave verifyStatus=pending forever (size
+    // checks happen inline via TransferService.verifyTransfer; there is
+    // no SHA-256 phase to abandon mid-flight), so including them would
+    // cause every completed size-mode row to be re-rescued on every
+    // launch.
+    final rows = await customSelect(
+      '''
+      SELECT DISTINCT id AS job_id FROM jobs WHERE status = 'inProgress'
+      UNION
+      SELECT DISTINCT job_id FROM job_files WHERE status = 'inProgress'
+      UNION
+      SELECT DISTINCT jf.job_id FROM job_files jf
+        INNER JOIN jobs j ON j.id = jf.job_id
+        WHERE jf.status = 'completed'
+          AND jf.verify_status = 'pending'
+          AND j.verification_mode = 'sha256'
+      ''',
+    ).get();
+    return rows.map((r) => r.read<int>('job_id')).toSet();
+  }
+
   /// Get a single job by ID.
   Future<Job?> getJob(int jobId) {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
@@ -325,19 +452,53 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
           completedBytes: Value(0),
         ),
       );
-      // Reset failed files to pending.
+      // 017 (Codex round-3 P2 #2): files that previously failed with
+      // failureKind='verifyMismatch' (either v8 forward-operation or
+      // v7→v8 migrated) get forceDestDeleteApproved=true on this
+      // retry pass. Without it, the same-size corrupt destination
+      // would be skipped by the size-match short-circuit and re-
+      // verify the same bad bytes — infinite loop. Set BEFORE the
+      // axis-clear below so the column update lands on the same row.
+      await (update(db.jobFiles)
+            ..where(
+              (t) =>
+                  t.jobId.equals(jobId) &
+                  t.failureKind.equalsValue(FailureKind.verifyMismatch),
+            ))
+          .write(
+        const JobFilesCompanion(
+          forceDestDeleteApproved: Value(true),
+        ),
+      );
+      // Reset failed files AND completed-but-mismatched rows to
+      // pending. Codex round-4 P2 #2: completed+verifyMismatch rows
+      // are the FR-004 "bytes on disk, hash differs" state; without
+      // including them in the reset, a job-level Retry would leave
+      // those rows at status=completed, _processTransfer would skip
+      // them before consuming forceDestDeleteApproved, and the
+      // corrupt destinations would never be replaced.
+      //
+      // Verify axis cleared so re-run produces fresh hashes;
+      // failureKind reset to none so a subsequent retry without a
+      // fresh mismatch doesn't keep arming forceDestDeleteApproved.
       await (update(db.jobFiles)
             ..where(
               (t) =>
                   t.jobId.equals(jobId) &
                   (t.status.equalsValue(FileStatus.failed) |
-                      t.status.equalsValue(FileStatus.pending)),
+                      t.status.equalsValue(FileStatus.pending) |
+                      t.failureKind
+                          .equalsValue(FailureKind.verifyMismatch)),
             ))
           .write(
         const JobFilesCompanion(
           status: Value(FileStatus.pending),
           errorMessage: Value(null),
           completedAt: Value(null),
+          verifyStatus: Value(VerifyStatus.pending),
+          failureKind: Value(FailureKind.none),
+          sourceHash: Value(null),
+          destinationHash: Value(null),
         ),
       );
     });

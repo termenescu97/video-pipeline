@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 
 import '../utils/constants.dart';
 import '../utils/process_runner.dart';
+import '../utils/ps_escape.dart';
 import '../utils/robocopy_parser.dart';
 import 'log_service.dart';
 
@@ -38,6 +39,14 @@ class TransferService {
 
   /// Transfer a single file from source to destination using robocopy.
   /// Returns true on success, false on failure.
+  ///
+  /// 017 (Codex round-5 P1): when [destinationFile]'s basename differs
+  /// from [sourceFile]'s basename, robocopy is run with the source
+  /// basename (robocopy can't rename during copy) and a post-copy
+  /// File.rename moves the result to the requested name. This is the
+  /// load-bearing path for the case-only NTFS collision normalization
+  /// (Codex H3); without it, a planned dest like `IMG_001_1.MOV` would
+  /// land at `IMG_001.MOV` and re-collide with the first occurrence.
   Future<bool> transferFile({
     required String sourceFile,
     required String destinationFile,
@@ -46,14 +55,15 @@ class TransferService {
 
     final sourceDir = p.dirname(sourceFile);
     final destDir = p.dirname(destinationFile);
-    final fileName = p.basename(sourceFile);
+    final sourceBasename = p.basename(sourceFile);
+    final destBasename = p.basename(destinationFile);
 
     _fileStartTime = DateTime.now();
     _fileTotalBytes = await File(sourceFile).length();
 
     final exitCode = await _processRunner.run(
       executable: 'robocopy',
-      arguments: [sourceDir, destDir, fileName, ...robocopyFlags],
+      arguments: [sourceDir, destDir, sourceBasename, ...robocopyFlags],
       onStdoutLine: (line) {
         final event = RobocopyParser.parseLine(line);
         if (event != null) onProgress?.call(event);
@@ -62,7 +72,25 @@ class TransferService {
 
     _fileStartTime = null;
     final result = RobocopyParser.parseExitCode(exitCode);
-    return result.success;
+    if (!result.success) return false;
+
+    // Post-copy rename when caller asked for a different basename
+    // (case-collision normalization, conflict-rename resolution). Done
+    // AFTER robocopy success so a failed copy doesn't leave the system
+    // in a half-renamed state.
+    if (sourceBasename != destBasename) {
+      try {
+        final copied = File(p.join(destDir, sourceBasename));
+        await copied.rename(destinationFile);
+      } on FileSystemException catch (e) {
+        logService?.error(
+          'Post-copy rename failed: $sourceBasename → $destBasename '
+          '(${e.message})',
+        );
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Kill any currently running transfer or hash subprocess.
@@ -87,19 +115,26 @@ class TransferService {
   Future<String?> computeFileHash(String filePath) async {
     if (!Platform.isWindows) return null;
 
+    // 017 (FR-001): caller-side validation. Empty path is a programmer error
+    // upstream; reject loudly rather than emitting an unparseable PS command.
+    if (filePath.isEmpty) {
+      logService?.error('computeFileHash called with empty path');
+      return null;
+    }
+
     final runner = ProcessRunner();
     _activeHashRunners.add(runner);
     final captured = StringBuffer();
     final stderr = StringBuffer();
     try {
-      final exitCode = await runner.run(
-        executable: 'powershell',
-        arguments: [
-          '-NoProfile',
-          '-Command',
-          r'(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash',
-          filePath,
-        ],
+      // 017 (R-A1): single-quoted -LiteralPath inside the -Command script
+      // string. PS single-quoted literals don't expand $var or backticks;
+      // doubling the only literal-special char (') closes injection. Length-3
+      // argv invariant enforced by runPowerShellInline.
+      final exitCode = await runner.runPowerShellInline(
+        tag: 'computeFileHash',
+        script:
+            "(Get-FileHash -LiteralPath '${escapePsLiteral(filePath)}' -Algorithm SHA256).Hash",
         onStdoutLine: (line) {
           final t = line.trim();
           if (t.isNotEmpty) captured.writeln(t);
@@ -110,12 +145,14 @@ class TransferService {
         },
       );
       if (exitCode != 0) {
-        // Final-review fix #7: surface the failure cause to the log
-        // so post-mortem can distinguish "permission denied" from
-        // "PowerShell missing" from "OOM".
+        // 017 (FR-012): pass raw stderr via subprocessStderr; LogService
+        // handles single-line truncation to 200 grapheme clusters.
+        // Distinguishes "permission denied" from "PS missing" without
+        // dumping a 6-line parser error.
         logService?.error(
-          'computeFileHash exit=$exitCode for "$filePath"'
-          '${stderr.isEmpty ? '' : ' — stderr: ${stderr.toString().trim()}'}',
+          'computeFileHash exit=$exitCode for "$filePath"',
+          phase: LogPhase.verify,
+          subprocessStderr: stderr.isEmpty ? null : stderr.toString(),
         );
         return null;
       }
@@ -125,17 +162,21 @@ class TransferService {
         logService?.error(
           'computeFileHash returned malformed output for "$filePath" '
           '(length=${hash.length}, expected 64)',
+          phase: LogPhase.verify,
         );
         return null;
       }
       return hash;
     } catch (e, st) {
       // Final-review fix #7: catch the exception detail (was `catch (_)`
-      // which lost the root cause). Log first three frames of stack so
-      // operator can hand the log to support without re-running.
+      // which lost the root cause). Stack frames passed via subprocessStderr
+      // so LogService truncates to one line — full stack would still be
+      // a multi-line dump otherwise.
+      final stackPreview = st.toString().split('\n').take(3).join(' | ');
       logService?.error(
-        'computeFileHash threw for "$filePath": $e\n'
-        '${st.toString().split('\n').take(3).join('\n')}',
+        'computeFileHash threw for "$filePath": $e',
+        phase: LogPhase.verify,
+        subprocessStderr: stackPreview,
       );
       return null;
     } finally {

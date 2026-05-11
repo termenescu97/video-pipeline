@@ -152,7 +152,17 @@ class _FileRow extends StatelessWidget {
               style: AppTextStyles.caption
                   .copyWith(color: scheme.onSurfaceVariant),
             ),
-            if (file.verified || hasHashes) ...[
+            // 017 (T042): per-file verifyStatus chip. Renders only when
+            // the file has reached a non-pending verify state — keeps
+            // the row clean for files that haven't entered the verify
+            // pipeline yet.
+            if (file.verifyStatus != VerifyStatus.pending) ...[
+              const SizedBox(width: Insets.s),
+              _VerifyStatusChip(
+                status: file.verifyStatus,
+                onTap: hasHashes ? () => _showHashPopover(context, file) : null,
+              ),
+            ] else if (file.verified || hasHashes) ...[
               const SizedBox(width: Insets.s),
               _MatchesBadge(
                 hasHashes: hasHashes,
@@ -232,6 +242,66 @@ class _MatchesBadge extends StatelessWidget {
               verified ? '✓ matches' : 'view hashes',
               style: AppTextStyles.caption.copyWith(color: color),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 017 (T042, FR-005, FR-017): per-file verifyStatus chip. Distinct from
+/// [_MatchesBadge] because the v8 verify axis is decoupled from the
+/// legacy `verified` boolean — a file can be `verifyStatus=unverified`
+/// (hash subsystem failed) while bytes are still on disk, and that
+/// distinction needs to surface to operators.
+class _VerifyStatusChip extends StatelessWidget {
+  final VerifyStatus status;
+  final VoidCallback? onTap;
+
+  const _VerifyStatusChip({required this.status, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    final (Color color, IconData icon, String label) = switch (status) {
+      VerifyStatus.verified => (
+          statusColors.success,
+          Icons.check_circle,
+          '✓ verified'
+        ),
+      VerifyStatus.unverified => (
+          statusColors.warning,
+          Icons.help_outline,
+          '⚠ unverified'
+        ),
+      VerifyStatus.mismatch => (
+          statusColors.error,
+          Icons.cancel,
+          '✗ mismatch'
+        ),
+      VerifyStatus.pending => (
+          Theme.of(context).colorScheme.onSurfaceVariant,
+          Icons.hourglass_empty,
+          'pending'
+        ),
+    };
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: Insets.s, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: Insets.xs),
+            Text(label, style: AppTextStyles.caption.copyWith(color: color)),
           ],
         ),
       ),

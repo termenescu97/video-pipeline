@@ -3,6 +3,7 @@ import 'package:path/path.dart' as p;
 
 import '../../database/database.dart';
 import '../../database/tables.dart';
+import '../../main.dart';
 import '../../utils/format_utils.dart';
 import '../theme/app_theme.dart';
 import '../theme/insets.dart';
@@ -34,9 +35,29 @@ class JobCardDone extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 017 (Codex round-2 P2 #3): wrap the row in a JobFile stream so a
+    // completed job with verifyStatus=mismatch files can surface an
+    // attention-state dot AND a Retry menu entry — without this, a job
+    // whose ONLY failure mode was verify mismatch would land in
+    // history with no recovery path (only failed jobs get Retry).
+    return StreamBuilder<List<JobFile>>(
+      stream: jobFileDao.watchFilesForJob(job.id),
+      builder: (context, snapshot) {
+        final files = snapshot.data ?? const <JobFile>[];
+        final mismatchedIds = files
+            .where((f) => f.verifyStatus == VerifyStatus.mismatch)
+            .map((f) => f.id)
+            .toList();
+        return _buildCard(context, mismatchedIds);
+      },
+    );
+  }
+
+  Widget _buildCard(BuildContext context, List<int> mismatchedIds) {
+    final hasMismatch = mismatchedIds.isNotEmpty;
     final scheme = Theme.of(context).colorScheme;
     final statusColors = Theme.of(context).extension<StatusColors>()!;
-    final dotColor = job.status == JobStatus.failed
+    final dotColor = (job.status == JobStatus.failed || hasMismatch)
         ? statusColors.dotAttention
         : statusColors.dotRecentDone;
     final src = p.basename(job.sourcePath.replaceAll(RegExp(r'[/\\]$'), ''));
@@ -48,7 +69,7 @@ class JobCardDone extends StatelessWidget {
 
     return GestureDetector(
       onSecondaryTapDown: (details) =>
-          _showContextMenu(context, details.globalPosition),
+          _showContextMenu(context, details.globalPosition, mismatchedIds),
       child: Card(
         clipBehavior: Clip.antiAlias,
         // Use a slightly muted surface for the "dimmed" look.
@@ -91,6 +112,15 @@ class JobCardDone extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (hasMismatch) ...[
+                  Tooltip(
+                    message: '${mismatchedIds.length} file(s) failed verify '
+                        '— right-click to Retry',
+                    child: Icon(Icons.error_outline,
+                        size: 16, color: statusColors.error),
+                  ),
+                  const SizedBox(width: Insets.xs),
+                ],
                 Builder(
                   builder: (btnContext) => IconButton(
                     tooltip: 'More actions',
@@ -100,7 +130,7 @@ class JobCardDone extends StatelessWidget {
                       final box = btnContext.findRenderObject() as RenderBox?;
                       final pos = box?.localToGlobal(Offset.zero) ??
                           Offset.zero;
-                      _showContextMenu(context, pos);
+                      _showContextMenu(context, pos, mismatchedIds);
                     },
                   ),
                 ),
@@ -124,7 +154,9 @@ class JobCardDone extends StatelessWidget {
     );
   }
 
-  void _showContextMenu(BuildContext context, Offset position) {
+  void _showContextMenu(BuildContext context, Offset position,
+      List<int> mismatchedIds) {
+    final hasMismatch = mismatchedIds.isNotEmpty;
     showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -133,13 +165,40 @@ class JobCardDone extends StatelessWidget {
         const PopupMenuItem(value: 'details', child: Text('View Details')),
         if (job.status == JobStatus.failed)
           const PopupMenuItem(value: 'retry', child: Text('Retry')),
+        // 017 (Codex round-2 P2 #3): a completed job with verify-mismatch
+        // files needs a recovery path even though JobStatus is completed.
+        // Retries each mismatched file with forceDestDelete=true (Codex H2).
+        if (hasMismatch)
+          PopupMenuItem(
+            value: 'retry-mismatched',
+            child: Text('Retry ${mismatchedIds.length} mismatched file(s)'),
+          ),
         const PopupMenuItem(value: 'delete', child: Text('Delete')),
       ],
     ).then((value) {
+      if (!context.mounted) return;
       if (value == 'details') onTap?.call();
       if (value == 'retry') onRetry?.call();
+      if (value == 'retry-mismatched') {
+        _retryMismatchedFiles(context, mismatchedIds);
+      }
       if (value == 'delete') onDelete?.call();
     });
+  }
+
+  Future<void> _retryMismatchedFiles(
+      BuildContext context, List<int> ids) async {
+    final messenger = ScaffoldMessenger.of(context);
+    for (final id in ids) {
+      await jobQueueService.retryFile(id, forceDestDelete: true);
+    }
+    await jobQueueService.startProcessing();
+    messenger.showSnackBar(
+      SnackBar(
+        content:
+            Text('Retrying ${ids.length} file(s) with forced dest delete'),
+      ),
+    );
   }
 
   static IconData _typeGlyph(JobType type) {

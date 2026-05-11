@@ -106,10 +106,12 @@ lib/
 | 014 - UI/UX Redesign — Visual Hierarchy & Operator Trust | `014-ui-redesign` | 114/114 | ✅ Complete |
 | 015 - Robocopy Execution-Time Overwrite Guard | merged into v2.4.0 | n/a | ✅ Complete (bundled) |
 | 016 - Graceful Shutdown Race Hardening | merged into v2.4.0 | n/a | ✅ Complete (bundled) |
+| 017A - Executor Correctness (data-safety pass) | `017-executor-correctness` | in progress | 🚧 v2.5.0-pending |
 
 **Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions building Windows .exe)
 **Previous release**: v2.3.0 (tagged, built via GitHub Actions)
 **Total tasks implemented**: 392 (390 across 014 + 015 + 016 bundles)
+**In flight**: 017A — operator's 2026-05-08 Windows test exposed three blockers (PowerShell positional-args cascade, 0/27 progress freeze, hash-failure-treated-as-job-failure). 017A is the executor-correctness half of v2.5.0; 017B (UX restructuring) ships in the same release tag. Schema bumped to v8 with VerifyStatus + FailureKind axes, parentJobId, sourcesPanelCollapsed.
 
 > **QA status**: T114 (Windows manual QA) is the operator's responsibility on the workstation. Update prompt is gated by Constitution Principle VI — never silent — so operators see and approve the v2.3 → v2.4 transition before applying.
 
@@ -213,7 +215,19 @@ These invariants encode the v2.4.0 hardening from 015 + 016. A naive refactor th
 - **`Job.createdAt` is the mtime cutoff baseline (`lib/services/job_queue_service.dart::_processTransfer`)** — never modify on retry/resume. Changing it shifts the TOCTOU guard window and could reclassify foreign intrusions as own partials.
 - **`robocopyFlags` (`lib/utils/constants.dart`)** — must include `/XN /XC /XO`. Removing them re-opens the v2.4.0 CRITICAL (silent overwrite). The flags are paired with executor-side delete logic; changing one without the other breaks the contract.
 - **Phased shutdown structure (`lib/ui/screens/shell_screen.dart::_gracefulShutdown`)** — Phase C cleanup (DB close, lock release, log close) must ALWAYS run regardless of Phase B drain outcome. Don't wrap them in a single outer timeout. If a refactor makes the function shorter, it's probably wrong.
-- **`_PlannedFile` is duplicated** across `job_queue_service.dart` and `create_job_screen.dart`. Keep both copies in sync until the v2.5 consolidation. A diverging shape will cause silent data loss in conflict resolution.
+- **`PlannedFile` is the consolidated shape (`lib/services/planned_file.dart`)** — 017A T024 unified the previously duplicated `_PlannedFile` across `job_queue_service.dart` and `create_job_screen.dart`. Both consumers now import the public, immutable class with `copyWith`, value equality, and a contract test (`test/contract/planned_file_contract_test.dart`) that fails fast if either consumer's expected shape diverges. A new field added on one side without the other will break the build.
+
+### v8 (017A) Load-Bearing Conventions
+
+These invariants encode the 017A executor-correctness pass that closes the operator's 2026-05-08 Windows test failures (PowerShell `$args[0]` cascade, 0/27 progress freeze, hash-failure-treated-as-job-failure). Schema v8 introduced two orthogonal axes — the existing `FileStatus` (copy state) and the new `VerifyStatus` (verify state) — and the executor now treats progress and verify as fully decoupled.
+
+- **Length-3 argv is the only valid PowerShell shape (`lib/utils/process_runner.dart`)** — `runPowerShellInline` asserts `arguments.length == 3` for `['-NoProfile', '-Command', script]`. Trailing argv after `-Command` is silently dropped by PS — the v2.4.0 root cause. Embed values via single-quoted `-LiteralPath '${escapePsLiteral(value)}'`, never as a 4th argv element. CI grep guard `! grep -rn '\$args\[' lib/` enforces this forever.
+- **`markFileCompleted(verified: false)` is the post-robocopy signal (`lib/database/daos/job_file_dao.dart` + `_processTransfer`)** — bytes are credited to `Job.completedFiles`/`Job.completedBytes` IMMEDIATELY after robocopy returns, in a separate `_safeWrite` call. Do not gate this on verify outcome. The two `_safeWrite` calls (markFileCompleted + updateJobProgress) make the 0/27 freeze structurally impossible to reproduce.
+- **`VerifyStatus` × `FailureKind` axes are independent of `FileStatus` (`lib/database/tables.dart`)** — a file can be `status=completed && verifyStatus=mismatch` (bytes on disk, hash differs — soft failure, FR-004). A subsystem failure routes through `verifyStatus=unverified && failureKind=verifyUnreliable` (warning, not hard failure). Do not collapse these axes back to a single `verified` boolean.
+- **`Job.parentJobId` is set ONLY at chain time (`_createChainedCompressionJob`)** — links a chained-compression job back to its transfer parent so `notifyCompressionCompleted` can surface parent verify counts. Standalone compression jobs have `parentJobId=null`. Resetting/copying jobs must NOT carry `parentJobId` across — that would mis-attribute verify outcomes.
+- **`forceDestDelete` is operator-attribution (`JobQueueService._forceDestDeleteFileIds`)** — bypasses the feature-015 delete predicate AND the size-match short-circuit. Set ONLY by `retryFile(forceDestDelete: true)` in response to an explicit operator action (verify-mismatch banner Retry). The flag is per-process, in-memory only — recovery on next launch reads `failureKind=verifyMismatch` and leaves the file alone unless the operator re-confirms (Constitution Principle I).
+- **`recoverStaleJobs` re-derives counters from per-row state (`lib/database/daos/job_dao.dart`)** — calls `recomputeCountersFromFiles(jobId)` for every rescued job (the union: inProgress jobs + jobs with inProgress files + jobs with completed/verifyStatus=pending files). Trusted source of truth is the per-row `JobFile` state; persisted Job counters can drift from a partial-write shutdown. Do not skip the re-derivation step.
+- **Case-only NTFS collisions are normalized at preflight (`createBatchTransferJobs`)** — `_normalizeCaseCollisionsAcrossPlans` runs between Phase 1 (enumerate) and Phase 2 (conflict preflight). Two source files with paths that differ only in case (e.g., `DCIM/IMG_001.MOV` vs `dcim/img_001.mov` on a case-sensitive source like exFAT) collapse to the same destination NTFS key — `File.existsSync` only catches collisions against pre-existing disk state, not within the planned set. The first occurrence keeps its destination; later occurrences are rerouted via `_suffixedPathAgainst` whose candidate is also checked against the lowercased claimed-set so generated suffixes don't re-collide.
 
 ### Known Issues (from review-report-v2.md)
 

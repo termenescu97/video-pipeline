@@ -10,6 +10,7 @@ import '../../database/database.dart';
 import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
+import '../../services/log_service.dart';
 import '../../utils/history_export.dart';
 import '../theme/insets.dart';
 import '../theme/text_styles.dart';
@@ -183,14 +184,26 @@ class _ShellScreenState extends State<ShellScreen>
     _shuttingDown = true;
 
     // Phase A — signal stop + send subprocess kill (non-blocking).
+    logService.info(
+      'Phase A: signal stop, kill subprocesses',
+      phase: LogPhase.shutdown,
+    );
     final drain = jobQueueService.stopProcessing();
 
     // Phase B — bounded wait for queue drain. 10 s is generous for
     // normal cancellation (the loop's last DB writes are millisecond-
     // scale) and short enough that the operator's window-close gesture
     // feels responsive when a subprocess is actually stuck.
+    logService.info(
+      'Phase B: queue drain (timeout 10s)',
+      phase: LogPhase.shutdown,
+    );
     try {
       await drain.timeout(const Duration(seconds: 10));
+      logService.info(
+        'Phase B: drain completed cleanly',
+        phase: LogPhase.shutdown,
+      );
     } on TimeoutException {
       jobQueueService.markShutdownAbandoned();
       stderr.writeln(
@@ -199,19 +212,24 @@ class _ShellScreenState extends State<ShellScreen>
         'stale rows on next launch.',
       );
       logService.warning(
-        'Shutdown drain timed out — drain Future may resolve later '
-        'but will write against a closed DB; markShutdownAbandoned '
-        'was called to short-circuit. recoverStaleJobs on next '
-        'launch picks up any inProgress rows.',
+        'Phase B: drain timed out — markShutdownAbandoned set; '
+        'recoverStaleJobs on next launch picks up any inProgress rows.',
+        phase: LogPhase.shutdown,
       );
     } catch (e, st) {
       jobQueueService.markShutdownAbandoned();
       stderr.writeln('[shutdown] Drain wait threw: $e');
       logService.error(
-        'Shutdown drain threw: $e\n'
+        'Phase B: drain threw: $e\n'
         '${st.toString().split("\n").take(3).join("\n")}',
+        phase: LogPhase.shutdown,
       );
     }
+
+    logService.info(
+      'Phase C: DB close, lock release, log close',
+      phase: LogPhase.shutdown,
+    );
 
     // Phase C — independent cleanup steps. Each guarded so a failure
     // in one does NOT skip the rest. Order: DB close FIRST (load-
@@ -611,6 +629,8 @@ class _NoJob {
     autoChain: false,
     verificationMode: VerificationMode.size,
     createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+    unverifiedFiles: 0,
+    // parentJobId omitted — nullable, defaults to null.
   );
 }
 

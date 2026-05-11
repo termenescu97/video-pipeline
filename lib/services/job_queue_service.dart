@@ -12,6 +12,7 @@ import '../database/tables.dart';
 import '../utils/constants.dart';
 import 'drive_service.dart';
 import 'log_service.dart';
+import 'planned_file.dart';
 import 'queue_state_notifier.dart';
 import 'slack_service.dart';
 import 'transfer_service.dart';
@@ -64,6 +65,12 @@ class JobQueueService {
   // Drift connection. recoverStaleJobs picks up any remaining
   // inProgress rows on the next launch.
   bool _shutdownAbandoned = false;
+
+  // 017 (Codex round-2 P2 #2): the persistent force-delete approval now
+  // lives on `JobFile.forceDestDeleteApproved`. The previous in-memory
+  // _forceDestDeleteFileIds set was lost on app restart between the
+  // operator's Retry click and the executor's consumption — closing
+  // this gap requires durable state, not transient state.
 
   /// Mark the queue as "shutdown abandoned." See [_shutdownAbandoned].
   /// Idempotent. Called from `shell_screen._gracefulShutdown` on Phase
@@ -208,8 +215,45 @@ class JobQueueService {
     return completer.future;
   }
 
+  /// 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a single
+  /// file (typically after a verify mismatch). When [forceDestDelete] is
+  /// true, the next pass through `_processTransfer` will delete the
+  /// destination before robocopy regardless of size match — closes the
+  /// "same-size corrupt destination" loop where the feature-015 delete
+  /// predicate would skip robocopy and re-verify the same corrupt bytes
+  /// forever.
+  ///
+  /// Resets the file row's verify axis (verifyStatus/failureKind/hashes)
+  /// AND the parent job's status to pending so the queue scheduler can
+  /// pick the job up again. Persists the operator's force-delete intent
+  /// to `JobFile.forceDestDeleteApproved` so it survives app exit
+  /// between the Retry click and `_processTransfer`'s consumption
+  /// (Codex round-2 P2 #2).
+  Future<void> retryFile(int fileId, {bool forceDestDelete = false}) async {
+    final file = await _jobFileDao.getFile(fileId);
+    if (file == null) return;
+    if (forceDestDelete) {
+      _logService?.warning(
+        'Operator retry of ${file.fileName} with forceDestDelete=true '
+        'after verify mismatch — approval persisted to '
+        'JobFile.forceDestDeleteApproved (Codex round-2 P2 #2)',
+        jobId: file.jobId,
+        phase: LogPhase.recover,
+      );
+    }
+    await _safeWrite(() => _jobFileDao.resetFileForRetry(
+          fileId,
+          forceDestDeleteApproved: forceDestDelete,
+        ));
+    await _safeWrite(() => _jobDao.resetJobForRetry(file.jobId));
+  }
+
   Future<void> _processJob(Job job) async {
-    _logService?.info('Job #${job.id} started — ${job.type.name} ${job.sourcePath} → ${job.destinationPath}');
+    _logService?.info(
+      'Job started — ${job.type.name} ${job.sourcePath} → ${job.destinationPath}',
+      jobId: job.id,
+      phase: LogPhase.enqueue,
+    );
     await _safeWrite(() => _jobDao.markJobStarted(job.id));
 
     try {
@@ -266,13 +310,123 @@ class JobQueueService {
     var completedCount = 0;
     var completedBytes = 0;
     var failedCount = 0;
+    // 017 (US1+US2): Slack expansion (FR-016) needs per-state counts.
+    // Tracked locally during the loop; passed to notifyTransferCompleted.
+    var verifiedCount = 0;
+    var unverifiedCount = 0;
+    var mismatchedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
+
+      // 017 (T046, FR-006): copied-but-unverified recovery. The file
+      // was copied to disk in a prior run, then shutdown fired before
+      // verify could complete. Bytes are already on disk; do NOT
+      // re-copy. Re-enter the verify phase only.
+      if (file.status == FileStatus.completed &&
+          file.verifyStatus == VerifyStatus.pending) {
+        // Bytes already credited in the prior run's updateJobProgress;
+        // re-tallying matches what the persisted counters say.
+        completedCount++;
+        completedBytes += file.fileSize;
+
+        if (job.verificationMode != VerificationMode.sha256) {
+          // Size-mode files leave verifyStatus at default 'pending'
+          // forever (Codex M5). Nothing to do beyond tallying.
+          continue;
+        }
+
+        // SHA-256 mode: re-run the hash check, nothing else.
+        progressNotifier.value = ProgressData(
+          currentFileName: 'Verifying (recovered): ${file.fileName}',
+        );
+        final results = await Future.wait([
+          _transferService.computeFileHash(file.sourceFilePath),
+          _transferService.computeFileHash(file.destinationFilePath),
+        ]);
+        final sourceHash = results[0];
+        final destHash = results[1];
+        progressNotifier.value = null;
+
+        if (!_isProcessing) break;
+
+        if (sourceHash == null || destHash == null) {
+          await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
+          await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+          unverifiedCount++;
+          _logService?.warning(
+            'Recovered ${file.fileName}: SHA-256 subsystem failed',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.recover,
+          );
+        } else if (sourceHash == destHash) {
+          await _safeWrite(() => _jobFileDao.markFileVerified(
+                file.id,
+                sourceHash: sourceHash,
+                destHash: destHash,
+              ));
+          verifiedCount++;
+          _logService?.info(
+            'Recovered ${file.fileName} verified',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.recover,
+          );
+        } else {
+          await _safeWrite(() => _jobFileDao.markFileVerifyMismatch(
+                file.id,
+                sourceHash: sourceHash,
+                destHash: destHash,
+              ));
+          mismatchedCount++;
+          _logService?.warning(
+            'Recovered ${file.fileName} MISMATCH',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.recover,
+          );
+        }
+        continue;
+      }
+
       if (file.status == FileStatus.completed) {
         completedCount++;
         completedBytes += file.fileSize;
+        // 017 (US1+US2): tally per-state verify counts for the Slack
+        // expansion (FR-016). On a job that resumes after the verify
+        // phase already completed, we still need accurate aggregates.
+        switch (file.verifyStatus) {
+          case VerifyStatus.verified:
+            verifiedCount++;
+            break;
+          case VerifyStatus.unverified:
+            unverifiedCount++;
+            break;
+          case VerifyStatus.mismatch:
+            mismatchedCount++;
+            break;
+          case VerifyStatus.pending:
+            // Handled by the recovery branch above; shouldn't reach here.
+            break;
+        }
         continue;
+      }
+
+      // 017 (US2, T040, FR-005, Codex H2 + round-2 P2 #2 + round-3 P2 #2):
+      // consume the persisted force-delete approval ONCE per processing
+      // pass, regardless of dest existence or which branch we land in
+      // below. Reading + clearing here gives us correct single-use
+      // semantics even when the dest was deleted before this pass: the
+      // approval is consumed even if no delete happens. A re-mismatch
+      // on the next pass requires a fresh banner Retry click.
+      final forceDestDelete = file.forceDestDeleteApproved;
+      if (forceDestDelete) {
+        await _safeWrite(
+            () => _jobFileDao.clearForceDestDeleteApproved(file.id));
       }
 
       // 015 — pre-robocopy safety + cleanup. Runs BEFORE markFileStarted
@@ -321,7 +475,16 @@ class JobQueueService {
           final destSize = await destFile.length();
           final everAttempted = file.startedAt != null;
           final isPartial = destSize < sourceSize;
-          final shouldDelete = file.wasOverwriteApproved ||
+          // 017 (US2, T040, FR-005, Codex H2): operator-driven retry of
+          // a verify-mismatched file. Bypasses the entire feature-015
+          // delete predicate AND the size-match short-circuit below —
+          // even a dest with `wasOverwriteApproved=false` and identical
+          // size to source is replaced wholesale, because the bytes
+          // have already been verified to differ. The approval was
+          // already consumed at the top of this iteration via
+          // `forceDestDelete` (Codex round-3 P2 #2 single-use clear).
+          final shouldDelete = forceDestDelete ||
+              file.wasOverwriteApproved ||
               (everAttempted && isPartial);
 
           if (shouldDelete) {
@@ -330,7 +493,10 @@ class JobQueueService {
               _logService?.info(
                 'Pre-robocopy cleanup of destination $destPath '
                 '(approved=${file.wasOverwriteApproved}, '
-                'attempted=$everAttempted, partial=$isPartial)',
+                'attempted=$everAttempted, partial=$isPartial, '
+                'forceDestDelete=$forceDestDelete)',
+                jobId: job.id,
+                phase: forceDestDelete ? LogPhase.recover : LogPhase.transfer,
               );
             } on FileSystemException catch (e) {
               // Permission denied / read-only / locked. Fail this
@@ -455,6 +621,28 @@ class JobQueueService {
 
       if (success) {
         if (job.verificationMode == VerificationMode.sha256) {
+          // 017 (US1, FR-002, T034): credit bytes to overall progress
+          // IMMEDIATELY upon robocopy success, regardless of subsequent
+          // verify outcome. The legacy `verified` boolean stays false
+          // until markFileVerified flips it; verifyStatus stays 'pending'
+          // until the hash check resolves it. Two _safeWrite calls per
+          // Codex H1 — gating-the-bug-back is now structurally impossible.
+          await _safeWrite(() => _jobFileDao.markFileCompleted(file.id, verified: false));
+          completedCount++;
+          completedBytes += file.fileSize;
+          await _safeWrite(() => _jobDao.updateJobProgress(
+                job.id,
+                completedFiles: completedCount,
+                completedBytes: completedBytes,
+              ));
+          _logService?.info(
+            'Copied ${file.fileName}',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.transfer,
+          );
+
           // SHA-256 hash verification — parallel since source and dest are on different drives.
           progressNotifier.value = ProgressData(
             currentFileName: 'Verifying: computing hashes...',
@@ -467,46 +655,68 @@ class JobQueueService {
           final destHash = results[1];
           progressNotifier.value = null;
 
-          // Same cancellation guard for the hashing subprocesses: if the
-          // operator stopped during hashing, the hash runners were
-          // killed. Reset the file to pending; recovery will re-verify.
-          // 016: routed through _safeWrite.
+          // 017 (T046): cancellation mid-verify leaves file at
+          // status=completed + verifyStatus=pending. recoverStaleJobs
+          // detects this and routes to verify-only on next launch
+          // (FR-006). DO NOT reset to pending — that would re-trigger
+          // robocopy on resume and double-credit bytes.
           if (!_isProcessing) {
-            await _safeWrite(() => _jobFileDao.resetFileToPending(file.id));
             break;
           }
 
-          await _safeWrite(() => _jobFileDao.updateFileHashes(
-                file.id,
-                sourceHash: sourceHash,
-                destinationHash: destHash,
-              ));
-
           if (sourceHash == null || destHash == null) {
-            // Hash computation failed (not cancelled — that case is
-            // handled above). Real failure path.
-            await _safeWrite(() => _jobFileDao.markFileFailed(
-                  file.id,
-                  'SHA-256 verification failed: could not compute hash',
-                ));
-            failedCount++;
-            _logService?.error('Job #${job.id} file ${file.fileName} — SHA-256 hash computation failed: source=$sourceHash dest=$destHash');
+            // 017 (US1, FR-003 unverified): hash subsystem failed (PS
+            // broken, etc.). Bytes are on disk but cryptographic trust
+            // is NOT established. Soft failure — operator sees ⚠ chip.
+            await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
+            await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+            unverifiedCount++;
+            _logService?.warning(
+              'SHA-256 subsystem failed for ${file.fileName}: could not compute hash',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.verify,
+            );
           } else if (sourceHash == destHash) {
-            await _safeWrite(() =>
-                _jobFileDao.markFileCompleted(file.id, verified: true));
-            completedCount++;
-            completedBytes += file.fileSize;
-            _logService?.info('Job #${job.id} file ${file.fileName} — SHA-256 verified: source=$sourceHash dest=$destHash MATCH');
-          } else {
-            await _safeWrite(() => _jobFileDao.markFileFailed(
+            // 017 (US1, FR-003 verified): cryptographic trust established.
+            await _safeWrite(() => _jobFileDao.markFileVerified(
                   file.id,
-                  'SHA-256 hash mismatch',
+                  sourceHash: sourceHash,
+                  destHash: destHash,
                 ));
-            failedCount++;
-            _logService?.warning('Job #${job.id} file ${file.fileName} — SHA-256 MISMATCH: source=$sourceHash dest=$destHash');
+            verifiedCount++;
+            _logService?.info(
+              'SHA-256 verified ${file.fileName}',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.verify,
+            );
+          } else {
+            // 017 (US2, FR-003 mismatch + FR-005): real corruption — bytes
+            // on disk differ from source. Soft failure (FR-004 — copy
+            // succeeded; verify failed); operator decides via banner.
+            // Retry routes through forceDestDelete=true (Codex H2).
+            await _safeWrite(() => _jobFileDao.markFileVerifyMismatch(
+                  file.id,
+                  sourceHash: sourceHash,
+                  destHash: destHash,
+                ));
+            mismatchedCount++;
+            _logService?.warning(
+              'SHA-256 hash mismatch for ${file.fileName}: source=$sourceHash dest=$destHash',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.verify,
+            );
           }
         } else {
-          // Size-based verification (default).
+          // Size-based verification (default; v2.4.0 semantics preserved).
+          // Per Codex M5: size match does NOT establish cryptographic trust.
+          // verifyStatus stays at default 'pending' for forward-operation
+          // size-mode rows; the legacy `verified` boolean is set true.
           final verified = await _transferService.verifyTransfer(
             sourceFile: file.sourceFilePath,
             destinationFile: file.destinationFilePath,
@@ -516,26 +726,42 @@ class JobQueueService {
                 _jobFileDao.markFileCompleted(file.id, verified: true));
             completedCount++;
             completedBytes += file.fileSize;
-            _logService?.info('Job #${job.id} file transferred and verified: ${file.fileName}');
+            _logService?.info(
+              'Copied ${file.fileName} (size-verified)',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.transfer,
+            );
           } else {
             await _safeWrite(() => _jobFileDao.markFileFailed(
                   file.id,
                   'Verification failed: size mismatch',
                 ));
             failedCount++;
-            _logService?.warning('Job #${job.id} file verification failed: ${file.fileName}');
+            _logService?.warning(
+              'Size mismatch for ${file.fileName}',
+              jobId: job.id,
+              phase: LogPhase.verify,
+            );
           }
+          await _safeWrite(() => _jobDao.updateJobProgress(
+                job.id,
+                completedFiles: completedCount,
+                completedBytes: completedBytes,
+              ));
         }
-        await _safeWrite(() => _jobDao.updateJobProgress(
-              job.id,
-              completedFiles: completedCount,
-              completedBytes: completedBytes,
-            ));
       } else {
         await _safeWrite(() =>
             _jobFileDao.markFileFailed(file.id, 'Transfer failed'));
         failedCount++;
-        _logService?.error('Job #${job.id} file transfer failed: ${file.fileName}');
+        _logService?.error(
+          'File transfer failed: ${file.fileName}',
+          jobId: job.id,
+          fileIndex: completedCount + failedCount,
+          totalFiles: files.length,
+          phase: LogPhase.transfer,
+        );
         // Codex review fix (MEDIUM): persist final progress before the
         // early return. Without this, completedFiles/completedBytes
         // accumulated by THIS run's pass over already-completed rows
@@ -583,21 +809,38 @@ class JobQueueService {
           completedBytes: completedBytes,
         ));
 
-    final allVerified = failedCount == 0;
     if (failedCount > 0) {
-      _logService?.error('Job #${job.id} failed — $completedCount transferred, $failedCount failed verification');
+      _logService?.error(
+        'Job failed — $completedCount transferred, $failedCount failed copy',
+        jobId: job.id,
+        phase: LogPhase.finalize,
+      );
       await _safeWrite(() => _jobDao.markJobFailed(
             job.id,
-            '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed verification',
+            '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed copy',
           ));
     } else {
-      _logService?.info('Job #${job.id} completed — $completedCount files transferred');
+      // 017 (FR-004): mismatchedCount > 0 does NOT fail the job — bytes
+      // are on disk, just not trusted. Soft fail surfaced via banner +
+      // Slack warning prefix below. Operator decides next action.
+      _logService?.info(
+        'Job completed — $completedCount transferred, '
+        '$verifiedCount verified, $unverifiedCount unverified, '
+        '$mismatchedCount mismatch',
+        jobId: job.id,
+        phase: LogPhase.finalize,
+      );
       await _safeWrite(() => _jobDao.markJobCompleted(job.id));
     }
+    // 017 (T043, FR-016): Slack call expanded with per-state verify
+    // counts. Warning prefix fires automatically when
+    // mismatchedCount > 0 or unverifiedCount > 0.
     await _slackService.notifyTransferCompleted(
       job: job,
       completedFiles: completedCount,
-      allVerified: allVerified,
+      verifiedFiles: verifiedCount,
+      unverifiedFiles: unverifiedCount,
+      mismatchedFiles: mismatchedCount,
     );
   }
 
@@ -664,7 +907,11 @@ class JobQueueService {
         completedCount++;
         completedBytes += file.fileSize;
         _logService?.info(
-          'Job #${job.id} compressed: ${file.fileName}',
+          'Compressed ${file.fileName}',
+          jobId: job.id,
+          fileIndex: completedCount,
+          totalFiles: files.length,
+          phase: LogPhase.compress,
         );
         await _safeWrite(() => _jobDao.updateJobProgress(
               job.id,
@@ -680,7 +927,11 @@ class JobQueueService {
         // post-mortem has the per-file failure trail (preset issues,
         // codec problems are diagnosed from these lines).
         _logService?.error(
-          'Job #${job.id} compression failed: ${file.fileName}',
+          'Compression failed: ${file.fileName}',
+          jobId: job.id,
+          fileIndex: completedCount + failedCount,
+          totalFiles: files.length,
+          phase: LogPhase.compress,
         );
       }
     }
@@ -709,7 +960,10 @@ class JobQueueService {
     if (failedCount > 0) {
       // Final-review fix #2: log the job-level failure summary too.
       _logService?.error(
-        'Job #${job.id} compression FAILED — $completedCount/${files.length} compressed, $failedCount failed',
+        'Compression FAILED — $completedCount/${files.length} compressed, '
+        '$failedCount failed',
+        jobId: job.id,
+        phase: LogPhase.finalize,
       );
       await _safeWrite(() => _jobDao.markJobFailed(
             job.id,
@@ -725,13 +979,43 @@ class JobQueueService {
       );
     } else {
       _logService?.info(
-        'Job #${job.id} compression completed — $completedCount files',
+        'Compression completed — $completedCount files',
+        jobId: job.id,
+        phase: LogPhase.finalize,
       );
       await _safeWrite(() => _jobDao.markJobCompleted(job.id));
+
+      // 017 (T045, FR-019): for chained compression, query parent's
+      // transfer-phase verify counts and pass them through to Slack so
+      // the final ping surfaces transfer-side outcomes (Codex H3 closure).
+      Job? parentTransferJob;
+      int? parentVerifiedFiles;
+      int? parentUnverifiedFiles;
+      int? parentMismatchedFiles;
+      if (job.parentJobId != null) {
+        parentTransferJob = await _jobDao.getJob(job.parentJobId!);
+        if (parentTransferJob != null) {
+          final parentFiles =
+              await _jobFileDao.getFilesForJob(parentTransferJob.id);
+          parentVerifiedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.verified)
+              .length;
+          parentUnverifiedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.unverified)
+              .length;
+          parentMismatchedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.mismatch)
+              .length;
+        }
+      }
       await _slackService.notifyCompressionCompleted(
         job: job,
         completedFiles: completedCount,
         totalFiles: files.length,
+        parentTransferJob: parentTransferJob,
+        parentVerifiedFiles: parentVerifiedFiles,
+        parentUnverifiedFiles: parentUnverifiedFiles,
+        parentMismatchedFiles: parentMismatchedFiles,
       );
     }
   }
@@ -778,11 +1062,11 @@ class JobQueueService {
 
       final subfolder = await buildCardSubfolder(drive);
       final cardDest = p.join(destination, subfolder);
-      final entries = <_PlannedFile>[];
+      final entries = <PlannedFile>[];
       for (final entity in files) {
         final size = await File(entity.path).length();
         final relativePath = p.relative(entity.path, from: drivePath);
-        entries.add(_PlannedFile(
+        entries.add(PlannedFile(
           sourcePath: entity.path,
           destinationPath: p.join(cardDest, relativePath),
           fileName: p.basename(entity.path),
@@ -795,6 +1079,20 @@ class JobQueueService {
         files: entries,
       ));
     }
+
+    // 017 (T058, FR-008, Codex H3): NTFS is case-insensitive. Two source
+    // files with paths that differ only in case (e.g., `DCIM/IMG_001.MOV`
+    // and `dcim/img_001.MOV` from a case-sensitive source like exFAT or
+    // a network share) collapse to the same destination NTFS file and
+    // silently overwrite one another mid-batch. `File.existsSync()` in
+    // _applyResolution only catches collisions against pre-existing
+    // disk state, NOT collisions WITHIN the planned set.
+    //
+    // Walk the planned set with a case-insensitive Set<String> of claimed
+    // destinations; on duplicate, route the second-and-later occurrences
+    // through a suffixed rename whose candidate is also checked against
+    // the claimed set so generated suffixes don't re-collide.
+    _normalizeCaseCollisionsAcrossPlans(cardPlans);
 
     // Phase 2: global conflict preflight across all cards. T103/FR-046:
     // also stat the destination size so the resolution dialog can
@@ -909,9 +1207,12 @@ class JobQueueService {
       // from triggering the executor's delete branch on the basis of
       // group approval that was never granted for this specific path.
       for (final plan in plans) {
-        for (final file in plan.files) {
+        for (var i = 0; i < plan.files.length; i++) {
+          final file = plan.files[i];
           if (File(file.destinationPath).existsSync()) {
-            file.wasOverwriteApproved = true;
+            // PlannedFile is immutable post-T024 consolidation — copyWith
+            // produces a new instance; in-place mutation no longer works.
+            plan.files[i] = file.copyWith(wasOverwriteApproved: true);
           }
         }
       }
@@ -919,7 +1220,7 @@ class JobQueueService {
     }
 
     for (final plan in plans) {
-      final kept = <_PlannedFile>[];
+      final kept = <PlannedFile>[];
       for (final file in plan.files) {
         final exists = File(file.destinationPath).existsSync();
         if (!exists) {
@@ -961,6 +1262,84 @@ class JobQueueService {
     }
   }
 
+  /// 017 (T058, FR-008, Codex H3): suffixed-rename variant that ALSO
+  /// rejects candidates whose lowercased form is already claimed in
+  /// [takenLower]. Without this check, two case-only-conflicting sources
+  /// (`IMG_001.MOV` vs `img_001.mov`) could both rename to `IMG_001_1.mov`
+  /// vs `img_001_1.mov` and re-collide on NTFS.
+  String _suffixedPathAgainst(String path, Set<String> takenLower) {
+    final dir = p.dirname(path);
+    final ext = p.extension(path);
+    final stem = p.basenameWithoutExtension(path);
+    var i = 1;
+    while (true) {
+      final candidate = p.join(dir, '${stem}_$i$ext');
+      final candidateLower = candidate.toLowerCase();
+      if (!takenLower.contains(candidateLower) &&
+          !File(candidate).existsSync()) {
+        return candidate;
+      }
+      i++;
+    }
+  }
+
+  /// 017 (T058, FR-008, Codex H3): in-place rewrite of any planned
+  /// destination that case-only-conflicts with another already-claimed
+  /// destination in the same batch. Walks every plan, every file, in
+  /// order; the first occurrence keeps its destination, subsequent
+  /// occurrences are rerouted via [_suffixedPathAgainst].
+  ///
+  /// The detector + rewriter is a single pass to keep the implementation
+  /// simple; the [takenLower] set is mutated as we go so generated
+  /// suffixes account for prior renames.
+  void _normalizeCaseCollisionsAcrossPlans(List<_CardTransferPlan> plans) {
+    final flatLists = plans.map((plan) => plan.files).toList();
+    normalizeCaseCollisions(
+      flatLists,
+      onRename: (original, renamed) {
+        _logService?.warning(
+          'Case-only destination collision: $original collapses to '
+          'existing NTFS key — renaming to $renamed',
+          phase: LogPhase.preflight,
+        );
+      },
+    );
+  }
+
+  /// 017 (T058, FR-008, Codex H3, T060): pure algorithm extracted from
+  /// [_normalizeCaseCollisionsAcrossPlans] so it's unit-testable without
+  /// a real drive/filesystem setup. Mutates the lists in [plans] in place
+  /// to break case-only NTFS collisions.
+  ///
+  /// First occurrence of each case-folded destination keeps the original
+  /// path; later occurrences are rerouted via the same suffixed-rename
+  /// pattern used elsewhere ([_suffixedPathAgainst]). The [onRename]
+  /// callback fires once per rewrite for telemetry/logging.
+  ///
+  /// Public (not @visibleForTesting) because the single-job preflight in
+  /// `CreateJobScreen` calls this directly — Codex round-4 P2 #2 fix.
+  void normalizeCaseCollisions(
+    List<List<PlannedFile>> plans, {
+    void Function(String original, String renamed)? onRename,
+  }) {
+    final takenLower = <String>{};
+    for (final files in plans) {
+      for (var i = 0; i < files.length; i++) {
+        final file = files[i];
+        final lower = file.destinationPath.toLowerCase();
+        if (!takenLower.contains(lower)) {
+          takenLower.add(lower);
+          continue;
+        }
+        final renamed =
+            _suffixedPathAgainst(file.destinationPath, takenLower);
+        files[i] = file.copyWith(destinationPath: renamed);
+        takenLower.add(renamed.toLowerCase());
+        onRename?.call(file.destinationPath, renamed);
+      }
+    }
+  }
+
   /// Create a chained compression job after a successful transfer.
   /// Preserves the relative folder structure from the transfer destination
   /// so duplicate basenames in different folders cannot collide in the
@@ -988,6 +1367,10 @@ class JobQueueService {
         presetName: Value(transferJob.presetName),
         sortOrder: Value(baseOrder + 1),
         createdAt: DateTime.now(),
+        // 017 (T045, FR-019): link this chained compression to its
+        // transferAndCompress parent so notifyCompressionCompleted can
+        // surface the parent's verify counts (Constitution V).
+        parentJobId: Value(transferJob.id),
       ),
       buildFiles: (newJobId) => ready
           .map((f) => JobFilesCompanion.insert(
@@ -1045,43 +1428,16 @@ class ConflictEntry {
   });
 }
 
-/// Internal: a planned file destination prior to job creation.
-class _PlannedFile {
-  String sourcePath;
-  String destinationPath;
-  String fileName;
-  int fileSize;
-
-  /// 015: stamped `true` by `_applyResolution` when the operator chose
-  /// `Overwrite` AND this file's dest existed at preflight time. The
-  /// executor honors the flag absolutely (delete dest pre-robocopy
-  /// regardless of size). Default `false` is the safe baseline.
-  /// TODO(refactor): consolidate with create_job_screen._PlannedFile —
-  /// see specs/014-ui-redesign Codex Phase 14 review.
-  bool wasOverwriteApproved;
-
-  _PlannedFile({
-    required this.sourcePath,
-    required this.destinationPath,
-    required this.fileName,
-    required this.fileSize,
-    this.wasOverwriteApproved = false,
-  });
-
-  _PlannedFile copyWith({String? destinationPath}) => _PlannedFile(
-        sourcePath: sourcePath,
-        destinationPath: destinationPath ?? this.destinationPath,
-        fileName: fileName,
-        fileSize: fileSize,
-        wasOverwriteApproved: wasOverwriteApproved,
-      );
-}
+/// 017 (T025): the duplicate `_PlannedFile` definition that lived here
+/// has been consolidated into `lib/services/planned_file.dart` per Codex
+/// M7 + R-A9. Both this file and `create_job_screen.dart` now import
+/// the shared `PlannedFile` class.
 
 /// Internal: the planned transfer for a single card in a batch.
 class _CardTransferPlan {
   final DetectedDrive drive;
   final String cardDestination;
-  final List<_PlannedFile> files;
+  final List<PlannedFile> files;
 
   _CardTransferPlan({
     required this.drive,
@@ -1092,6 +1448,6 @@ class _CardTransferPlan {
   factory _CardTransferPlan.empty(DetectedDrive drive) => _CardTransferPlan(
         drive: drive,
         cardDestination: '',
-        files: <_PlannedFile>[],
+        files: <PlannedFile>[],
       );
 }
