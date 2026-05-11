@@ -2,6 +2,10 @@
 
 > **Purpose of this file**: session-state snapshot for a fresh Claude session. Captures what's not yet in CLAUDE.md / memory because it just happened. Read this FIRST, then proceed to whatever the user brings up. Once the work it describes is complete (UI fixes done, re-tagged), this file should be deleted (it's session-specific, not durable).
 
+## Machine cutover (2026-05-11)
+
+**Development moved from macOS to the Windows 11 deployment workstation with this commit.** The macOS checkout at `~/Music/copiatorul3000/` is archive-only from here. All further work — pre-check QA, v2.5.0 polish (re-tag `v2.5.0-pre-2`), v2.5.1 — happens on Windows. Toolchain bootstrap is documented in `docs/WINDOWS_BOOTSTRAP.md`. Auto-memory has been moved into the repo at `.claude/memory/` so a fresh session on the Windows machine has full context after `git pull`. See CLAUDE.md "Session Bootstrap" section for the new memory-load contract.
+
 ## Where things stand (2026-05-11, end of session)
 
 **v2.5.0-pre is tagged, built, and installed on the developer's machine.**

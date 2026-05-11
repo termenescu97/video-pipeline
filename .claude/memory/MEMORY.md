@@ -1,0 +1,17 @@
+- [Human-in-the-loop principle](feedback_human_in_loop.md) — destructive actions must always require manual confirmation
+- [No half-baked implementations](feedback_no_half_baked.md) — finish every planned task fully, don't skip or stub
+- [Explain new tools as a course](feedback_explain_as_course.md) — walk through what each command does before running it
+- [Never skip speckit-clarify](feedback_never_skip_clarify.md) — always run /speckit-clarify, even for well-defined bugs
+- [Codex second opinions throughout spec-kit](feedback_adversarial_review.md) — review at plan, tasks, AND post-implement; STOP at zero-P1 trajectory and ship `-pre` instead of round N+1
+- [Holistic threat-model audit](feedback_holistic_audit.md) — when incremental rounds hit diminishing returns, run a parallel-agent 5-tier audit (catches workflow invariants per-feature reviews can't see)
+- [Dry-run merge before tagging](feedback_dry_run_merge.md) — validated v2.5.0: caught a CI grep-guard false positive at dev-time instead of tag-time; also covers the `-pre` prerelease-flag flip GH Action misses
+- [Bundle deferred fixes before asking for QA](feedback_bundle_before_qa.md) — pull deferred items into the current release rather than ship incrementally and request repeat QA
+- [Copiatorul3000 project state](project_copiatorul3000.md) — v2.4.0 released; v2.5.0 implementation-complete on 4 branches (017A+017B+018+019), schema v9, 161 tests passing, awaiting merge + Windows acceptance
+- [Load-bearing conventions](project_v2_4_load_bearing.md) — 7 v2.4.0 invariants from 015+016, plus pointer to CLAUDE.md for v8 (017A/017B/018) + v9 (019) conventions
+- [Release workflow](project_release_workflow.md) — merge → tag → push, GitHub Actions builds, `/releases/latest` excludes pre-releases (`-pre` suffix for staging)
+- [Open bugs](project_open_bugs.md) — none ship-blocking as of v2.5.0-pending; 5 single-auditor 019 P3s explicitly deferred to v2.5.1 (F-D1 size-TOCTOU, F-D3 sweep prefix collision, F-D4 NAS write race, F-D5 DST mtime, F-D8 eraseDrive re-verify)
+- [SHA-256 verification](project_sha256_decision.md) — implemented in 011; 015 closed the size-only TOCTOU gap; 017A rewrote the PowerShell call sites to fix the broken `$args[0]` cascade
+- [Known false positives](project_false_positives.md) — QA-5, QA-7, 3 dismissed Codex 016 findings, plus Codex 017B round-10's "smart quotes terminate PS strings" claim
+- [User role and working style](user_role.md) — technical lead, prefers structured methodology, Romanian-speaking
+- [Codex plugin](reference_codex_plugin.md) — GPT adversarial reviews via /codex:review and /codex:rescue
+- [Video team environment](reference_video_team.md) — Windows 11, Kingston SD hub, 14TB HDD, Synology NAS
