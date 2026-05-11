@@ -122,7 +122,7 @@ What IS in scope, always: bytes on disk. Source SD card content (typed-confirmat
 **Previous release**: v2.3.0 (tagged, built via GitHub Actions)
 **Total tasks implemented**: 461 (392 through v2.4.0 + 069 across 017A + 017B + 018 + 019)
 
-**In flight (v2.5.0)**: four feature branches implementation-complete and merge-ready, awaiting the documented merge sequence + operator Windows acceptance before tagging.
+**In flight (v2.5.0)**: **`v2.5.0-pre` tagged + built + locally installed**. `main` is at `e004d2c` (merged 017A → 017B → 018 → 019). GH Actions build succeeded (5m28s). Release marked Pre-release manually via `gh release edit --prerelease` (the GH Action does NOT auto-detect `-pre` as a prerelease pattern — important gotcha for future tags). v2.4.0 stays as Latest, so v2.4.0 operators don't auto-prompt to upgrade. Developer is doing pre-check QA on the installed build BEFORE handing to operator — UI fixes from this pre-check should land as v2.5.0 polish (re-tag `v2.5.0-pre-2`), not v2.5.1. See `HANDOFF_v2.5.0-pre.md` at repo root for full session-state details until that file is deleted.
 
 The v2.5.0 release scope grew through three pressures, each captured in its own feature:
 
