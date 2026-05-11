@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../services/log_service.dart';
 import '../database.dart';
@@ -16,14 +19,45 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// to copiatorul3000.log.
   LogService? logService;
 
+  /// 018 T022 (FR-013, US5, P3): self-healing read paths. The four
+  /// operator-facing reads ([getJob], [watchJob], [watchAllJobs],
+  /// [watchCompletedJobs]) join `jobs` to a per-job aggregate
+  /// sub-select that computes `actual_unverified = COUNT(*) FROM
+  /// job_files WHERE verify_status = 'unverified'`. The returned
+  /// [Job.unverifiedFiles] is the JOIN result, not the persisted
+  /// column. Persisted `jobs.unverified_files` becomes a denormalized
+  /// cache for write paths that don't go through these reads; the
+  /// reads always self-correct without an extra round-trip.
+  ///
+  /// Single query per emission keeps the SQLite cost identical to the
+  /// previous `select(jobs)` shape — the sub-select is row-local.
+  /// Codex round-23 P2 corrected the original "wrap each method with
+  /// per-row COUNT round-trips" plan; that would have multiplied query
+  /// load on the high-traffic UI streams.
+  static const String _jobsWithSelfHealedUnverifiedSelect = '''
+    SELECT jobs.*,
+      (SELECT COUNT(*) FROM job_files
+         WHERE job_id = jobs.id AND verify_status = 'unverified'
+      ) AS actual_unverified
+    FROM jobs
+  ''';
+
+  Job _mapWithSelfHealedUnverified(QueryRow row) {
+    final base = jobs.map(row.data);
+    final actual = row.read<int>('actual_unverified');
+    return base.unverifiedFiles == actual
+        ? base
+        : base.copyWith(unverifiedFiles: actual);
+  }
+
   /// Watch all jobs ordered by sort order (queue order).
   Stream<List<Job>> watchAllJobs() {
-    return (select(jobs)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.sortOrder),
-            (t) => OrderingTerm.asc(t.createdAt),
-          ]))
-        .watch();
+    return customSelect(
+      '$_jobsWithSelfHealedUnverifiedSelect '
+      'ORDER BY sort_order ASC, created_at ASC',
+      readsFrom: {jobs, jobFiles},
+    ).watch().map(
+        (rows) => rows.map(_mapWithSelfHealedUnverified).toList());
   }
 
   /// Persist a new queue ordering (T065 fix from Codex Phase 9 review —
@@ -54,10 +88,16 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.status.equalsValue(status))).watch();
   }
 
-  /// Watch a single job by ID (efficient).
+  /// Watch a single job by ID (efficient). 018 T022: self-healed
+  /// `unverifiedFiles` via the join in
+  /// [_jobsWithSelfHealedUnverifiedSelect].
   Stream<Job?> watchJob(int jobId) {
-    return (select(jobs)..where((t) => t.id.equals(jobId)))
-        .watchSingleOrNull();
+    return customSelect(
+      '$_jobsWithSelfHealedUnverifiedSelect WHERE id = ?',
+      variables: [Variable.withInt(jobId)],
+      readsFrom: {jobs, jobFiles},
+    ).watch().map(
+        (rows) => rows.isEmpty ? null : _mapWithSelfHealedUnverified(rows.first));
   }
 
   /// Get the next queued or paused job (first in queue).
@@ -375,31 +415,54 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   /// Returns deduplicated job IDs. Caller iterates and calls
   /// recomputeCountersFromFiles per ID after stale-row mutations.
   Future<Set<int>> getRescuedJobIds() async {
-    // Codex round-3 P2 #1: the third UNION arm is restricted to SHA-256
-    // jobs. Size-mode jobs leave verifyStatus=pending forever (size
-    // checks happen inline via TransferService.verifyTransfer; there is
-    // no SHA-256 phase to abandon mid-flight), so including them would
-    // cause every completed size-mode row to be re-rescued on every
-    // launch.
+    // Codex round-3 P2 #1 (now stale, see below): the third UNION arm
+    // was originally restricted to SHA-256 jobs because size-mode
+    // verify ran INLINE (TransferService.verifyTransfer) before the
+    // file row was written, so a size-mode `completed+pending` state
+    // could never exist mid-flight.
+    //
+    // Codex round-24 P2: 018 T024 restructured the size-mode branch to
+    // mirror SHA-256: markFileCompleted(verified: false) is now
+    // written BEFORE verifyTransfer, then markFileSizeOnlyVerified
+    // finalizes after. A shutdown between those two writes leaves the
+    // size-mode row at `status=completed && verifyStatus=pending` —
+    // an abandoned-mid-verify state that's structurally identical to
+    // the SHA-256 case and MUST be rescued the same way. The SHA-256
+    // filter is dropped; the executor's recovery branch handles both
+    // verify modes correctly (size-mode re-runs verifyTransfer;
+    // SHA-256 re-runs the hash pair).
     final rows = await customSelect(
       '''
       SELECT DISTINCT id AS job_id FROM jobs WHERE status = 'inProgress'
       UNION
       SELECT DISTINCT job_id FROM job_files WHERE status = 'inProgress'
       UNION
-      SELECT DISTINCT jf.job_id FROM job_files jf
-        INNER JOIN jobs j ON j.id = jf.job_id
-        WHERE jf.status = 'completed'
-          AND jf.verify_status = 'pending'
-          AND j.verification_mode = 'sha256'
+      SELECT DISTINCT job_id FROM job_files
+        WHERE status = 'completed'
+          AND verify_status = 'pending'
       ''',
     ).get();
     return rows.map((r) => r.read<int>('job_id')).toSet();
   }
 
-  /// Get a single job by ID.
-  Future<Job?> getJob(int jobId) {
-    return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
+  /// Get a single job by ID. 018 T022: self-healed `unverifiedFiles`
+  /// via the join, plus a fire-and-forget reconciliation that fixes
+  /// the persisted `jobs.unverified_files` cache when the read
+  /// detected drift. Reconciliation is gated to drift-only so a
+  /// steady-state read never schedules a write — avoids write storms
+  /// on the hot path.
+  Future<Job?> getJob(int jobId) async {
+    final row = await customSelect(
+      '$_jobsWithSelfHealedUnverifiedSelect WHERE id = ?',
+      variables: [Variable.withInt(jobId)],
+      readsFrom: {jobs, jobFiles},
+    ).getSingleOrNull();
+    if (row == null) return null;
+    final base = jobs.map(row.data);
+    final actual = row.read<int>('actual_unverified');
+    if (base.unverifiedFiles == actual) return base;
+    unawaited(recomputeCountersFromFiles(jobId));
+    return base.copyWith(unverifiedFiles: actual);
   }
 
   /// 017B (FR-B10): batched job lookup for the Diagnostics → Recent
@@ -408,6 +471,40 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
   Future<List<Job>> getJobsByIds(List<int> jobIds) {
     if (jobIds.isEmpty) return Future.value(const <Job>[]);
     return (select(jobs)..where((t) => t.id.isIn(jobIds))).get();
+  }
+
+  /// 018 T027 (FR-016, US6): non-terminal job listing for the
+  /// startup-sweep destination-root collection. The sweep needs every
+  /// destination directory currently expected to be in use so it can
+  /// look for orphaned `.tmp_robocopy_*` staging dirs left by a
+  /// crashed prior run.
+  Future<List<Job>> getJobsByStatuses(Set<JobStatus> statuses) {
+    if (statuses.isEmpty) return Future.value(const <Job>[]);
+    return (select(jobs)..where((t) => t.status.isInValues(statuses.toList())))
+        .get();
+  }
+
+  /// 018 T027 (FR-016, US6): N most-recent terminal (completed OR
+  /// failed) jobs in completedAt-desc order. The sweep walks each
+  /// distinct destinationPath so the operator who finished a run,
+  /// crashed, then re-launched still gets their orphans cleared even
+  /// when the queued set is empty.
+  ///
+  /// Codex round-25 P2 corrected the original "most recent of either"
+  /// design: a recent FAILED job could displace the actually-most-
+  /// recent successful destination, leaving its leaked staging dirs
+  /// uncovered. Returning the last 10 is the cheapest defense — it
+  /// captures both the most-recent successful AND the most-recent
+  /// failed for typical operator histories without requiring two
+  /// separate queries.
+  Future<List<Job>> getRecentTerminalJobs({int limit = 10}) {
+    return (select(jobs)
+          ..where((t) =>
+              t.status.equalsValue(JobStatus.completed) |
+              t.status.equalsValue(JobStatus.failed))
+          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)])
+          ..limit(limit))
+        .get();
   }
 
   /// 017B (Codex round-16 P1 #1): scoped requeue. Flips the Job row
@@ -430,6 +527,58 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     // unverified_files for free, so this single call subsumes the
     // round-17 _recomputeUnverifiedForFile semantics for the parent.
     await transaction(() async {
+      await (update(jobs)..where((t) => t.id.equals(jobId))).write(
+        const JobsCompanion(
+          status: Value(JobStatus.queued),
+          errorMessage: Value(null),
+          completedAt: Value(null),
+        ),
+      );
+      await recomputeCountersFromFiles(jobId);
+    });
+  }
+
+  /// 018 T002 (FR-001 + FR-002, US1, P1): atomic per-file retry.
+  ///
+  /// Combines what `JobQueueService.retryFile` previously did via TWO
+  /// separate `_safeWrite` calls (`resetFileForRetry` then
+  /// `requeueJobForFileRetry`) into ONE Drift transaction. Either the
+  /// entire retry intent is persisted, or none of it is.
+  ///
+  /// The pre-018 design was reachable with a "ghost pending" failure
+  /// mode: crash between the file reset and the parent requeue would
+  /// leave the file at `status=pending, verifyStatus=pending` while
+  /// the parent stayed at `status=completed`. None of the recovery
+  /// arms in `getRescuedJobIds` match this state, so the retry intent
+  /// silently disappeared.
+  ///
+  /// Calls `db.jobFileDao.resetFileForRetry` inside the wrapping
+  /// transaction (Drift transactions nest cleanly per project
+  /// convention; preserves all of resetFileForRetry's load-bearing
+  /// semantics — startedAt preservation, verify axis clear,
+  /// _recomputeUnverifiedForFile call — without duplicating them
+  /// here). Then runs the parent requeue + counter recompute that
+  /// `requeueJobForFileRetry` does, also inside the same transaction.
+  ///
+  /// [testOnlyMidTransactionHook] is a failure-injection seam used
+  /// exclusively by `test/unit/retry_atomicity_test.dart` to assert
+  /// atomicity. It fires AFTER the file reset and BEFORE the parent
+  /// update. Production callers MUST leave it null.
+  Future<void> applyPerFileRetry({
+    required int jobId,
+    required int fileId,
+    required bool forceDestDelete,
+    @visibleForTesting
+    Future<void> Function()? testOnlyMidTransactionHook,
+  }) async {
+    await transaction(() async {
+      await db.jobFileDao.resetFileForRetry(
+        fileId,
+        forceDestDeleteApproved: forceDestDelete,
+      );
+      if (testOnlyMidTransactionHook != null) {
+        await testOnlyMidTransactionHook();
+      }
       await (update(jobs)..where((t) => t.id.equals(jobId))).write(
         const JobsCompanion(
           status: Value(JobStatus.queued),
@@ -465,16 +614,17 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
         .get();
   }
 
-  /// Watch completed and failed jobs (history).
+  /// Watch completed and failed jobs (history). 018 T022: self-healed
+  /// `unverifiedFiles` via the join in
+  /// [_jobsWithSelfHealedUnverifiedSelect].
   Stream<List<Job>> watchCompletedJobs() {
-    return (select(jobs)
-          ..where(
-            (t) =>
-                t.status.equalsValue(JobStatus.completed) |
-                t.status.equalsValue(JobStatus.failed),
-          )
-          ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
-        .watch();
+    return customSelect(
+      "$_jobsWithSelfHealedUnverifiedSelect "
+      "WHERE status IN ('completed', 'failed') "
+      "ORDER BY completed_at DESC",
+      readsFrom: {jobs, jobFiles},
+    ).watch().map(
+        (rows) => rows.map(_mapWithSelfHealedUnverified).toList());
   }
 
   /// Reset a failed job for retry — set status to queued, clear error.

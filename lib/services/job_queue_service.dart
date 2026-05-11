@@ -49,6 +49,15 @@ class JobQueueService {
 
   bool _isProcessing = false;
   int? _currentJobId;
+  // 018 T010 (FR-008, US3): explicit stop signal observable to the
+  // processing loop at every iteration boundary. Distinct from
+  // _isProcessing so that startProcessing() can wait for an in-flight
+  // stopProcessing() to fully drain before flipping _isProcessing back
+  // to true — closes the race where two concurrent loops could both
+  // observe _isProcessing == false during the drain window and both
+  // start. Set synchronously in stopProcessing(); cleared by
+  // startProcessing() AFTER the prior _stopCompleter resolves.
+  bool _stopRequested = false;
   // Resolves when the processing loop has exited and all in-flight state
   // writes have completed. Used by graceful shutdown so the database is
   // never closed while the queue may still be writing.
@@ -152,8 +161,23 @@ class JobQueueService {
 
   /// Start processing the queue. Processes one job at a time.
   Future<void> startProcessing() async {
+    // 018 T010 (FR-008, US3): if a stopProcessing() is currently
+    // draining, await its completer BEFORE doing anything else. Without
+    // this, two concurrent startProcessing() calls during the drain
+    // window can both observe _isProcessing == false and both flip it
+    // to true, spawning two concurrent loops against the same queue.
+    final pending = _stopCompleter;
+    if (pending != null && !pending.isCompleted) {
+      await pending.future;
+    }
+    // RE-CHECK AND FLIP ATOMICALLY. Dart microtasks run to completion
+    // before the next microtask runs, so the lines below MUST NOT be
+    // separated by any `await`. If a refactor inserts an await between
+    // the re-check and the flip, the FR-008 race re-opens — even a
+    // logging await would be sufficient to break the invariant.
     if (_isProcessing) return;
     _isProcessing = true;
+    _stopRequested = false;
     _stoppedByUser = false;
     _queueStateNotifier?.notifyQueueRunningStarted();
 
@@ -161,7 +185,7 @@ class JobQueueService {
     var hadVerifyWarnings = false;
     var processedAny = false;
     try {
-      while (_isProcessing) {
+      while (_isProcessing && !_stopRequested) {
         final job = await _jobDao.getNextQueuedJob();
         if (job == null) {
           _isProcessing = false;
@@ -213,6 +237,13 @@ class JobQueueService {
   /// hash cancellation), so the caller can safely close the database
   /// once awaited.
   Future<void> stopProcessing() {
+    // 018 T010 (FR-008, US3): set _stopRequested SYNCHRONOUSLY at the
+    // top so any concurrent startProcessing() that arrives after this
+    // call (but before the loop drains) observes the request via the
+    // unresolved _stopCompleter and waits for drain. Mid-iteration loop
+    // checks also see the flag immediately on the next await
+    // resumption.
+    _stopRequested = true;
     // Reentrant: a second call (e.g., tray quit fired right after the UI
     // stop button) must observe the SAME pending completer until the
     // loop actually exits. Returning `Future.value()` here once the flag
@@ -221,6 +252,8 @@ class JobQueueService {
     if (pending != null) return pending.future;
     if (!_isProcessing) {
       // Either never started, or already finished cleanly — nothing to await.
+      // Reset the request flag so a future startProcessing() proceeds cleanly.
+      _stopRequested = false;
       return Future<void>.value();
     }
     final completer = Completer<void>();
@@ -244,49 +277,85 @@ class JobQueueService {
   /// Operator-attribution: only called from explicit "Resume
   /// compression" / "Accept" UI handlers, never from the executor.
   Future<bool> maybeChainCompression(int parentJobId) async {
-    final parent = await _jobDao.getJob(parentJobId);
-    if (parent == null) return false;
-    if (parent.type != JobType.transferAndCompress) return false;
-    if (await _jobDao.hasChainedChild(parentJobId)) return false;
-
-    // Codex round-16 P1 #2: refuse to chain if the parent is in any
-    // non-completed terminal state. A transferAndCompress with copy
-    // failures sits at status=failed; if the operator accepts only
-    // the verify warnings, the verify-axis check below would pass,
-    // and we'd silently spawn a compression child over the
-    // copy-completed subset — losing the failed files from the
-    // operator's intent. The only states from which compression may
-    // resume are: completed (clean transfer) or paused (operator
-    // explicitly resumed after recovery).
-    if (parent.status != JobStatus.completed &&
-        parent.status != JobStatus.paused) {
-      return false;
-    }
-
-    final files = await _jobFileDao.getFilesForJob(parentJobId);
-    // Defense in depth: any non-completed file row also blocks the
-    // chain. `failed` files are the round-16 P1 #2 trigger; pending /
-    // inProgress would mean the operator clicked Accept while the
-    // queue was still running (shouldn't happen via UI but the
-    // banner-disable-while-processing only covers the active card).
-    final hasNonCompletedRow =
-        files.any((f) => f.status != FileStatus.completed);
-    if (hasNonCompletedRow) return false;
-
-    final hasNonCleanVerify = files.any((f) =>
-        f.verifyStatus == VerifyStatus.mismatch ||
-        f.verifyStatus == VerifyStatus.unverified);
-    if (hasNonCleanVerify) return false;
-
-    await _createChainedCompressionJob(parent);
+    final created = await createChainedCompressionJobIfAbsent(parentJobId);
+    if (created == null) return false;
     _logService?.info(
       'Operator-resumed compression chain for transferAndCompress '
-      'parent #${parent.id}',
-      jobId: parent.id,
+      'parent #$parentJobId',
+      jobId: parentJobId,
       phase: LogPhase.finalize,
     );
     await startProcessing();
     return true;
+  }
+
+  /// 018 T008 (FR-007, US3, P2): centralized chain-creation gate.
+  /// Wraps `hasChainedChild` check + parent fetch + verify-axis gate
+  /// + insertion in a single Drift transaction. Two concurrent
+  /// invocations against the same parent will see the first
+  /// invocation's INSERT inside the transaction's read snapshot —
+  /// only one chained child is ever created.
+  ///
+  /// Replaces the prior "check + insert" pattern that was spread
+  /// across multiple awaits without a transaction. Reachable today
+  /// via Accept-mismatched + Accept-unverified clicked in quick
+  /// succession on the same job; round-22 P2 flagged the resulting
+  /// race that could spawn duplicate compression children competing
+  /// for the same destination path.
+  ///
+  /// Returns the new chained child's job id on success, `null` on
+  /// dedup hit OR any gate failure (parent missing / wrong type /
+  /// wrong status / non-completed file row / unresolved verify
+  /// warning / no compression-ready files).
+  ///
+  /// Both auto-chain (`_processJob` post-clean-transfer) and
+  /// operator-driven chain (`maybeChainCompression`) MUST route
+  /// through this method. Direct calls to `_createChainedCompressionJob`
+  /// from outside the gate would bypass the dedup invariant.
+  Future<int?> createChainedCompressionJobIfAbsent(int parentJobId) async {
+    // Inline the _safeWrite abandonment-check pattern: this method
+    // returns int? (the new child id), but _safeWrite is typed
+    // Future<void>. Mirroring the same drop-on-abandon + rethrow-
+    // otherwise semantics directly here avoids generifying _safeWrite
+    // and touching every existing caller.
+    if (_shutdownAbandoned) return null;
+    try {
+      return await _jobDao.transaction(() async {
+        final parent = await _jobDao.getJob(parentJobId);
+        if (parent == null) return null;
+        if (parent.type != JobType.transferAndCompress) return null;
+        // Dedup gate inside the transaction: a second concurrent
+        // invocation will see the first's INSERT here even though
+        // both invocations entered the transaction concurrently —
+        // SQLite serializes writes via BEGIN IMMEDIATE.
+        if (await _jobDao.hasChainedChild(parentJobId)) return null;
+
+        // Codex round-16 P1 #2: refuse to chain if the parent is in
+        // any non-completed terminal state. A transferAndCompress
+        // with copy failures sits at status=failed; chaining over
+        // the copy-completed subset would silently drop the failed
+        // files from the operator's intent.
+        if (parent.status != JobStatus.completed &&
+            parent.status != JobStatus.paused) {
+          return null;
+        }
+
+        final files = await _jobFileDao.getFilesForJob(parentJobId);
+        final hasNonCompletedRow =
+            files.any((f) => f.status != FileStatus.completed);
+        if (hasNonCompletedRow) return null;
+
+        final hasNonCleanVerify = files.any((f) =>
+            f.verifyStatus == VerifyStatus.mismatch ||
+            f.verifyStatus == VerifyStatus.unverified);
+        if (hasNonCleanVerify) return null;
+
+        return await _createChainedCompressionJob(parent);
+      });
+    } catch (_) {
+      if (_shutdownAbandoned) return null;
+      rethrow;
+    }
   }
 
   /// 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a single
@@ -315,19 +384,24 @@ class JobQueueService {
         phase: LogPhase.recover,
       );
     }
-    await _safeWrite(() => _jobFileDao.resetFileForRetry(
-          fileId,
-          forceDestDeleteApproved: forceDestDelete,
+    // 018 T003 (FR-001 + FR-002, US1): single atomic call replaces
+    // the prior two-write sequence (resetFileForRetry +
+    // requeueJobForFileRetry). Either the entire retry intent is
+    // persisted or none of it is — eliminates the "ghost pending"
+    // failure mode where a crash between the two writes left the
+    // file at status=pending while the parent stayed at
+    // status=completed (no recovery arm matched, intent lost).
+    //
+    // Public signature unchanged. Existing callers see no surface
+    // change. Codex round-16 P1 #1's per-file-scoped semantics are
+    // preserved (resetFileForRetry is still the inner row reset; we
+    // do NOT route through resetJobForRetry which would arm every
+    // verifyMismatch row).
+    await _safeWrite(() => _jobDao.applyPerFileRetry(
+          jobId: file.jobId,
+          fileId: fileId,
+          forceDestDelete: forceDestDelete,
         ));
-    // Codex round-16 P1 #1: requeueJobForFileRetry is the per-file-
-    // scoped requeue helper. The previous `resetJobForRetry` is the
-    // job-level "Retry all" action — it arms every verifyMismatch row
-    // for force-delete AND resets every failed/pending file. Using it
-    // for a per-file retry would silently re-copy/delete unrelated
-    // destinations the operator never approved (e.g., "Retry verify
-    // on 1 unverified file" was force-deleting separate mismatch
-    // rows in the same job).
-    await _safeWrite(() => _jobDao.requeueJobForFileRetry(file.jobId));
   }
 
   Future<void> _processJob(Job job) async {
@@ -385,7 +459,13 @@ class JobQueueService {
                 phase: LogPhase.finalize,
               );
             } else {
-              await _createChainedCompressionJob(job);
+              // 018 T009 (FR-007, US3): route through the centralized
+              // dedup gate. Both auto-chain (this site) and operator-
+              // driven chain (maybeChainCompression) MUST go through
+              // the same gate so the hasChainedChild check + insert
+              // is transactional. Direct calls would re-open the
+              // round-22 P2 race where two paths could both insert.
+              await createChainedCompressionJobIfAbsent(job.id);
             }
           }
           break;
@@ -420,6 +500,18 @@ class JobQueueService {
     var verifiedCount = 0;
     var unverifiedCount = 0;
     var mismatchedCount = 0;
+    // 018 T015 (FR-014): size-mode (verifyStatus=notVerified) tally.
+    // Counted distinctly from `verifiedCount` (cryptographic) so the
+    // Slack notification can render the round-20-mirror passed-label
+    // ("$N size-verified · Passed") instead of the misleading bare-zero
+    // "Verified: 0 ... Passed" wording. Two increment sites: (a) below
+    // in the resume-time completed-row switch (counts pre-existing
+    // notVerified rows from a resumed job) and (b) immediately after
+    // markFileSizeOnlyVerified in the size-mode forward branch
+    // (counts newly-processed size-mode successes; the local `file`
+    // snapshot is still pending verify so we increment based on the
+    // commit fact, not on file.verifyStatus).
+    var notVerifiedCount = 0;
 
     for (final file in files) {
       if (!_isProcessing) break;
@@ -436,8 +528,58 @@ class JobQueueService {
         completedBytes += file.fileSize;
 
         if (job.verificationMode != VerificationMode.sha256) {
-          // Size-mode files leave verifyStatus at default 'pending'
-          // forever (Codex M5). Nothing to do beyond tallying.
+          // Codex round-24 P2: 018 T024 made size-mode rows reachable
+          // in the abandoned-mid-verify state too (markFileCompleted
+          // is now written BEFORE verifyTransfer; a shutdown between
+          // those two writes leaves verifyStatus=pending). Re-run the
+          // size verification just like the SHA-256 branch below.
+          // Bytes are already credited (the prior run's
+          // updateJobProgress ran before shutdown); finalize the
+          // verify axis only.
+          progressNotifier.value = ProgressData(
+            currentFileName: 'Verifying (recovered): ${file.fileName}',
+          );
+          final verified = await _transferService.verifyTransfer(
+            sourceFile: file.sourceFilePath,
+            destinationFile: file.destinationFilePath,
+          );
+          progressNotifier.value = null;
+          if (!_isProcessing) break;
+          if (verified) {
+            await _safeWrite(
+                () => _jobFileDao.markFileSizeOnlyVerified(file.id));
+            notVerifiedCount++;
+            _logService?.info(
+              'Recovered ${file.fileName} (size-verified)',
+              jobId: job.id,
+              fileIndex: completedCount,
+              totalFiles: files.length,
+              phase: LogPhase.recover,
+            );
+          } else {
+            // Verify failure on a recovered size-mode row: bytes on
+            // disk don't match. Roll back the credit (mirrors T024's
+            // forward-path failure handling) and mark the file failed.
+            await _safeWrite(() => _jobFileDao.markFileFailed(
+                  file.id,
+                  'Verification failed: size mismatch (recovered)',
+                ));
+            failedCount++;
+            completedCount--;
+            completedBytes -= file.fileSize;
+            await _safeWrite(() => _jobDao.updateJobProgress(
+                  job.id,
+                  completedFiles: completedCount,
+                  completedBytes: completedBytes,
+                ));
+            _logService?.warning(
+              'Recovered ${file.fileName} size mismatch',
+              jobId: job.id,
+              fileIndex: completedCount + failedCount,
+              totalFiles: files.length,
+              phase: LogPhase.recover,
+            );
+          }
           continue;
         }
 
@@ -456,8 +598,15 @@ class JobQueueService {
         if (!_isProcessing) break;
 
         if (sourceHash == null || destHash == null) {
-          await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
-          await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+          // 018 T021 (FR-013, US5): atomic single-transaction variant
+          // replaces the previous two `_safeWrite`s. If a Phase-B drain
+          // had timed out between them, the row write could land while
+          // the counter increment got dropped, leaving Job.unverifiedFiles
+          // permanently under-counted. The local `unverifiedCount++`
+          // stays — it's the in-memory tally for the end-of-loop Slack
+          // notification, separate from the persisted Job counter.
+          await _safeWrite(
+              () => _jobFileDao.markFileUnverifiedAndIncrement(file.id));
           unverifiedCount++;
           _logService?.warning(
             'Recovered ${file.fileName}: SHA-256 subsystem failed',
@@ -536,7 +685,11 @@ class JobQueueService {
             break;
           case VerifyStatus.notVerified:
             // Size-mode baseline — bytes match by size, no SHA-256 was
-            // attempted. Counted neither as verified nor as warning.
+            // attempted. 018 T015: counted into `notVerifiedCount` so
+            // the Slack notification uses the round-20-mirror passed-
+            // label phrasing ("$N size-verified · Passed") instead of
+            // the misleading bare-zero "Verified: 0" wording.
+            notVerifiedCount++;
             break;
         }
         continue;
@@ -794,8 +947,10 @@ class JobQueueService {
             // 017 (US1, FR-003 unverified): hash subsystem failed (PS
             // broken, etc.). Bytes are on disk but cryptographic trust
             // is NOT established. Soft failure — operator sees ⚠ chip.
-            await _safeWrite(() => _jobFileDao.markFileUnverified(file.id));
-            await _safeWrite(() => _jobDao.incrementUnverified(job.id));
+            // 018 T021 (FR-013): atomic variant — see recovery branch
+            // above for rationale.
+            await _safeWrite(
+                () => _jobFileDao.markFileUnverifiedAndIncrement(file.id));
             unverifiedCount++;
             _logService?.warning(
               'SHA-256 subsystem failed for ${file.fileName}: could not compute hash',
@@ -846,39 +1001,80 @@ class JobQueueService {
           // backfill) so size-mode rows are visibly distinct from
           // SHA-256 subsystem failures (`unverified`). HistorySurface
           // and Slack treat notVerified as the size-mode baseline.
+          //
+          // 018 T024 (FR-015, US5, P3): restructure to mirror the
+          // SHA-256 branch EXACTLY. Bytes credited IMMEDIATELY after
+          // robocopy success (regardless of subsequent verify outcome),
+          // then verify, then either finalize (markFileSizeOnlyVerified)
+          // or undo the credit + mark failed. Without this, a
+          // verifyTransfer-blocking I/O stall on a 161 GB job would
+          // freeze the operator's progress bar at the previous file's
+          // boundary even though robocopy already returned success —
+          // the same 0/27 freeze pattern that motivated 017A's
+          // SHA-256-branch decoupling, just in a different verify mode.
+          // Codex round-22 P1 corrected the original "swap markFileSize-
+          // OnlyVerified before verifyTransfer" plan; the credit must
+          // come BEFORE verify, not the verify-axis write.
+          await _safeWrite(() =>
+              _jobFileDao.markFileCompleted(file.id, verified: false));
+          completedCount++;
+          completedBytes += file.fileSize;
+          await _safeWrite(() => _jobDao.updateJobProgress(
+                job.id,
+                completedFiles: completedCount,
+                completedBytes: completedBytes,
+              ));
+          _logService?.info(
+            'Copied ${file.fileName}',
+            jobId: job.id,
+            fileIndex: completedCount,
+            totalFiles: files.length,
+            phase: LogPhase.transfer,
+          );
+
           final verified = await _transferService.verifyTransfer(
             sourceFile: file.sourceFilePath,
             destinationFile: file.destinationFilePath,
           );
+
+          // 017 (T046)-equivalent: cancellation mid-verify leaves the
+          // file at status=completed + verifyStatus=pending. Don't
+          // overwrite — recoverStaleJobs handles re-entry. Bytes stay
+          // credited (they're on disk).
+          if (!_isProcessing) {
+            break;
+          }
+
           if (verified) {
             await _safeWrite(
                 () => _jobFileDao.markFileSizeOnlyVerified(file.id));
-            completedCount++;
-            completedBytes += file.fileSize;
-            _logService?.info(
-              'Copied ${file.fileName} (size-verified)',
-              jobId: job.id,
-              fileIndex: completedCount,
-              totalFiles: files.length,
-              phase: LogPhase.transfer,
-            );
+            // 018 T015: tally for the end-of-loop Slack notification.
+            notVerifiedCount++;
           } else {
+            // Size mismatch — bytes are NOT trustworthy. Undo the
+            // credit and mark the file failed so the queue can either
+            // route through notifyJobFailed (if no other files
+            // succeeded) or surface as a per-file warning. Mirror the
+            // SHA-256 mismatch pattern: counter rollback is the cost
+            // of decoupling the credit from verify.
             await _safeWrite(() => _jobFileDao.markFileFailed(
                   file.id,
                   'Verification failed: size mismatch',
                 ));
             failedCount++;
+            completedCount--;
+            completedBytes -= file.fileSize;
+            await _safeWrite(() => _jobDao.updateJobProgress(
+                  job.id,
+                  completedFiles: completedCount,
+                  completedBytes: completedBytes,
+                ));
             _logService?.warning(
               'Size mismatch for ${file.fileName}',
               jobId: job.id,
               phase: LogPhase.verify,
             );
           }
-          await _safeWrite(() => _jobDao.updateJobProgress(
-                job.id,
-                completedFiles: completedCount,
-                completedBytes: completedBytes,
-              ));
         }
       } else {
         await _safeWrite(() =>
@@ -967,8 +1163,8 @@ class JobQueueService {
     // Slack warning prefix below. Operator decides next action.
     _logService?.info(
       'Job completed — $completedCount transferred, '
-      '$verifiedCount verified, $unverifiedCount unverified, '
-      '$mismatchedCount mismatch',
+      '$verifiedCount verified, $notVerifiedCount size-verified, '
+      '$unverifiedCount unverified, $mismatchedCount mismatch',
       jobId: job.id,
       phase: LogPhase.finalize,
     );
@@ -976,12 +1172,16 @@ class JobQueueService {
     // 017 (T043, FR-016): Slack call expanded with per-state verify
     // counts. Warning prefix fires automatically when
     // mismatchedCount > 0 or unverifiedCount > 0.
+    // 018 T015 (FR-014): pass notVerifiedFiles so size-mode runs render
+    // "$N size-verified · Passed" instead of the misleading bare-zero
+    // "Verified: 0 ... Passed".
     await _slackService.notifyTransferCompleted(
       job: job,
       completedFiles: completedCount,
       verifiedFiles: verifiedCount,
       unverifiedFiles: unverifiedCount,
       mismatchedFiles: mismatchedCount,
+      notVerifiedFiles: notVerifiedCount,
     );
   }
 
@@ -1505,9 +1705,14 @@ class JobQueueService {
   /// Preserves the relative folder structure from the transfer destination
   /// so duplicate basenames in different folders cannot collide in the
   /// compression output.
-  Future<void> _createChainedCompressionJob(Job transferJob) async {
+  // 018 T008/T009 (FR-007): returns the new child's job id so the
+  // centralized gate `createChainedCompressionJobIfAbsent` can hand
+  // it back to callers. MUST only be called from inside that gate
+  // (or its transaction); calling directly from the outside bypasses
+  // the dedup invariant.
+  Future<int?> _createChainedCompressionJob(Job transferJob) async {
     final outputPath = transferJob.compressionOutputPath;
-    if (outputPath == null) return;
+    if (outputPath == null) return null;
 
     final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
     // Codex round-15 P1: filter on the v8 verify axis, not the legacy
@@ -1533,12 +1738,12 @@ class JobQueueService {
                 f.verifyStatus == VerifyStatus.notVerified))
         .toList();
 
-    if (ready.isEmpty) return;
+    if (ready.isEmpty) return null;
 
     final totalBytes = ready.fold<int>(0, (sum, f) => sum + f.fileSize);
     final baseOrder = await _jobDao.getMaxSortOrder();
 
-    await _jobDao.createJobWithFiles(
+    return await _jobDao.createJobWithFiles(
       job: JobsCompanion.insert(
         type: JobType.compression,
         status: JobStatus.queued,

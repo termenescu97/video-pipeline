@@ -126,14 +126,45 @@ Both features went through the full spec-kit pipeline (`/speckit-specify` → `/
 - 017B: 9 rounds — covered the round-7 P1 robocopy-rename overwrite (staging-dir fix), case-collision detection in single-job + newFolder paths, persisted SourcesPanel collapse, HistorySurface details wiring, mismatch Skip flow, VerifyStatus.notVerified for size-mode, conflict-rename collision-aware suffix helper, Slack failure-truth, transferAndCompress auto-chain gating, unverified recovery + chain resume after Accept, compression-ready filter on the v8 axis.
 - Bundled rounds 17–20: counter-recompute on per-file retry (round-17 P2 + round-18 P2 #1), success-celebration suppression on verify warnings (round-18 P2 #2), v8 migration backfill of hash-only v7 failures to status=completed so Accept paths reach them (round-19 P2), per-file-retry blast radius scoping (round-20 P2 #1), size-mode parent file count in chained-compression Slack ping (round-20 P2 #2).
 
-Cumulative findings: **4 P1, ~32 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
+### Pre-tag hardening (018)
+
+A focused pre-tag pass ran AFTER 017A+017B implementation closed. Combined parallel Opus-max-thinking + Codex round-21 reviews surfaced 10 concerns; spec-kit feature 018 (`specs/018-pre-tag-hardening/`) addressed them in 35 ordered tasks across 7 user stories. Three additional Codex rounds during 018:
+
+- **Round-22** (plan review): 1 P1 + 3 P2 + 6 P3. P1 — typed-gate phrase enforcement; folded into T005-T007 wording. All P2s folded into the plan; one P3 (CLAUDE.md "junk drawer") split T031 into add+archive.
+- **Round-23** (tasks review): 1 P1 + 7 P2 + 1 P3. P1 — chain-dedup gate must be transactional; T010 rewritten. P2s included `_processTransfer` task-ordering false-positive (Phase 7 dep graph corrected), counter-self-healing under-spec (T022 rewritten to use single-query JOIN), startup-sweep wiring layer (T027 rewritten as standalone helper).
+- **Round-24** (post-checkpoint-6c review): 1 P2 + 2 P3. P2 — size-mode resume gap created by T024 (the `verification_mode = 'sha256'` filter from Codex round-3 P2 #1 became stale; recovery branch had to learn size-mode re-verify). P3s — `watchAllJobs` correlated subquery cost (added `idx_job_files_job_id` index in beforeOpen), pure-SHA-256 Slack body wrongly always rendered `Size-only: 0` (omit when 0).
+- **Round-25** (US6 staging-sweep focused review): 2 P1 + 4 P2 + 1 P3. P1 #1 — cross-machine NAS false-positive deletion (machine A's marker swept by machine B); P1 #2 — cold-start hang on flaky NAS (sync `Directory.listSync`). Four of the five P1/P2 findings collapsed into one design simplification: rely on the existing OS InstanceLock + sweep-runs-first ordering invariants, and use ONLY `host=` in the marker for liveness decisions. PID + exe become diagnostic-only. Async `Directory.list()` with 2-second per-root timeout for NAS guard. `getMostRecentCompletedJob` replaced with `getRecentTerminalJobs(limit: 10)` to cover both successful and failed terminations (P2 #3). Test case 3 redesigned from "self pid+exe preserve" to "foreign host preserve".
+
+10 closed findings shipped in the 9 commits on `018-pre-tag-hardening`:
+- Per-file retry now a single transaction (`JobDao.applyPerFileRetry`); 4-case test with mid-transaction failure injection.
+- Typed-confirmation gate on Accept-mismatch / Accept-unverified / Skip-mismatch via `ConfirmationDialog.showDestructive`; 8-case test across 3 phrases.
+- Chain-dedup centralized via `createChainedCompressionJobIfAbsent` (in-transaction `hasChainedChild` guard); 4-case stress test.
+- `_stopRequested` flag pattern with no-await between re-check and flip; 3-case race test using a shared release completer.
+- `PRAGMA foreign_keys = ON` set in `beforeOpen` (was previously unset; `parentJobId ON DELETE SET NULL` was dead code); 5-case FK + cleanup test.
+- Stale `error_message` cleanup on lifted jobs — both inline in Phase 7 SET clause AND in `beforeOpen` for retroactive coverage; 3-case test.
+- `markFileUnverifiedAndIncrement` atomic primitive replaces the previous two-`_safeWrite` sequence at both forward and recovery sites; 9-case counter-consistency test.
+- Self-healing JOIN aggregate on `getJob`/`watchJob`/`watchAllJobs`/`watchCompletedJobs`; same test as above covers all four paths in both drift directions; reconciliation gated to drift-only.
+- Size-mode `_processTransfer` mirrors SHA-256 sequence (markFileCompleted+credit BEFORE size verify); recovery branch handles size-mode + completed + pending; 3-case forward + recovery + rollback test.
+- Orphaned-staging-dir cold-start sweep with two-axis liveness (PID + exe match); 5-case test including SC-010 perf budget.
+
+Cumulative findings across all 25 rounds: **7 P1, ~40 P2, 1 documented FP** (Codex round-10 claimed PowerShell smart quotes act as string delimiters; rejected — `about_Quoting_Rules` and the existing regression test both confirm only ASCII U+0027 is a delimiter).
 
 ## Verification
 
 ### Pre-build (macOS)
 - `flutter analyze` clean (0 issues).
-- `flutter test` — 78 tests pass.
+- `flutter test` — 126 tests pass (78 baseline + 48 from feature 018's regression matrix).
 - CI grep guard: `! grep -rn '\$args\[' lib/` returns 0 matches.
+
+### Pre-flight safety (operator does this BEFORE step 1)
+
+We're still in MVP / continuous-testing phase — fresh build folder per cycle, the `.db` content is disposable. The protections below focus exclusively on the data that ISN'T disposable: bytes on the SD card and bytes at the destination.
+
+- **Smoke test with one small card BEFORE the 161 GB run.** Connect a single SD card with ~10 GB and run a transferAndCompress against a temp destination (e.g. `E:\v2.5.0-smoke\`). Watch for: progress bar advances during transfer, file counter increments live, INFO lines in `copiatorul3000.log` for each successful copy + verify, no PowerShell parser errors. If anything looks off here, STOP and report — do NOT proceed to the 161 GB run.
+- **Source data invariant.** SD cards stay in the camera/reader during the entire run. Do NOT format the card on the camera until the v2.5.0 run reports clean and you've spot-checked at least 3 destination files (open one, scrub through, confirm playback). The app's "Erase drive" action is a separate operator step requiring typed-confirmation; it is never automatic.
+- **Diagnostics screenshot before tagging promotion.** After the 161 GB run completes, open Settings → Diagnostics, screenshot the panel (instance-lock state, log path, HandBrake detection, recent failures section). This artifact lives with the release for future post-mortem if anything regresses later.
+
+If the app behaves weirdly in ways unrelated to the actual file transfer (UI state confused, queue showing stale rows, history out of sync), the MVP-context fix is: close the app, delete `%APPDATA%\com.example\video_pipeline\video_pipeline.db`, relaunch. Fresh schema, no real history lost.
 
 ### Windows acceptance (operator runs on workstation — T067)
 
@@ -155,6 +186,15 @@ Cumulative findings: **4 P1, ~32 P2, 1 documented FP** (Codex round-10 claimed P
 - Tag `v2.5.0-pre`. GitHub Actions builds Windows .exe.
 - Operator runs full acceptance.
 - Promote to `v2.5.0` after acceptance (delete the `-pre` suffix).
+
+### Recovery procedures (if something breaks after promote)
+
+MVP context: DB issues are recoverable by deleting `%APPDATA%\com.example\video_pipeline\video_pipeline.db` and relaunching. The bytes on disk (source SD + destination files) are the data that matters.
+
+- **Symptom: app launches but the queue/history shows stale or wrong counts.** Self-healing reads (018 T022) correct on the next emission. If still wrong after a relaunch, delete the `.db` and re-create the job.
+- **Symptom: app crashes on launch immediately after upgrade.** Delete the `.db` and relaunch — fresh v8 schema, no real history lost. If it still crashes, reinstall v2.4.0 from GitHub Releases and report.
+- **Symptom: a transfer reports completed but a destination file is missing/corrupt.** Source SD card is intact (we do not auto-erase). Re-run a per-file Retry from the JobCardDone menu, or re-create the job. The job's audit tab shows source/destination hashes for every file in SHA-256 mode — diff those.
+- **Symptom: orphaned `.tmp_robocopy_*` dirs in destination.** Cold-start sweep removes them on next launch (018 T027). If they persist across restarts, check the `.live` marker's `host=` field — if it says another machine, that's working as designed (cross-machine NAS guard).
 
 ## Deferred to v3.0
 

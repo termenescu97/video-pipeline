@@ -139,6 +139,11 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
   /// trustworthy but are also NOT proven corrupt. Warning state, not a
   /// hard fail. UI shows ⚠ chip; Job.unverifiedFiles increments via
   /// JobDao.incrementUnverified.
+  ///
+  /// Prefer [markFileUnverifiedAndIncrement] in the executor's hot
+  /// path — that variant is atomic across the row write + parent
+  /// counter increment so an abandoned shutdown between the two can
+  /// no longer leave the Job-level mirror under-counted by 1.
   Future<void> markFileUnverified(int fileId) {
     return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
       const JobFilesCompanion(
@@ -146,6 +151,35 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
         failureKind: Value(FailureKind.verifyUnreliable),
       ),
     );
+  }
+
+  /// 018 T020 (FR-013, US5, P3): atomic single-transaction variant.
+  /// Marks the file row at `verifyStatus=unverified` AND increments the
+  /// parent Job's `unverifiedFiles` counter in ONE transaction. Replaces
+  /// the previous two-`_safeWrite` sequence that could land the row
+  /// write but skip the counter increment if a Phase-B drain timed out
+  /// between them — leaving Job.unverifiedFiles permanently
+  /// under-counted.
+  ///
+  /// jobId is read from the file row inside the same transaction so the
+  /// caller doesn't have to pass it (and can't pass a wrong one).
+  Future<void> markFileUnverifiedAndIncrement(int fileId) async {
+    await transaction(() async {
+      final jobIdRow = await (selectOnly(jobFiles)
+            ..addColumns([jobFiles.jobId])
+            ..where(jobFiles.id.equals(fileId))
+            ..limit(1))
+          .getSingleOrNull();
+      if (jobIdRow == null) return;
+      final jobId = jobIdRow.read(jobFiles.jobId)!;
+      await (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+        const JobFilesCompanion(
+          verifyStatus: Value(VerifyStatus.unverified),
+          failureKind: Value(FailureKind.verifyUnreliable),
+        ),
+      );
+      await db.jobDao.incrementUnverified(jobId);
+    });
   }
 
   /// 017B (Codex round-11 P2): size-mode success. Bytes match by size

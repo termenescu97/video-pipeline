@@ -17,6 +17,7 @@ import 'services/job_queue_service.dart';
 import 'services/log_service.dart';
 import 'services/queue_state_notifier.dart';
 import 'services/slack_service.dart';
+import 'services/startup_sweep.dart';
 import 'services/transfer_service.dart';
 
 // Database.
@@ -82,6 +83,15 @@ void main() async {
   // Crash recovery: move stale in-progress jobs back to a resumable state.
   // Must run after DB init and after instance lock is held (single writer).
   await jobDao.recoverStaleJobs();
+
+  // 018 T027 (FR-016, US6): orphaned-staging-dir sweep. Same startup
+  // layer as recoverStaleJobs — runs BEFORE JobQueueService
+  // construction so the executor never observes orphan dirs that
+  // could otherwise be confused with our own active staging. Codex
+  // round-23 P2 corrected the original "wire into recoverStaleJobs"
+  // plan; standalone helper avoids contaminating the DAO with
+  // filesystem ops.
+  await sweepOrphanedStagingDirs(jobDao, logService: logService);
 
   // Services.
   driveService = DriveService(logService: logService);

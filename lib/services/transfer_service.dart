@@ -78,6 +78,45 @@ class TransferService {
       final tag = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
       stagingDir = Directory(p.join(destDir, '.tmp_robocopy_$tag'));
       await stagingDir.create(recursive: true);
+      // 018 T026 (FR-016, US6): write a `.live` marker so the startup
+      // sweeper (T027) can distinguish staging dirs left by THIS
+      // running process (must NOT delete) from orphaned staging dirs
+      // left by a prior crashed run on this machine (safe to delete).
+      // The marker holds the OS PID + the executable path; the sweeper
+      // verifies both before treating the dir as live. Inner try/catch
+      // on cleanup so a delete failure doesn't mask the original
+      // marker-write failure (Codex round-23 P2). The
+      // `Error.throwWithStackTrace` preserves the original stack so the
+      // log triage points at the marker write, not the rethrow site.
+      final markerFile = File(p.join(stagingDir.path, '.live'));
+      try {
+        // Codex round-25 redesign: `host=` is the load-bearing field
+        // for sweep decisions. Cross-machine NAS scenario — machine A
+        // creates `.tmp_robocopy_*` on a shared NAS, machine B's cold-
+        // start sweep MUST NOT delete it. host-mismatch is a silent
+        // skip; pid+exe are kept for log triage on cleanup of OUR-host
+        // orphans only. The single-instance lock + sweep-runs-before-
+        // any-new-marker invariant means every same-host marker found
+        // at cold-start is by definition orphaned (no other live
+        // Copiatorul3000 on this machine; sweep finishes before this
+        // process writes any markers of its own).
+        await markerFile.writeAsString(
+          'host=${Platform.localHostname}\n'
+          'pid=$pid\n'
+          'exe=${Platform.resolvedExecutable}\n',
+          flush: true,
+        );
+      } catch (markerError, markerStack) {
+        try {
+          await stagingDir.delete(recursive: true);
+        } catch (cleanupError) {
+          logService?.warning(
+            'Marker write failed AND cleanup failed: $cleanupError',
+            phase: LogPhase.transfer,
+          );
+        }
+        Error.throwWithStackTrace(markerError, markerStack);
+      }
       robocopyDestDir = stagingDir.path;
     } else {
       robocopyDestDir = destDir;

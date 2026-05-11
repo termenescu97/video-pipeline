@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../database/database.dart';
 import '../database/daos/settings_dao.dart';
@@ -64,33 +65,85 @@ class SlackService {
   /// checkmark only when both are zero. Constitution Principle V —
   /// operators walking away receive actionable detail about non-clean
   /// completions rather than a misleading green check.
+  /// 018 T014 (FR-014, US5, P3): added `notVerifiedFiles` so the
+  /// passed-label wording mirrors the round-20 fix already shipped in
+  /// [notifyCompressionCompleted]. Without this, a clean default
+  /// size-mode transfer (every file at `verifyStatus=notVerified`,
+  /// 0 SHA-256-verified) would render the bare-zero phrasing
+  /// "Verification: Size — Passed" with the body line "Verified: 0 ..."
+  /// — operator-confusing because it visually reads like nothing was
+  /// checked. Now reads "Verification: Size — N size-verified · Passed"
+  /// and a "Size-only" body field counts the size-mode successes
+  /// distinctly from "Verified" (cryptographic) and "Unverified"
+  /// (subsystem failure). Behavior unchanged for SHA-256-only transfers
+  /// where `notVerifiedFiles == 0`.
   Future<void> notifyTransferCompleted({
     required Job job,
     required int completedFiles,
     required int verifiedFiles,
     required int unverifiedFiles,
     required int mismatchedFiles,
+    int? notVerifiedFiles,
   }) async {
+    await _send(
+      formatTransferCompletedBody(
+        job: job,
+        completedFiles: completedFiles,
+        verifiedFiles: verifiedFiles,
+        unverifiedFiles: unverifiedFiles,
+        mismatchedFiles: mismatchedFiles,
+        notVerifiedFiles: notVerifiedFiles,
+      ),
+    );
+  }
+
+  /// 018 T016 (FR-014): formatting extracted as a pure static so tests
+  /// can assert the wording without booting the full SlackService +
+  /// Dio + global LogService. The runtime [notifyTransferCompleted]
+  /// delegates here; behavior is byte-identical.
+  @visibleForTesting
+  static String formatTransferCompletedBody({
+    required Job job,
+    required int completedFiles,
+    required int verifiedFiles,
+    required int unverifiedFiles,
+    required int mismatchedFiles,
+    int? notVerifiedFiles,
+  }) {
     final totalGb = formatBytes(job.totalBytes);
     final duration = job.startedAt != null
         ? DateTime.now().difference(job.startedAt!).inMinutes
         : 0;
-    final mode = job.verificationMode == VerificationMode.sha256 ? 'SHA-256' : 'Size';
+    final mode =
+        job.verificationMode == VerificationMode.sha256 ? 'SHA-256' : 'Size';
+    final notVerified = notVerifiedFiles ?? 0;
+    final passedLabel = (verifiedFiles > 0 && notVerified > 0)
+        ? '$verifiedFiles verified + $notVerified size-only · Passed'
+        : verifiedFiles > 0
+            ? '$verifiedFiles verified · Passed'
+            : '$notVerified size-verified · Passed';
     final verdict = mismatchedFiles > 0
         ? '⚠ $mismatchedFiles file(s) FAILED verification'
         : unverifiedFiles > 0
             ? '⚠ $unverifiedFiles file(s) copied but UNVERIFIED'
-            : 'Verification: $mode — Passed';
+            : 'Verification: $mode — $passedLabel';
     final emoji = (mismatchedFiles > 0 || unverifiedFiles > 0) ? '⚠' : '✅';
-    await _send(
-      '$emoji *Transfer Complete*\n'
-      'Job: ${job.id}${_operatorLine(job)}\n'
-      'Files: $completedFiles/${job.totalFiles}\n'
-      'Verified: $verifiedFiles · Unverified: $unverifiedFiles · Mismatch: $mismatchedFiles\n'
-      'Size: $totalGb\n'
-      'Duration: $duration min\n'
-      '$verdict',
-    );
+    final operator = (job.operatorName != null && job.operatorName!.isNotEmpty)
+        ? '\nOperator: ${job.operatorName}'
+        : '';
+    // Codex round-24 P3: omit `Size-only: 0` when there are no size-mode
+    // files. Otherwise pure SHA-256 transfer messages would always
+    // include the field, contradicting the "behavior unchanged for
+    // SHA-256-only transfers" promise on the public API. The field
+    // appears only when a size-mode count is actually present.
+    final sizeOnlySegment = notVerified > 0 ? ' · Size-only: $notVerified' : '';
+    return '$emoji *Transfer Complete*\n'
+        'Job: ${job.id}$operator\n'
+        'Files: $completedFiles/${job.totalFiles}\n'
+        'Verified: $verifiedFiles$sizeOnlySegment · Unverified: $unverifiedFiles · Mismatch: $mismatchedFiles\n'
+        'Size: $totalGb\n'
+        'Duration: $duration min\n'
+        '$verdict';
   }
 
   Future<void> notifyTransferFailed({
