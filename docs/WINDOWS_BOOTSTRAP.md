@@ -111,9 +111,11 @@ If `gpt-5.5` is rejected at runtime, see `.claude/memory/feedback_adversarial_re
 
 Pick a development root. Suggested:
 
+> **Gotcha:** the repo's default branch on GitHub is `001-video-pipeline-automation` (a leftover from the first feature branch), not `main`. A bare `git clone` checks out the wrong branch and you won't see the recent v2.5.0 work or this bootstrap doc. Use `-b main` explicitly:
+
 ```powershell
 cd C:\Users\<your-user>
-git clone https://github.com/termenescu97/video-pipeline.git copiatorul3000
+git clone -b main https://github.com/termenescu97/video-pipeline.git copiatorul3000
 cd copiatorul3000
 flutter pub get
 dart run build_runner build --delete-conflicting-outputs
