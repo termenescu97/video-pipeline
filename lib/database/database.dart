@@ -96,17 +96,16 @@ class AppDatabase extends _$AppDatabase {
                 )
             ''');
             // Size-only verification does NOT establish cryptographic
-            // trust (Codex M5). Map to unverified — but ONLY for
-            // transfer-type jobs. Compression jobs also have
-            // verification_mode='size' (default) and verified=true,
-            // but the verify axis doesn't apply to them at all
-            // (FR-017 hide-rule). Backfilling them as unverified
-            // would inflate jobs.unverified_files and surface
-            // misleading warnings on history compression jobs.
-            // Codex round-3 P2 #1 fix.
+            // trust (Codex M5). Map to `notVerified` — the size-mode
+            // baseline state added in Codex round-11 to keep size-mode
+            // rows distinct from SHA-256 subsystem failures
+            // (`unverified`). Limited to transfer-type jobs;
+            // compression rows leave verifyStatus=pending because the
+            // verify axis doesn't apply to them at all (FR-017
+            // hide-rule).
             await customStatement('''
               UPDATE job_files
-              SET verify_status = 'unverified'
+              SET verify_status = 'notVerified'
               WHERE status = 'completed'
                 AND verified = 1
                 AND job_id IN (
@@ -154,6 +153,30 @@ class AppDatabase extends _$AppDatabase {
                 )
             ''');
 
+            // Phase 4b (Codex round-19 P2): hash-only failures from
+            // phases 3+4 are post-copy events — robocopy succeeded
+            // before the verify step failed. In the v8 decoupled
+            // model that's `status=completed && verifyStatus=mismatch`
+            // (or `unverified`), not `status=failed`. Flip the row
+            // status so:
+            //  - the new Accept actions in JobCardDone reach files
+            //    that need them (they read the parent job from
+            //    JobStatus.completed cards),
+            //  - Job.completedFiles/completedBytes count the bytes
+            //    that are actually on disk,
+            //  - maybeChainCompression's "no failed file rows" gate
+            //    isn't blocked by rows where the copy succeeded.
+            // failure_kind stays as set above so audit attribution
+            // (verifyMismatch / verifyUnreliable) is preserved; the
+            // legacy `verified` boolean stays 0 because no
+            // cryptographic trust was established.
+            await customStatement('''
+              UPDATE job_files
+              SET status = 'completed'
+              WHERE status = 'failed'
+                AND verify_status IN ('mismatch', 'unverified')
+            ''');
+
             // Phase 5: remaining failed rows are copy errors.
             await customStatement('''
               UPDATE job_files
@@ -161,14 +184,57 @@ class AppDatabase extends _$AppDatabase {
               WHERE status = 'failed' AND failure_kind = 'none'
             ''');
 
-            // Phase 6: re-derive Job.unverifiedFiles from per-row state.
+            // Phase 6: re-derive Job.completedFiles / completedBytes /
+            // unverifiedFiles for every job touched by Phase 4b.
+            // Without this, the Job-level mirror diverges from
+            // per-row state and the new Accept paths can't recover
+            // the parent (counters say 0 completed even though rows
+            // are completed). Scoped to jobs containing at least one
+            // mismatch/unverified row to limit blast radius on large
+            // dbs, but the recompute itself is whole-job idempotent.
             await customStatement('''
               UPDATE jobs
-              SET unverified_files = (
-                SELECT COUNT(*) FROM job_files
-                WHERE job_files.job_id = jobs.id
-                  AND job_files.verify_status = 'unverified'
+              SET
+                completed_files = (
+                  SELECT COUNT(*) FROM job_files
+                  WHERE job_id = jobs.id AND status = 'completed'
+                ),
+                completed_bytes = COALESCE((
+                  SELECT SUM(file_size) FROM job_files
+                  WHERE job_id = jobs.id AND status = 'completed'
+                ), 0),
+                unverified_files = (
+                  SELECT COUNT(*) FROM job_files
+                  WHERE job_id = jobs.id
+                    AND verify_status = 'unverified'
+                )
+              WHERE id IN (
+                SELECT DISTINCT job_id FROM job_files
+                WHERE verify_status IN ('mismatch', 'unverified')
               )
+            ''');
+
+            // Phase 7 (Codex round-19 P2): jobs whose only failed
+            // rows were hash-only failures (now flipped to
+            // completed) have zero remaining `status=failed`
+            // children. Lift the parent Job.status from 'failed' to
+            // 'completed' for those — otherwise JobCardDone never
+            // shows them and the Accept menu is unreachable. Jobs
+            // with copy-error rows (Phase 5) keep status='failed'.
+            // completedAt is preserved if already set; we don't
+            // back-date it here.
+            await customStatement('''
+              UPDATE jobs
+              SET status = 'completed'
+              WHERE status = 'failed'
+                AND id IN (
+                  SELECT DISTINCT job_id FROM job_files
+                  WHERE verify_status IN ('mismatch', 'unverified')
+                )
+                AND id NOT IN (
+                  SELECT DISTINCT job_id FROM job_files
+                  WHERE status = 'failed'
+                )
             ''');
           });
         }

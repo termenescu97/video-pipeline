@@ -21,7 +21,13 @@ enum VerificationMode { size, sha256 }
 /// `mismatch` = SHA-256 ran but bytes differ (real corruption — hard fail; FR-005 forces re-copy on Retry).
 /// `unverified` = verification subsystem itself failed (PS broken, etc.) OR
 ///                size-only verification passed (no cryptographic trust per Codex M5).
-enum VerifyStatus { pending, verified, mismatch, unverified }
+/// 017B (Codex round-11 P2): the verify axis has 5 states. The first
+/// four are SHA-256-mode outcomes; `notVerified` is the size-mode
+/// baseline — no hash was attempted by design, so it's neither pending
+/// (SHA-256 abandoned) nor unverified (SHA-256 subsystem failure).
+/// Slack and HistorySurface treat `notVerified` as the clean default
+/// for size-mode jobs; only `unverified` triggers warning prefixes.
+enum VerifyStatus { pending, verified, mismatch, unverified, notVerified }
 
 /// 017 (v8): retry routing for failures. Distinguishes copy-side errors
 /// from verify-side outcomes so Retry can take the right action

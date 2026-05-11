@@ -9,7 +9,14 @@
 ///
 /// Smart-quote variants (U+2018, U+2019) and other Unicode characters
 /// are NOT recognized by PowerShell as string delimiters — only ASCII
-/// U+0027. They pass through unchanged.
+/// U+0027. They pass through unchanged. PowerShell's `about_Quoting_Rules`
+/// is explicit: "PowerShell uses straight single (') and double quotation
+/// marks (")" — full stop. Codex round-10 flagged this as a P1 injection
+/// vector (claiming PS recognizes U+2018/U+2019 as delimiters); rejected
+/// because the claim contradicts (a) the documented PS lexer behavior
+/// and (b) `test/unit/ps_escape_test.dart`'s smart-quote regression test
+/// (already pinning the safe pass-through). Tracking this as a
+/// known-false-positive so future review rounds don't re-litigate.
 ///
 /// Use ONLY with a single-quoted PS literal; never embed the result
 /// in a double-quoted PS string (which expands `$var`).

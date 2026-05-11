@@ -49,6 +49,11 @@ class _VerifyTally {
           break;
         case VerifyStatus.pending:
           break;
+        case VerifyStatus.notVerified:
+          // Size-mode baseline — counted as completed but neither
+          // verified nor a warning. The active card's verify-axis
+          // section is suppressed for size-mode jobs upstream.
+          break;
       }
     }
     return _VerifyTally(
@@ -150,7 +155,14 @@ class JobCardActive extends StatelessWidget {
                     // banner. Reads JobFile snapshots and computes tally
                     // once per build. Hidden for compression-only jobs
                     // (FR-017) — verify is a transfer-side concern.
-                    if (job.type != JobType.compression)
+                    // 017B (Codex round-12 P2): the verify-axis stats +
+                    // mismatch banner are SHA-256 concerns. Size-mode
+                    // jobs would render "0 / N verified" forever (rows
+                    // are notVerified by design, not verified) — that's
+                    // misleading. Hide for compression jobs (FR-017)
+                    // AND for size-mode jobs.
+                    if (job.type != JobType.compression &&
+                        job.verificationMode == VerificationMode.sha256)
                       StreamBuilder<List<JobFile>>(
                         stream: jobFileDao.watchFilesForJob(job.id),
                         builder: (context, snapshot) {
@@ -576,6 +588,12 @@ class _VerifyMismatchBanner extends StatelessWidget {
                 : () => _retryAll(context, tally.mismatchedFileIds),
             child: const Text('Retry'),
           ),
+          TextButton(
+            onPressed: isCurrentlyProcessing
+                ? null
+                : () => _skipAll(context, tally.mismatchedFileIds),
+            child: const Text('Skip'),
+          ),
         ],
       ),
     );
@@ -591,6 +609,49 @@ class _VerifyMismatchBanner extends StatelessWidget {
         SnackBar(
           content: Text(
               'Retrying ${fileIds.length} file(s) with forced dest delete'),
+        ),
+      );
+    }
+  }
+
+  /// 017B (Codex round-8 P2 #3): Skip dismisses the mismatch banner by
+  /// flipping verifyStatus from `mismatch` to `verified` per file.
+  /// Requires typed-confirmation gate per Constitution Principle I —
+  /// the operator is explicitly accepting that bytes on disk differ
+  /// from source. The audit trail (sourceHash, destinationHash,
+  /// errorMessage) is preserved for post-mortem.
+  Future<void> _skipAll(BuildContext context, List<int> fileIds) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Accept SHA-256 mismatch?'),
+        content: Text(
+          '${fileIds.length} file(s) on disk differ from source — '
+          'verification confirmed corruption. Skipping retains the '
+          'corrupted bytes and clears the warning. The audit trail '
+          'records this as an operator override.\n\n'
+          'Only proceed if you have already confirmed the bytes on '
+          'disk are the version you want to keep.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Accept mismatch')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    for (final id in fileIds) {
+      await jobFileDao.acceptMismatch(id);
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${fileIds.length} mismatch(es) accepted by operator '
+              '— audit trail preserved'),
         ),
       );
     }

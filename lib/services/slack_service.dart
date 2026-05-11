@@ -133,6 +133,7 @@ class SlackService {
     required int totalFiles,
     Job? parentTransferJob,
     int? parentVerifiedFiles,
+    int? parentNotVerifiedFiles,
     int? parentUnverifiedFiles,
     int? parentMismatchedFiles,
   }) async {
@@ -142,12 +143,27 @@ class SlackService {
     final hasParent = parentTransferJob != null;
     final mismatched = parentMismatchedFiles ?? 0;
     final unverified = parentUnverifiedFiles ?? 0;
+    final verified = parentVerifiedFiles ?? 0;
+    final notVerified = parentNotVerifiedFiles ?? 0;
+    // Codex round-20 P2 #2: size-mode jobs land at verifyStatus=notVerified
+    // — count those into the "passed" tally so a default size-mode
+    // transferAndCompress doesn't report "0 verified · Passed". When
+    // both axes have counts (mixed history), surface the SHA-256
+    // count plus a "+ N size-only" suffix so the operator can tell
+    // whether cryptographic trust was established.
+    final passedLabel = mismatched == 0 && unverified == 0
+        ? (verified > 0 && notVerified > 0
+            ? '$verified verified + $notVerified size-only · Passed'
+            : verified > 0
+                ? '$verified verified · Passed'
+                : '$notVerified size-verified · Passed')
+        : null;
     final verifyLine = hasParent
         ? (mismatched > 0
             ? '⚠ Transfer verification: $mismatched file(s) FAILED'
             : unverified > 0
                 ? '⚠ Transfer verification: $unverified file(s) UNVERIFIED'
-                : 'Transfer verification: ${parentVerifiedFiles ?? 0} verified · Passed')
+                : 'Transfer verification: $passedLabel')
         : null;
     final emoji = (mismatched > 0 || unverified > 0) ? '⚠' : '✅';
     final body = StringBuffer()

@@ -12,9 +12,6 @@ import '../../main.dart';
 import '../../services/drive_service.dart';
 import '../../services/log_service.dart';
 import '../../utils/history_export.dart';
-import '../theme/insets.dart';
-import '../theme/text_styles.dart';
-import '../widgets/activity_panel.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
 import '../widgets/keyboard_cheat_sheet.dart';
@@ -37,6 +34,23 @@ class _ShellScreenState extends State<ShellScreen>
     with TrayListener, WindowListener {
   bool _showCreateJob = false;
   bool _shuttingDown = false;
+
+  /// 017B (FR-B03): collapsed-state mirror loaded from AppSettings on
+  /// init. The toggle persists immediately via `setSourcesPanelCollapsed`
+  /// so the operator's preference survives restart. Auto-expand on
+  /// new card insert (FR-B04) writes back to false too.
+  bool _sourcesCollapsed = false;
+  /// 017B (FR-B04): set of drive paths seen on the last poll, used by
+  /// SourcesPanel to detect "newly inserted card" and trigger auto-
+  /// expand. The shell holds this so the auto-expand decision lives
+  /// next to the collapsed flag, not inside SourcesPanel itself.
+  Set<String> _previouslySeenDrivePaths = const <String>{};
+  /// Codex round-9 P2 #1: the first poll seeds the baseline only —
+  /// auto-expand is suppressed for cards that were already inserted
+  /// when the app launched. Without this, restarting with a card in
+  /// the slot would immediately undo the operator's persisted
+  /// collapse preference.
+  bool _hasSeededDrives = false;
   // When the operator picks a drive from SourcesPanel, hand it to
   // CreateJobScreen via this transient. Cleared when CreateJobScreen
   // dismisses or another panel state takes over.
@@ -83,6 +97,7 @@ class _ShellScreenState extends State<ShellScreen>
   void initState() {
     super.initState();
     _initSystemTray();
+    _initSourcesCollapsed();
     trayManager.addListener(this);
     // Intercept window close so we can stop the queue and persist state
     // before the OS terminates the process.
@@ -310,6 +325,9 @@ class _ShellScreenState extends State<ShellScreen>
             const _RevealLogIntent(),
         const SingleActivator(LogicalKeyboardKey.keyE, control: true):
             const _ExportCsvIntent(),
+        // 017B (FR-B03): Ctrl+1 toggles SourcesPanel collapsed state.
+        const SingleActivator(LogicalKeyboardKey.digit1, control: true):
+            const _ToggleSourcesIntent(),
       },
       child: Actions(
         actions: {
@@ -369,6 +387,12 @@ class _ShellScreenState extends State<ShellScreen>
               return null;
             },
           ),
+          _ToggleSourcesIntent: CallbackAction<_ToggleSourcesIntent>(
+            onInvoke: (_) {
+              _toggleSourcesCollapsed();
+              return null;
+            },
+          ),
         },
         child: Focus(
           autofocus: true,
@@ -377,18 +401,29 @@ class _ShellScreenState extends State<ShellScreen>
               onSettings: _openSettings,
               onCheatSheet: () => KeyboardCheatSheet.show(context),
             ),
-            // Three-column layout (FR-001). Sources column at 240px on
-            // the left, Queue+Detail in the flexible center, Activity
-            // column at 300px on the right. Min window 1280×720 ensures
-            // there's always enough space for the center to host both
-            // the queue list and an inline detail/create pane side by
-            // side without responsive collapse (R1 / FR-002).
+            // 017B (FR-B01/B02/B03): two-column layout. The previous
+            // ActivityPanel (right 300 px) is gone — its cross-job
+            // history role lives inside the new HistorySurface in
+            // HomeScreen (FR-B06). The CreateJobScreen pane only
+            // renders when the operator is actively creating; the
+            // previous "Click a job in the queue to expand its detail"
+            // empty state — the operator's "open all the time for no
+            // reason" complaint — is removed.
+            //
+            // SourcesPanel is collapsible (240↔48 px, FR-B03) via
+            // Ctrl+1 or its header chevron; collapsed state persists
+            // in AppSettings.sourcesPanelCollapsed.
             body: Row(
               children: [
-                // Left column — Sources (FR-020/021/022/023).
-                SizedBox(
-                  width: 240,
+                // Left column — Sources (collapsible).
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeInOut,
+                  width: _sourcesCollapsed ? 48 : 240,
                   child: SourcesPanel(
+                    collapsed: _sourcesCollapsed,
+                    onToggleCollapsed: _toggleSourcesCollapsed,
+                    onDrivesChanged: _onDrivesChanged,
                     onSourceSelected: (drive) {
                       setState(() {
                         _showCreateJob = true;
@@ -398,45 +433,34 @@ class _ShellScreenState extends State<ShellScreen>
                   ),
                 ),
                 const VerticalDivider(width: 1),
-                // Center column — Queue + Detail. The queue list stays
-                // visible at all times; selecting a job or opening Create
-                // Job replaces only the right side of the flexible
-                // center, never the queue. Phase F (US5 T055) replaces
-                // _buildRightPanel with inline DetailTabs expansion.
+                // Center: HomeScreen always visible. CreateJobScreen
+                // appears as a side pane only when _showCreateJob is
+                // true; otherwise HomeScreen takes the full flex.
                 Expanded(
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 360,
-                        child: HomeScreen(
+                  child: _showCreateJob
+                      ? Row(
+                          children: [
+                            SizedBox(
+                              width: 360,
+                              child: HomeScreen(
+                                expandedJobIds: _expandedJobIds,
+                                onToggleExpanded: _toggleExpanded,
+                                onJobDeleted: _onJobDeleted,
+                                selectedQueueJobId: _selectedQueueJobId,
+                                onCreateJob: _openCreateJob,
+                              ),
+                            ),
+                            const VerticalDivider(width: 1),
+                            Expanded(child: _buildCreateJobPane()),
+                          ],
+                        )
+                      : HomeScreen(
                           expandedJobIds: _expandedJobIds,
                           onToggleExpanded: _toggleExpanded,
                           onJobDeleted: _onJobDeleted,
                           selectedQueueJobId: _selectedQueueJobId,
-                          onCreateJob: () {
-                            setState(() {
-                              _showCreateJob = true;
-                              _preSelectedDrive = null;
-                            });
-                          },
+                          onCreateJob: _openCreateJob,
                         ),
-                      ),
-                      const VerticalDivider(width: 1),
-                      Expanded(child: _buildRightPanel()),
-                    ],
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                // Right column — Activity (FR-031/032). History rows
-                // expand inline within this column (US5 T054); no
-                // navigation away to a detail screen.
-                SizedBox(
-                  width: 300,
-                  child: ActivityPanel(
-                    expandedJobIds: _expandedJobIds,
-                    onToggleExpanded: _toggleExpanded,
-                    onJobDeleted: _onJobDeleted,
-                  ),
                 ),
               ],
             ),
@@ -446,9 +470,14 @@ class _ShellScreenState extends State<ShellScreen>
     );
   }
 
-  Widget _buildRightPanel() {
-    if (_showCreateJob) {
-      return CreateJobScreen(
+  /// 017B (FR-B02): replaces the previous _buildRightPanel that hosted
+  /// either CreateJobScreen OR an empty-state placeholder ("Click a job
+  /// in the queue to expand its detail"). The placeholder consumed
+  /// horizontal real estate the operator wanted for the live progress
+  /// — now CreateJobScreen is the only thing this pane ever renders,
+  /// and it's only shown when `_showCreateJob == true`.
+  Widget _buildCreateJobPane() {
+    return CreateJobScreen(
         preSelectedDrive: _preSelectedDrive,
         onJobCreated: () {
           setState(() {
@@ -463,26 +492,56 @@ class _ShellScreenState extends State<ShellScreen>
           );
         },
       );
-    }
+  }
 
-    // Empty state. Job detail now expands inline within the queue
-    // panel (US5); JobDetailScreen is retained as a route for
-    // backwards compat (deep-links / programmatic navigation) but
-    // is no longer surfaced from the shell by default (T048).
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.touch_app, size: 48, color: Colors.grey),
-          const SizedBox(height: Insets.l),
-          const Text('Click a job in the queue to expand its detail',
-              style: TextStyle(color: Colors.grey)),
-          const SizedBox(height: Insets.s),
-          Text('Ctrl+N: New Job  |  Ctrl+Enter: Start/Stop Queue',
-              style: AppTextStyles.caption.copyWith(color: Colors.grey)),
-        ],
-      ),
-    );
+  /// 017B (FR-B02): the home-screen "Add job" / Ctrl+N entrypoint.
+  /// Centralized so the create-pane gets opened with consistent state
+  /// regardless of trigger.
+  void _openCreateJob() {
+    setState(() {
+      _showCreateJob = true;
+      _preSelectedDrive = null;
+    });
+  }
+
+  /// 017B (FR-B03): toggle the SourcesPanel collapsed state and persist
+  /// to AppSettings.sourcesPanelCollapsed so the operator's preference
+  /// survives restart. Bound to Ctrl+1 and the panel header chevron.
+  void _toggleSourcesCollapsed() {
+    setState(() => _sourcesCollapsed = !_sourcesCollapsed);
+    settingsDao.setSourcesPanelCollapsed(_sourcesCollapsed);
+  }
+
+  Future<void> _initSourcesCollapsed() async {
+    final settings = await settingsDao.getSettings();
+    if (!mounted) return;
+    setState(() {
+      _sourcesCollapsed = settings?.sourcesPanelCollapsed ?? false;
+    });
+  }
+
+  /// 017B (FR-B04): SourcesPanel hands us its current poll result so we
+  /// can detect "newly inserted card" (a path appearing that wasn't in
+  /// the previous set) and auto-expand the panel — operators must
+  /// notice card insertions even when they've collapsed the panel.
+  ///
+  /// Codex round-9 P2 #1: the first poll seeds the baseline only — its
+  /// drives are NOT treated as "new cards" because they were already
+  /// inserted at launch. Without this guard, restarting the app with
+  /// any card present would immediately undo the operator's persisted
+  /// collapse preference.
+  void _onDrivesChanged(Set<String> currentPaths) {
+    if (!_hasSeededDrives) {
+      _hasSeededDrives = true;
+      _previouslySeenDrivePaths = currentPaths;
+      return;
+    }
+    final newCards = currentPaths.difference(_previouslySeenDrivePaths);
+    _previouslySeenDrivePaths = currentPaths;
+    if (newCards.isNotEmpty && _sourcesCollapsed) {
+      setState(() => _sourcesCollapsed = false);
+      settingsDao.setSourcesPanelCollapsed(false);
+    }
   }
 
   // ── US11 shortcut helpers (T085-T097) ─────────────────────────
@@ -680,4 +739,9 @@ class _RevealLogIntent extends Intent {
 
 class _ExportCsvIntent extends Intent {
   const _ExportCsvIntent();
+}
+
+/// 017B (FR-B03): Ctrl+1 SourcesPanel collapse toggle.
+class _ToggleSourcesIntent extends Intent {
+  const _ToggleSourcesIntent();
 }

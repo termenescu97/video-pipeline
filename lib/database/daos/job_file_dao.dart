@@ -19,6 +19,15 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     return (select(jobFiles)..where((t) => t.jobId.equals(jobId))).get();
   }
 
+  /// 017B (FR-B08): the HistorySurface tallies verify-axis state per
+  /// job to drive its status-filter chips (Verified / Unverified /
+  /// Mismatch). Streaming the full file table is fine for the
+  /// operator's expected scale; if it becomes a bottleneck swap for
+  /// a per-job aggregate DAO query.
+  Stream<List<JobFile>> watchAllFiles() {
+    return select(jobFiles).watch();
+  }
+
   /// Get a single file by its primary key.
   Future<JobFile?> getFile(int fileId) {
     return (select(jobFiles)..where((t) => t.id.equals(fileId)))
@@ -139,6 +148,93 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
     );
   }
 
+  /// 017B (Codex round-11 P2): size-mode success. Bytes match by size
+  /// but no cryptographic check was performed by design. Sets
+  /// `verifyStatus=notVerified` (the size-mode baseline) so size-mode
+  /// rows are visibly distinct from SHA-256 subsystem failures
+  /// (`unverified`); the legacy `verified` boolean stays true to
+  /// preserve v2.4.0 readers' meaning. failureKind=none — a successful
+  /// size check is not a failure of any kind.
+  Future<void> markFileSizeOnlyVerified(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      JobFilesCompanion(
+        status: const Value(FileStatus.completed),
+        verified: const Value(true),
+        verifyStatus: const Value(VerifyStatus.notVerified),
+        failureKind: const Value(FailureKind.none),
+        completedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  /// 017B (Codex round-14 P2 #1+#2): operator-accepted unverified.
+  /// Bytes on disk are kept; verifyStatus flips from `unverified`
+  /// (SHA-256 subsystem failure) to `notVerified` (size-mode baseline)
+  /// so the auto-chain gate in JobQueueService stops blocking
+  /// transferAndCompress parents. failureKind cleared. errorMessage
+  /// preserves the operator override for audit.
+  ///
+  /// Codex round-17 P2: re-derive `Job.unverifiedFiles` from per-row
+  /// state in the same transaction so the job-level mirror stays
+  /// consistent. The previous version only flipped the row; the
+  /// counter (only ever incremented via `incrementUnverified`) would
+  /// permanently overcount after Accept. Same pattern applied to
+  /// resetFileForRetry below.
+  Future<void> acceptUnverified(int fileId) async {
+    await transaction(() async {
+      await (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+        const JobFilesCompanion(
+          verifyStatus: Value(VerifyStatus.notVerified),
+          failureKind: Value(FailureKind.none),
+          errorMessage: Value(
+              'Operator accepted SHA-256 subsystem failure — bytes on disk '
+              'retained without cryptographic verification.'),
+        ),
+      );
+      await _recomputeUnverifiedForFile(fileId);
+    });
+  }
+
+  /// Codex round-17 P2: rederive Job.unverifiedFiles from the per-row
+  /// state of the parent job. Self-healing — any drift between the
+  /// counter and the source-of-truth row state is corrected on the
+  /// next call. Used by every DAO method that transitions
+  /// `verifyStatus=unverified` to anything else (acceptUnverified,
+  /// resetFileForRetry).
+  Future<void> _recomputeUnverifiedForFile(int fileId) {
+    return customStatement(
+      '''
+      UPDATE jobs
+      SET unverified_files = (
+        SELECT COUNT(*) FROM job_files
+        WHERE job_id = jobs.id AND verify_status = 'unverified'
+      )
+      WHERE id = (SELECT job_id FROM job_files WHERE id = ?)
+      ''',
+      [fileId],
+    );
+  }
+
+  /// 017B (Codex round-8 P2 #3): operator-accepted mismatch. Transitions
+  /// a `verifyStatus=mismatch` row back to `verifyStatus=verified` so
+  /// the active-card banner disappears; preserves the audit trail by
+  /// stamping errorMessage with the operator override and keeping the
+  /// stored hashes (sourceHash != destinationHash). The legacy
+  /// `verified` boolean is NOT flipped to true — it would lie about
+  /// cryptographic trust. Requires explicit operator action via the
+  /// banner Skip button (Constitution Principle I).
+  Future<void> acceptMismatch(int fileId) {
+    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+      const JobFilesCompanion(
+        verifyStatus: Value(VerifyStatus.verified),
+        failureKind: Value(FailureKind.none),
+        errorMessage: Value(
+            'Operator accepted SHA-256 mismatch — bytes on disk differ '
+            'from source but were retained by explicit operator approval.'),
+      ),
+    );
+  }
+
   /// 017 (T030, FR-006/FR-007): used by `recoverStaleJobs` to detect
   /// `status=completed && verifyStatus=pending` rows — files where
   /// robocopy succeeded before shutdown but the SHA-256 check never
@@ -197,19 +293,28 @@ class JobFileDao extends DatabaseAccessor<AppDatabase> with _$JobFileDaoMixin {
   /// consumption. Defaults to false to preserve "no-op for unrelated
   /// resets" semantics.
   Future<void> resetFileForRetry(int fileId,
-      {bool forceDestDeleteApproved = false}) {
-    return (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
-      JobFilesCompanion(
-        status: const Value(FileStatus.pending),
-        completedAt: const Value(null),
-        errorMessage: const Value(null),
-        verifyStatus: const Value(VerifyStatus.pending),
-        failureKind: const Value(FailureKind.none),
-        sourceHash: const Value(null),
-        destinationHash: const Value(null),
-        forceDestDeleteApproved: Value(forceDestDeleteApproved),
-      ),
-    );
+      {bool forceDestDeleteApproved = false}) async {
+    // Codex round-17 P2: bracket the row reset with a counter
+    // recompute so transitioning out of `verifyStatus=unverified`
+    // (e.g., per-file Retry on an unverified row) decrements
+    // Job.unverifiedFiles. The counter is only ever incremented via
+    // incrementUnverified; without this, repeated retry/failure
+    // cycles overcount the same file forever.
+    await transaction(() async {
+      await (update(jobFiles)..where((t) => t.id.equals(fileId))).write(
+        JobFilesCompanion(
+          status: const Value(FileStatus.pending),
+          completedAt: const Value(null),
+          errorMessage: const Value(null),
+          verifyStatus: const Value(VerifyStatus.pending),
+          failureKind: const Value(FailureKind.none),
+          sourceHash: const Value(null),
+          destinationHash: const Value(null),
+          forceDestDeleteApproved: Value(forceDestDeleteApproved),
+        ),
+      );
+      await _recomputeUnverifiedForFile(fileId);
+    });
   }
 
   /// 017 (v8, Codex round-2 P2 #2): clear the persisted force-delete

@@ -93,4 +93,13 @@ class SettingsDao extends DatabaseAccessor<AppDatabase>
     return (update(appSettings)..where((t) => t.id.equals(1)))
         .write(AppSettingsCompanion(defaultConflictResolution: Value(resolution)));
   }
+
+  /// 017B (FR-B03): persist the SourcesPanel collapse state so the
+  /// operator's preference survives restart. The column itself was
+  /// added in 017A's v8 migration (the UI work was deferred; this is
+  /// where it's wired up).
+  Future<void> setSourcesPanelCollapsed(bool collapsed) {
+    return (update(appSettings)..where((t) => t.id.equals(1)))
+        .write(AppSettingsCompanion(sourcesPanelCollapsed: Value(collapsed)));
+  }
 }

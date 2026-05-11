@@ -13,6 +13,7 @@ import '../theme/text_styles.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/copy_all_cards_dialog.dart';
 import '../widgets/handbrake_banner.dart';
+import '../widgets/history_surface.dart';
 import '../widgets/job_card.dart';
 import '../widgets/job_card_completed.dart';
 import '../widgets/skeleton_row.dart';
@@ -545,8 +546,25 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                     },
                   ),
-                  // History rendered by the right-column ActivityPanel
-                  // (US4); no longer duplicated here.
+                  // 017B (FR-B06): cross-job history surface lives in
+                  // HomeScreen now that the ActivityPanel is gone.
+                  // Sliver-form embed so it scrolls together with the
+                  // active queue above; the history surface owns its
+                  // own search box, status filters, and CSV export.
+                  // Expansion state shared with the active queue so a
+                  // job that was expanded above stays expanded when it
+                  // transitions to history (Codex round-8 P2 #2).
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                          Insets.s, Insets.l, Insets.s, Insets.s),
+                      child: HistorySurface(
+                        expandedJobIds: _expandedJobIds,
+                        onToggleExpanded: (id) =>
+                            widget.onToggleExpanded?.call(id),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

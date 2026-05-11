@@ -1021,6 +1021,12 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               ),
             ),
         ];
+        // Codex round-9 P2 #2: the rebuilt list lost the suffixes that
+        // _normalizeCaseCollisions stamped on the original `planned`
+        // destinations. Re-run the normalizer against the new folder
+        // so case-only duplicates (e.g., DCIM/IMG_001.MOV vs
+        // dcim/img_001.mov) still land at distinct NTFS keys.
+        jobQueueService.normalizeCaseCollisions([resolved]);
         continue;
       }
 
@@ -1120,6 +1126,15 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
               : f)
           .toList();
     }
+    // Codex round-12 P1: rename branch must check against the
+    // lowercased PLANNED-set, not just disk. After case-collision
+    // normalization upstream, the planned set may already contain
+    // `foo_1.mov` as the second occurrence of a case-collision; a
+    // disk-only `_suffixed` for the original `FOO.mov` would happily
+    // pick `FOO_1.mov` (lowercased = same NTFS key) and re-collide.
+    final claimedLower = <String>{
+      for (final f in files) f.destinationPath.toLowerCase(),
+    };
     final kept = <PlannedFile>[];
     for (final f in files) {
       final exists = File(f.destinationPath).existsSync();
@@ -1127,22 +1142,35 @@ class _CreateJobScreenState extends State<CreateJobScreen> {
         kept.add(f);
         continue;
       }
-      if (resolution == ConflictResolution.skip) continue;
+      if (resolution == ConflictResolution.skip) {
+        claimedLower.remove(f.destinationPath.toLowerCase());
+        continue;
+      }
       if (resolution == ConflictResolution.rename) {
-        kept.add(f.copyWith(destinationPath: _suffixed(f.destinationPath)));
+        claimedLower.remove(f.destinationPath.toLowerCase());
+        final renamed = _suffixedAgainst(f.destinationPath, claimedLower);
+        claimedLower.add(renamed.toLowerCase());
+        kept.add(f.copyWith(destinationPath: renamed));
       }
     }
     return kept;
   }
 
-  String _suffixed(String path) {
+  /// Generate a `_1`, `_2`, ... suffix that's free both on disk AND
+  /// across [claimedLower] (the lowercased planned-set). Codex round-12
+  /// P1: without the cross-set check a generated suffix can re-collide
+  /// with an already-planned destination on NTFS.
+  String _suffixedAgainst(String path, Set<String> claimedLower) {
     final dir = p.dirname(path);
     final ext = p.extension(path);
     final stem = p.basenameWithoutExtension(path);
     var i = 1;
     while (true) {
       final candidate = p.join(dir, '${stem}_$i$ext');
-      if (!File(candidate).existsSync()) return candidate;
+      if (!claimedLower.contains(candidate.toLowerCase()) &&
+          !File(candidate).existsSync()) {
+        return candidate;
+      }
       i++;
     }
   }

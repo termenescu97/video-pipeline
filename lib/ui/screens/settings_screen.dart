@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../database/database.dart';
+import '../../database/tables.dart';
 import '../../main.dart';
 import '../../services/drive_service.dart';
 import '../../services/update_service.dart';
@@ -576,6 +577,14 @@ class _DiagnosticsSectionState extends State<_DiagnosticsSection> {
 
           const Divider(height: Insets.xl),
 
+          // 017B (FR-B10): Recent failures — operator triages non-clean
+          // completions without parsing copiatorul3000.log. Lists jobs
+          // with at least one verifyStatus=mismatch / verifyStatus=
+          // unverified / status=failed file row, newest first.
+          const _RecentFailuresSection(),
+
+          const Divider(height: Insets.xl),
+
           // Prep Test Cards (moved from Notifications-adjacent space)
           if (Platform.isWindows) ...[
             const _SectionTitle(title: 'Prep Test Cards'),
@@ -1031,6 +1040,199 @@ class _LabeledDropdown<T> extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 017B (FR-B10): Recent failures section. Streams the file table
+/// once and bins by jobId; jobs with at least one failed/unverified/
+/// mismatched row are listed newest-first with a count chip and a
+/// "View Details" link that opens the job's detail tabs.
+class _RecentFailuresSection extends StatelessWidget {
+  const _RecentFailuresSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final statusColors = Theme.of(context).extension<StatusColors>()!;
+    return StreamBuilder<List<JobFile>>(
+      stream: jobFileDao.watchAllFiles(),
+      builder: (context, snapshot) {
+        final files = snapshot.data ?? const <JobFile>[];
+        // Bucket by job for efficient aggregation. Only jobs with at
+        // least one non-clean row are surfaced.
+        final byJob = <int, _JobFailureSummary>{};
+        for (final f in files) {
+          final isFailed = f.status == FileStatus.failed;
+          final isMismatch = f.verifyStatus == VerifyStatus.mismatch;
+          final isUnverified = f.verifyStatus == VerifyStatus.unverified;
+          if (!isFailed && !isMismatch && !isUnverified) continue;
+          final s = byJob.putIfAbsent(
+              f.jobId, () => const _JobFailureSummary.empty());
+          byJob[f.jobId] = s.add(
+              failed: isFailed,
+              mismatch: isMismatch,
+              unverified: isUnverified);
+        }
+        if (byJob.isEmpty) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle(title: 'Recent failures'),
+              const SizedBox(height: Insets.s),
+              Text(
+                'Nothing to triage — every recent job completed cleanly.',
+                style: AppTextStyles.caption
+                    .copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          );
+        }
+        return FutureBuilder<List<Job>>(
+          future: jobDao.getJobsByIds(byJob.keys.toList()),
+          builder: (context, jobSnap) {
+            final jobs = jobSnap.data ?? const <Job>[];
+            // Newest first by completedAt ?? createdAt.
+            final sorted = [...jobs]..sort((a, b) {
+                final ad = a.completedAt ?? a.createdAt;
+                final bd = b.completedAt ?? b.createdAt;
+                return bd.compareTo(ad);
+              });
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle(title: 'Recent failures'),
+                const SizedBox(height: Insets.s),
+                Text(
+                  '${sorted.length} job(s) have at least one failed, '
+                  'unverified, or mismatch file.',
+                  style: AppTextStyles.caption
+                      .copyWith(color: scheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: Insets.m),
+                for (final job in sorted.take(20))
+                  _RecentFailureRow(
+                    job: job,
+                    summary: byJob[job.id]!,
+                    statusColors: statusColors,
+                    scheme: scheme,
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _RecentFailureRow extends StatelessWidget {
+  final Job job;
+  final _JobFailureSummary summary;
+  final StatusColors statusColors;
+  final ColorScheme scheme;
+
+  const _RecentFailureRow({
+    required this.job,
+    required this.summary,
+    required this.statusColors,
+    required this.scheme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final src = job.sourcePath;
+    final dst = job.destinationPath;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Insets.xs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Job #${job.id}', style: AppTextStyles.body),
+                Text('$src → $dst',
+                    style: AppTextStyles.caption
+                        .copyWith(color: scheme.onSurfaceVariant),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: Insets.xxs),
+                Wrap(
+                  spacing: Insets.xs,
+                  children: [
+                    if (summary.failed > 0)
+                      _FailureChip(
+                        label: '${summary.failed} failed',
+                        color: statusColors.error,
+                      ),
+                    if (summary.mismatched > 0)
+                      _FailureChip(
+                        label: '${summary.mismatched} mismatch',
+                        color: statusColors.error,
+                      ),
+                    if (summary.unverified > 0)
+                      _FailureChip(
+                        label: '${summary.unverified} unverified',
+                        color: statusColors.warning,
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FailureChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _FailureChip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: Insets.s, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(label,
+          style: AppTextStyles.caption
+              .copyWith(color: color, fontSize: 11)),
+    );
+  }
+}
+
+class _JobFailureSummary {
+  final int failed;
+  final int mismatched;
+  final int unverified;
+
+  const _JobFailureSummary({
+    required this.failed,
+    required this.mismatched,
+    required this.unverified,
+  });
+
+  const _JobFailureSummary.empty()
+      : failed = 0,
+        mismatched = 0,
+        unverified = 0;
+
+  _JobFailureSummary add({
+    bool failed = false,
+    bool mismatch = false,
+    bool unverified = false,
+  }) {
+    return _JobFailureSummary(
+      failed: this.failed + (failed ? 1 : 0),
+      mismatched: mismatched + (mismatch ? 1 : 0),
+      unverified: this.unverified + (unverified ? 1 : 0),
     );
   }
 }

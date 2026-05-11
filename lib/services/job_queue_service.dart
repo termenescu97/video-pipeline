@@ -158,6 +158,7 @@ class JobQueueService {
     _queueStateNotifier?.notifyQueueRunningStarted();
 
     var hadFailures = false;
+    var hadVerifyWarnings = false;
     var processedAny = false;
     try {
       while (_isProcessing) {
@@ -173,6 +174,20 @@ class JobQueueService {
         // Re-read the just-processed job to detect failure outcome.
         final after = await _jobDao.watchJob(job.id).first;
         if (after?.status == JobStatus.failed) hadFailures = true;
+        // Codex round-18 P2 #2: a SHA-256 transfer that ends with
+        // mismatch/unverified files lands at JobStatus.completed (FR-004
+        // — bytes are on disk; verify is a soft fail). Without this
+        // signal, the celebration "All cards copied & verified" would
+        // fire on jobs that explicitly produced verify warnings,
+        // misleading the operator about the verify outcome.
+        if (after != null) {
+          final files = await _jobFileDao.getFilesForJob(after.id);
+          if (files.any((f) =>
+              f.verifyStatus == VerifyStatus.mismatch ||
+              f.verifyStatus == VerifyStatus.unverified)) {
+            hadVerifyWarnings = true;
+          }
+        }
         _currentJobId = null;
       }
     } finally {
@@ -182,9 +197,11 @@ class JobQueueService {
       _stopCompleter = null;
       completer?.complete();
       // Emit allDone only when the queue drained naturally with no
-      // failures AND we actually processed something. A pure Stop
-      // (no work happened) MUST NOT trigger the celebration.
-      if (processedAny && !hadFailures && !_stoppedByUser) {
+      // failures, no verify warnings, AND we actually processed
+      // something. A pure Stop (no work happened) MUST NOT trigger
+      // the celebration; neither does a run that produced
+      // verifyStatus=mismatch / unverified rows (Codex round-18 P2 #2).
+      if (processedAny && !hadFailures && !hadVerifyWarnings && !_stoppedByUser) {
         _queueStateNotifier?.notifyQueueAllDone();
       }
     }
@@ -213,6 +230,63 @@ class JobQueueService {
     _transferService.cancel();
     _compressionService.cancel();
     return completer.future;
+  }
+
+  /// 017B (Codex round-14 P2 #2): after the operator resolves verify
+  /// warnings on a transferAndCompress parent (Retry or Accept), the
+  /// auto-chain that was suppressed at finalize time needs a way to
+  /// fire. This helper:
+  ///   - returns false if [parentJobId] isn't a transferAndCompress
+  ///     OR if a chained child already exists OR if files still have
+  ///     unresolved mismatch/unverified rows.
+  ///   - otherwise creates the chained compression job and returns
+  ///     true.
+  /// Operator-attribution: only called from explicit "Resume
+  /// compression" / "Accept" UI handlers, never from the executor.
+  Future<bool> maybeChainCompression(int parentJobId) async {
+    final parent = await _jobDao.getJob(parentJobId);
+    if (parent == null) return false;
+    if (parent.type != JobType.transferAndCompress) return false;
+    if (await _jobDao.hasChainedChild(parentJobId)) return false;
+
+    // Codex round-16 P1 #2: refuse to chain if the parent is in any
+    // non-completed terminal state. A transferAndCompress with copy
+    // failures sits at status=failed; if the operator accepts only
+    // the verify warnings, the verify-axis check below would pass,
+    // and we'd silently spawn a compression child over the
+    // copy-completed subset — losing the failed files from the
+    // operator's intent. The only states from which compression may
+    // resume are: completed (clean transfer) or paused (operator
+    // explicitly resumed after recovery).
+    if (parent.status != JobStatus.completed &&
+        parent.status != JobStatus.paused) {
+      return false;
+    }
+
+    final files = await _jobFileDao.getFilesForJob(parentJobId);
+    // Defense in depth: any non-completed file row also blocks the
+    // chain. `failed` files are the round-16 P1 #2 trigger; pending /
+    // inProgress would mean the operator clicked Accept while the
+    // queue was still running (shouldn't happen via UI but the
+    // banner-disable-while-processing only covers the active card).
+    final hasNonCompletedRow =
+        files.any((f) => f.status != FileStatus.completed);
+    if (hasNonCompletedRow) return false;
+
+    final hasNonCleanVerify = files.any((f) =>
+        f.verifyStatus == VerifyStatus.mismatch ||
+        f.verifyStatus == VerifyStatus.unverified);
+    if (hasNonCleanVerify) return false;
+
+    await _createChainedCompressionJob(parent);
+    _logService?.info(
+      'Operator-resumed compression chain for transferAndCompress '
+      'parent #${parent.id}',
+      jobId: parent.id,
+      phase: LogPhase.finalize,
+    );
+    await startProcessing();
+    return true;
   }
 
   /// 017 (US2, T040, FR-005, Codex H2): operator-driven retry of a single
@@ -245,7 +319,15 @@ class JobQueueService {
           fileId,
           forceDestDeleteApproved: forceDestDelete,
         ));
-    await _safeWrite(() => _jobDao.resetJobForRetry(file.jobId));
+    // Codex round-16 P1 #1: requeueJobForFileRetry is the per-file-
+    // scoped requeue helper. The previous `resetJobForRetry` is the
+    // job-level "Retry all" action — it arms every verifyMismatch row
+    // for force-delete AND resets every failed/pending file. Using it
+    // for a per-file retry would silently re-copy/delete unrelated
+    // destinations the operator never approved (e.g., "Retry verify
+    // on 1 unverified file" was force-deleting separate mismatch
+    // rows in the same job).
+    await _safeWrite(() => _jobDao.requeueJobForFileRetry(file.jobId));
   }
 
   Future<void> _processJob(Job job) async {
@@ -278,10 +360,33 @@ class JobQueueService {
           break;
         case JobType.transferAndCompress:
           await _processTransfer(job);
-          // If transfer succeeded, auto-chain compression.
+          // Codex round-13 P2 #2: auto-chain compression ONLY when
+          // every file passed verification. If any file ended at
+          // verifyStatus=mismatch / unverified, _createChainedCompressionJob
+          // would silently exclude them (it filters on the legacy
+          // `verified` boolean), compressing only the verified
+          // subset before the operator has triaged the warnings.
+          // Pause for explicit operator decision instead.
           final updatedJob = await _jobDao.getJob(job.id);
           if (updatedJob?.status == JobStatus.completed) {
-            await _createChainedCompressionJob(job);
+            final files = await _jobFileDao.getFilesForJob(job.id);
+            final hasNonCleanVerify = files.any((f) =>
+                f.verifyStatus == VerifyStatus.mismatch ||
+                f.verifyStatus == VerifyStatus.unverified);
+            if (hasNonCleanVerify) {
+              _logService?.warning(
+                'Auto-chain compression suppressed: '
+                '${files.where((f) => f.verifyStatus == VerifyStatus.mismatch).length} '
+                'mismatch + '
+                '${files.where((f) => f.verifyStatus == VerifyStatus.unverified).length} '
+                'unverified files. Operator must Retry or Accept the '
+                'mismatches before compression auto-chains.',
+                jobId: job.id,
+                phase: LogPhase.finalize,
+              );
+            } else {
+              await _createChainedCompressionJob(job);
+            }
           }
           break;
       }
@@ -393,6 +498,23 @@ class JobQueueService {
         continue;
       }
 
+      // Codex round-20 P2 #1: pre-existing `failed` rows are NOT auto-
+      // reprocessed. The "Retry failed files" path (`resetJobForRetry`)
+      // flips them to `pending` BEFORE requeuing, so a true full-retry
+      // pass sees them as pending and processes them. A per-file retry
+      // (`requeueJobForFileRetry` via `retryFile`) intentionally leaves
+      // other failed rows alone — the operator chose ONE file. Without
+      // this skip, the executor's loop would fall through to the dest
+      // checks below and re-copy/re-delete unrelated destinations.
+      // Tally into `failedCount` so the post-loop branch still routes
+      // through `notifyJobFailed` and the job stays `failed` rather
+      // than being silently lifted to `completed` by the per-file
+      // retry's success.
+      if (file.status == FileStatus.failed) {
+        failedCount++;
+        continue;
+      }
+
       if (file.status == FileStatus.completed) {
         completedCount++;
         completedBytes += file.fileSize;
@@ -411,6 +533,10 @@ class JobQueueService {
             break;
           case VerifyStatus.pending:
             // Handled by the recovery branch above; shouldn't reach here.
+            break;
+          case VerifyStatus.notVerified:
+            // Size-mode baseline — bytes match by size, no SHA-256 was
+            // attempted. Counted neither as verified nor as warning.
             break;
         }
         continue;
@@ -715,15 +841,18 @@ class JobQueueService {
         } else {
           // Size-based verification (default; v2.4.0 semantics preserved).
           // Per Codex M5: size match does NOT establish cryptographic trust.
-          // verifyStatus stays at default 'pending' for forward-operation
-          // size-mode rows; the legacy `verified` boolean is set true.
+          // 017B Codex round-11: forward operation now writes
+          // verifyStatus=notVerified (matching the v8 migration
+          // backfill) so size-mode rows are visibly distinct from
+          // SHA-256 subsystem failures (`unverified`). HistorySurface
+          // and Slack treat notVerified as the size-mode baseline.
           final verified = await _transferService.verifyTransfer(
             sourceFile: file.sourceFilePath,
             destinationFile: file.destinationFilePath,
           );
           if (verified) {
-            await _safeWrite(() =>
-                _jobFileDao.markFileCompleted(file.id, verified: true));
+            await _safeWrite(
+                () => _jobFileDao.markFileSizeOnlyVerified(file.id));
             completedCount++;
             completedBytes += file.fileSize;
             _logService?.info(
@@ -819,19 +948,31 @@ class JobQueueService {
             job.id,
             '$completedCount/${completedCount + failedCount} files transferred, $failedCount failed copy',
           ));
-    } else {
-      // 017 (FR-004): mismatchedCount > 0 does NOT fail the job — bytes
-      // are on disk, just not trusted. Soft fail surfaced via banner +
-      // Slack warning prefix below. Operator decides next action.
-      _logService?.info(
-        'Job completed — $completedCount transferred, '
-        '$verifiedCount verified, $unverifiedCount unverified, '
-        '$mismatchedCount mismatch',
+      // Codex round-13 P2 #1: route failed-copy jobs through
+      // notifyJobFailed instead of the green-check-by-default
+      // notifyTransferCompleted. Without this branch a job that
+      // markJobFailed-ed above would still send "Transfer Complete /
+      // Passed" to Slack — silent false success.
+      await _slackService.notifyJobFailed(
         jobId: job.id,
-        phase: LogPhase.finalize,
+        phase: 'Transfer',
+        error:
+            '$completedCount/${completedCount + failedCount} files transferred, '
+            '$failedCount failed copy',
       );
-      await _safeWrite(() => _jobDao.markJobCompleted(job.id));
+      return;
     }
+    // 017 (FR-004): mismatchedCount > 0 does NOT fail the job — bytes
+    // are on disk, just not trusted. Soft fail surfaced via banner +
+    // Slack warning prefix below. Operator decides next action.
+    _logService?.info(
+      'Job completed — $completedCount transferred, '
+      '$verifiedCount verified, $unverifiedCount unverified, '
+      '$mismatchedCount mismatch',
+      jobId: job.id,
+      phase: LogPhase.finalize,
+    );
+    await _safeWrite(() => _jobDao.markJobCompleted(job.id));
     // 017 (T043, FR-016): Slack call expanded with per-state verify
     // counts. Warning prefix fires automatically when
     // mismatchedCount > 0 or unverifiedCount > 0.
@@ -990,6 +1131,7 @@ class JobQueueService {
       // the final ping surfaces transfer-side outcomes (Codex H3 closure).
       Job? parentTransferJob;
       int? parentVerifiedFiles;
+      int? parentNotVerifiedFiles;
       int? parentUnverifiedFiles;
       int? parentMismatchedFiles;
       if (job.parentJobId != null) {
@@ -999,6 +1141,13 @@ class JobQueueService {
               await _jobFileDao.getFilesForJob(parentTransferJob.id);
           parentVerifiedFiles = parentFiles
               .where((f) => f.verifyStatus == VerifyStatus.verified)
+              .length;
+          // Codex round-20 P2 #2: count the size-mode baseline rows so
+          // a default (size-mode) transferAndCompress chained Slack
+          // ping doesn't read "Transfer verification: 0 verified ·
+          // Passed" when every file actually passed size verification.
+          parentNotVerifiedFiles = parentFiles
+              .where((f) => f.verifyStatus == VerifyStatus.notVerified)
               .length;
           parentUnverifiedFiles = parentFiles
               .where((f) => f.verifyStatus == VerifyStatus.unverified)
@@ -1014,6 +1163,7 @@ class JobQueueService {
         totalFiles: files.length,
         parentTransferJob: parentTransferJob,
         parentVerifiedFiles: parentVerifiedFiles,
+        parentNotVerifiedFiles: parentNotVerifiedFiles,
         parentUnverifiedFiles: parentUnverifiedFiles,
         parentMismatchedFiles: parentMismatchedFiles,
       );
@@ -1219,6 +1369,20 @@ class JobQueueService {
       return;
     }
 
+    // Codex round-12 P1: the rename branch must check against the
+    // lowercased PLANNED-set, not just disk. After case-collision
+    // normalization, the planned set may contain `foo_1.mov` as the
+    // second occurrence of a case-collision; a naive disk-only
+    // _suffixedPath for the original `FOO.mov` would happily pick
+    // `FOO_1.mov` (lowercased = same NTFS key) and re-collide. Build
+    // the lowercased claimed set from EVERY plan in this batch, then
+    // route renames through _suffixedPathAgainst.
+    final claimedLower = <String>{};
+    for (final plan in plans) {
+      for (final file in plan.files) {
+        claimedLower.add(file.destinationPath.toLowerCase());
+      }
+    }
     for (final plan in plans) {
       final kept = <PlannedFile>[];
       for (final file in plan.files) {
@@ -1229,11 +1393,18 @@ class JobQueueService {
         }
         switch (resolution) {
           case ConflictResolution.skip:
-            // drop
+            // drop — release the claimed key so a later rename can use it.
+            claimedLower.remove(file.destinationPath.toLowerCase());
             break;
           case ConflictResolution.rename:
-            kept.add(file.copyWith(
-                destinationPath: _suffixedPath(file.destinationPath)));
+            // Drop the original claimed key (we're about to relocate
+            // the file), then mint a suffix that's free both on disk
+            // AND across the rest of the planned set.
+            claimedLower.remove(file.destinationPath.toLowerCase());
+            final renamed =
+                _suffixedPathAgainst(file.destinationPath, claimedLower);
+            claimedLower.add(renamed.toLowerCase());
+            kept.add(file.copyWith(destinationPath: renamed));
             break;
           case ConflictResolution.overwrite:
           case ConflictResolution.cancel:
@@ -1248,19 +1419,9 @@ class JobQueueService {
     }
   }
 
-  /// Append `_1`, `_2`, ... before the file extension until a free path
-  /// is found.
-  String _suffixedPath(String path) {
-    final dir = p.dirname(path);
-    final ext = p.extension(path);
-    final stem = p.basenameWithoutExtension(path);
-    var i = 1;
-    while (true) {
-      final candidate = p.join(dir, '${stem}_$i$ext');
-      if (!File(candidate).existsSync()) return candidate;
-      i++;
-    }
-  }
+  // _suffixedPath retired — _applyResolution now uses
+  // _suffixedPathAgainst with the lowercased planned-set so suffix
+  // generation can't re-collide on NTFS (Codex round-12 P1 fix).
 
   /// 017 (T058, FR-008, Codex H3): suffixed-rename variant that ALSO
   /// rejects candidates whose lowercased form is already claimed in
@@ -1349,8 +1510,27 @@ class JobQueueService {
     if (outputPath == null) return;
 
     final transferFiles = await _jobFileDao.getFilesForJob(transferJob.id);
+    // Codex round-15 P1: filter on the v8 verify axis, not the legacy
+    // `verified` boolean. acceptMismatch / acceptUnverified
+    // intentionally leave `verified=false` (so it doesn't lie about
+    // cryptographic trust) but flip verifyStatus to verified /
+    // notVerified — meaning the operator approved the file for
+    // downstream compression. Filtering by `verified=true` would
+    // silently exclude every accepted file from the compression
+    // child even though the operator's intent was the opposite.
+    //
+    // Compression-ready ≡ status=completed AND verifyStatus is one
+    // the operator considers acceptable: `verified` (SHA-256 match),
+    // `notVerified` (size-mode baseline OR operator-accepted
+    // unverified). `mismatch` and `unverified` are still excluded
+    // because they're unresolved warnings; maybeChainCompression
+    // already gated on those upstream, but the defense-in-depth
+    // filter here ensures a stray re-call can't sneak them through.
     final ready = transferFiles
-        .where((f) => f.status == FileStatus.completed && f.verified)
+        .where((f) =>
+            f.status == FileStatus.completed &&
+            (f.verifyStatus == VerifyStatus.verified ||
+                f.verifyStatus == VerifyStatus.notVerified))
         .toList();
 
     if (ready.isEmpty) return;

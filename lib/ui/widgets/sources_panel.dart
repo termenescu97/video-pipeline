@@ -15,10 +15,25 @@ import 'skeleton_row.dart';
 /// so the parent can open Create Job pre-filled (FR-022).
 ///
 /// Empty state: pulsing "Listening for SD cards…" banner (FR-021).
+///
+/// 017B (FR-B03/B04/B11): the panel is collapsible. When [collapsed]
+/// is true it renders as a 48-px icon strip showing one mini SD-card
+/// chip per detected drive plus a chevron-right toggle. Each poll
+/// surfaces the current set of drive paths via [onDrivesChanged] so
+/// the shell can auto-expand on new card insert.
 class SourcesPanel extends StatefulWidget {
   final ValueChanged<DetectedDrive>? onSourceSelected;
+  final bool collapsed;
+  final VoidCallback? onToggleCollapsed;
+  final ValueChanged<Set<String>>? onDrivesChanged;
 
-  const SourcesPanel({super.key, this.onSourceSelected});
+  const SourcesPanel({
+    super.key,
+    this.onSourceSelected,
+    this.collapsed = false,
+    this.onToggleCollapsed,
+    this.onDrivesChanged,
+  });
 
   @override
   State<SourcesPanel> createState() => _SourcesPanelState();
@@ -52,6 +67,10 @@ class _SourcesPanelState extends State<SourcesPanel>
         _drives = drives;
         _firstPollPending = false;
       });
+      // 017B (FR-B04): hand the path set to the shell so it can detect
+      // newly-inserted cards and auto-expand when collapsed.
+      widget.onDrivesChanged
+          ?.call(drives.map((d) => d.path).toSet());
     } catch (_) {
       // Transient error — drive unplugged mid-WMI call, PowerShell hiccup.
       // Next tick recovers; do not surface to the user.
@@ -75,27 +94,97 @@ class _SourcesPanelState extends State<SourcesPanel>
           right: BorderSide(color: scheme.outlineVariant, width: 1),
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                Insets.l, Insets.l, Insets.l, Insets.s),
-            child: Text(
-              'Sources',
-              style: AppTextStyles.title
-                  .copyWith(color: scheme.onSurfaceVariant),
-            ),
+      child: widget.collapsed ? _buildCollapsed(scheme) : _buildExpanded(scheme),
+    );
+  }
+
+  Widget _buildExpanded(ColorScheme scheme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              Insets.l, Insets.l, Insets.s, Insets.s),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Sources',
+                  style: AppTextStyles.title
+                      .copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Collapse Sources (Ctrl+1)',
+                icon: const Icon(Icons.chevron_left, size: 20),
+                onPressed: widget.onToggleCollapsed,
+              ),
+            ],
           ),
-          Expanded(
-            child: _firstPollPending
-                ? _buildLoadingState()
-                : (_drives.isEmpty
-                    ? _buildEmptyState(scheme)
-                    : _buildDriveList()),
-          ),
-        ],
-      ),
+        ),
+        Expanded(
+          child: _firstPollPending
+              ? _buildLoadingState()
+              : (_drives.isEmpty
+                  ? _buildEmptyState(scheme)
+                  : _buildDriveList()),
+        ),
+      ],
+    );
+  }
+
+  /// 017B (FR-B03/B11): 48-px icon strip. Header chevron toggles back
+  /// to expanded; per-drive icons remain visible so a card insert
+  /// is still noticeable even before the auto-expand kicks in.
+  Widget _buildCollapsed(ColorScheme scheme) {
+    return Column(
+      children: [
+        IconButton(
+          tooltip: 'Expand Sources (Ctrl+1)',
+          icon: const Icon(Icons.chevron_right, size: 20),
+          onPressed: widget.onToggleCollapsed,
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _drives.isEmpty
+              ? Center(
+                  child: AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (_, _) => Opacity(
+                      opacity: 0.4 + 0.6 * _pulseController.value,
+                      child: Icon(
+                        Icons.sd_storage,
+                        size: 22,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: Insets.s),
+                  itemCount: _drives.length,
+                  itemBuilder: (context, index) {
+                    final drive = _drives[index];
+                    return Padding(
+                      padding:
+                          const EdgeInsets.symmetric(vertical: Insets.xs),
+                      child: Tooltip(
+                        message:
+                            '${drive.label.isEmpty ? "Removable drive" : drive.label}\n'
+                            '${drive.path} · ${formatBytes(drive.freeBytes)} free',
+                        child: IconButton(
+                          icon: Icon(Icons.sd_card,
+                              size: 22, color: scheme.onSurface),
+                          onPressed: widget.onSourceSelected != null
+                              ? () => widget.onSourceSelected!(drive)
+                              : null,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 

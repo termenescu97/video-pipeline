@@ -402,6 +402,57 @@ class JobDao extends DatabaseAccessor<AppDatabase> with _$JobDaoMixin {
     return (select(jobs)..where((t) => t.id.equals(jobId))).getSingleOrNull();
   }
 
+  /// 017B (FR-B10): batched job lookup for the Diagnostics → Recent
+  /// failures section. Returns the rows in DB order; the caller is
+  /// expected to sort by `completedAt` for newest-first display.
+  Future<List<Job>> getJobsByIds(List<int> jobIds) {
+    if (jobIds.isEmpty) return Future.value(const <Job>[]);
+    return (select(jobs)..where((t) => t.id.isIn(jobIds))).get();
+  }
+
+  /// 017B (Codex round-16 P1 #1): scoped requeue. Flips the Job row
+  /// back to `queued` and resets aggregate counters so the queue
+  /// scheduler can pick it up — but does NOT touch any JobFile rows.
+  /// Used by `JobQueueService.retryFile` so a per-file retry doesn't
+  /// sweep unrelated files in the same job (the heavyweight
+  /// `resetJobForRetry` arms every verifyMismatch row for force-delete
+  /// AND resets every failed/pending file, which is correct for a
+  /// job-level "Retry all" action but catastrophic for "Retry verify
+  /// on 1 unverified file"). Counters will re-derive from per-row
+  /// state via the recovery path or the next run's accumulator.
+  Future<void> requeueJobForFileRetry(int jobId) async {
+    // Codex round-18 P2 #1: re-derive completedFiles/completedBytes
+    // from per-row state in the same transaction. Without this, a
+    // per-file retry from a completed job (`resetFileForRetry` flips
+    // one file back to `pending`) would re-enter processing with
+    // stale counters showing N/N complete when one file is now
+    // pending again. recomputeCountersFromFiles also re-derives
+    // unverified_files for free, so this single call subsumes the
+    // round-17 _recomputeUnverifiedForFile semantics for the parent.
+    await transaction(() async {
+      await (update(jobs)..where((t) => t.id.equals(jobId))).write(
+        const JobsCompanion(
+          status: Value(JobStatus.queued),
+          errorMessage: Value(null),
+          completedAt: Value(null),
+        ),
+      );
+      await recomputeCountersFromFiles(jobId);
+    });
+  }
+
+  /// 017B (Codex round-14 P2 #2): does any compression job already
+  /// link back to [parentJobId] via Job.parentJobId? Used to suppress
+  /// duplicate auto-chain attempts after the operator resolves
+  /// mismatch/unverified warnings on a transferAndCompress parent.
+  Future<bool> hasChainedChild(int parentJobId) async {
+    final row = await (select(jobs)
+          ..where((t) => t.parentJobId.equals(parentJobId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row != null;
+  }
+
   /// Get completed and failed jobs as a one-time list (for CSV export).
   Future<List<Job>> getCompletedJobsList() {
     return (select(jobs)

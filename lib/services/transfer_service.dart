@@ -40,13 +40,20 @@ class TransferService {
   /// Transfer a single file from source to destination using robocopy.
   /// Returns true on success, false on failure.
   ///
-  /// 017 (Codex round-5 P1): when [destinationFile]'s basename differs
-  /// from [sourceFile]'s basename, robocopy is run with the source
-  /// basename (robocopy can't rename during copy) and a post-copy
-  /// File.rename moves the result to the requested name. This is the
-  /// load-bearing path for the case-only NTFS collision normalization
-  /// (Codex H3); without it, a planned dest like `IMG_001_1.MOV` would
-  /// land at `IMG_001.MOV` and re-collide with the first occurrence.
+  /// 017 (Codex round-5 P1 + round-7 P1): when [destinationFile]'s
+  /// basename differs from [sourceFile]'s basename (case-collision
+  /// normalization, conflict-rename resolution), robocopy can't rename
+  /// during copy. Naively running robocopy with the source basename
+  /// into the dest dir would target `destDir/sourceBasename` — which
+  /// might be the very file that triggered the conflict-rename. The
+  /// follow-up File.rename would then move that pre-existing conflict
+  /// file to the requested dest, destroying the operator's data.
+  ///
+  /// Fix: when basenames differ, copy into a staging subdirectory
+  /// (`destDir/.tmp_${random}/sourceBasename`) so the operation can't
+  /// touch any pre-existing file in destDir. After robocopy success,
+  /// File.rename moves the staged file to the final destinationFile
+  /// path, then the staging dir is removed.
   Future<bool> transferFile({
     required String sourceFile,
     required String destinationFile,
@@ -57,13 +64,28 @@ class TransferService {
     final destDir = p.dirname(destinationFile);
     final sourceBasename = p.basename(sourceFile);
     final destBasename = p.basename(destinationFile);
+    final needsRename = sourceBasename != destBasename;
 
     _fileStartTime = DateTime.now();
     _fileTotalBytes = await File(sourceFile).length();
 
+    // Stage into a private subdirectory ONLY when the caller asked
+    // for a renamed destination. Common case (basenames match) keeps
+    // the original direct robocopy path with zero overhead.
+    final String robocopyDestDir;
+    Directory? stagingDir;
+    if (needsRename) {
+      final tag = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+      stagingDir = Directory(p.join(destDir, '.tmp_robocopy_$tag'));
+      await stagingDir.create(recursive: true);
+      robocopyDestDir = stagingDir.path;
+    } else {
+      robocopyDestDir = destDir;
+    }
+
     final exitCode = await _processRunner.run(
       executable: 'robocopy',
-      arguments: [sourceDir, destDir, sourceBasename, ...robocopyFlags],
+      arguments: [sourceDir, robocopyDestDir, sourceBasename, ...robocopyFlags],
       onStdoutLine: (line) {
         final event = RobocopyParser.parseLine(line);
         if (event != null) onProgress?.call(event);
@@ -72,22 +94,69 @@ class TransferService {
 
     _fileStartTime = null;
     final result = RobocopyParser.parseExitCode(exitCode);
-    if (!result.success) return false;
+    if (!result.success) {
+      if (stagingDir != null) {
+        try {
+          await stagingDir.delete(recursive: true);
+        } on FileSystemException catch (e) {
+          logService?.warning(
+              'Staging dir cleanup after failed copy: ${e.message}');
+        }
+      }
+      return false;
+    }
 
-    // Post-copy rename when caller asked for a different basename
-    // (case-collision normalization, conflict-rename resolution). Done
-    // AFTER robocopy success so a failed copy doesn't leave the system
-    // in a half-renamed state.
-    if (sourceBasename != destBasename) {
+    if (needsRename) {
+      // Codex round-8 P2 #1: resumed renamed transfer. If the prior
+      // run successfully renamed the staged file into destinationFile
+      // then crashed before markFileCompleted, the next pass'
+      // pre-robocopy safety section sees everAttempted=true +
+      // isPartial=false (size match) and falls into the "size matches
+      // on resumed file — letting robocopy skip + verification
+      // confirm idempotently" branch. transferFile still runs;
+      // robocopy copies a fresh copy into the staging dir; then this
+      // rename fails on Windows because target already exists. Treat
+      // size-matching pre-existing target as the prior run's
+      // completion and just discard the duplicate staged copy.
+      final staged = File(p.join(robocopyDestDir, sourceBasename));
+      final target = File(destinationFile);
       try {
-        final copied = File(p.join(destDir, sourceBasename));
-        await copied.rename(destinationFile);
+        if (await target.exists() &&
+            await target.length() == await staged.length()) {
+          await staged.delete();
+          logService?.info(
+            'Resumed renamed transfer: target $destBasename already '
+            'matches source size — keeping existing dest, discarding '
+            'staged duplicate',
+          );
+        } else {
+          await staged.rename(destinationFile);
+        }
       } on FileSystemException catch (e) {
         logService?.error(
           'Post-copy rename failed: $sourceBasename → $destBasename '
           '(${e.message})',
         );
+        // Best-effort staging cleanup before returning failure.
+        try {
+          await stagingDir!.delete(recursive: true);
+        } on FileSystemException catch (_) {}
         return false;
+      }
+
+      // Codex round-11 P3: staging-dir cleanup is a separate concern
+      // from the rename's success. The file is already at
+      // destinationFile by now; a failed rmdir leaves a cosmetic
+      // empty dir but does NOT mean the transfer failed. Without this
+      // split, an antivirus lock or transient permission glitch on
+      // the empty dir would mark a successful copy as failed.
+      try {
+        await stagingDir!.delete(recursive: true);
+      } on FileSystemException catch (e) {
+        logService?.warning(
+          'Staging dir cleanup left an empty dir at ${stagingDir!.path} '
+          '(${e.message}) — transfer succeeded; cosmetic leak only',
+        );
       }
     }
     return true;
