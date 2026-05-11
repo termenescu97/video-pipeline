@@ -91,9 +91,9 @@ This is NOT a production deployment with real operator history at stake. Each te
 
 What IS in scope, always: bytes on disk. Source SD card content (typed-confirmation-gated erase, never automatic) and destination video files (`/XN /XC /XO` + executor-side delete gating + optional SHA-256 verify). Hash mismatch handling, source-data invariants, destination-overwrite guards, and the human-in-the-loop principle are non-negotiable regardless of MVP status. Defensive thinking should focus there.
 
-## Current State (as of 2026-05-08)
+## Current State (as of 2026-05-11)
 
-### Completed Features (13 spec-kit features)
+### Completed Features (19 spec-kit features)
 
 | Feature | Branch | Tasks | Status |
 |---------|--------|-------|--------|
@@ -117,12 +117,36 @@ What IS in scope, always: bytes on disk. Source SD card content (typed-confirmat
 | 018 - Pre-tag Hardening | `018-pre-tag-hardening` | 28/28 | 🟡 v2.5.0-pending QA |
 | 019 - Workflow Integrity Hardening | `019-workflow-integrity-hardening` | 40/46 | 🟡 v2.5.0-pending QA |
 
-**Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions building Windows .exe)
+**Latest release**: v2.4.0 (tagged 2026-05-08; GitHub Actions built Windows .exe)
 **Previous release**: v2.3.0 (tagged, built via GitHub Actions)
-**Total tasks implemented**: 392 (390 across 014 + 015 + 016 bundles)
-**In flight (v2.5.0)**: operator's 2026-05-08 Windows test exposed three executor blockers (PowerShell positional-args cascade, 0/27 progress freeze, hash-failure-treated-as-job-failure) PLUS three UX failures (open-all-the-time panels, filter-pill wrap, fragile cross-job history). 017A is the executor-correctness half; 017B is the UX restructuring half; both ship under the v2.5.0 tag. Schema bumped to v8: `VerifyStatus` enum (5 states: pending/verified/mismatch/unverified/notVerified), `FailureKind` enum, `Job.parentJobId`, `Job.unverifiedFiles`, `JobFile.forceDestDeleteApproved`, `AppSettings.sourcesPanelCollapsed`. **20 Codex adversarial-review rounds** across both branches; cumulative findings: 4 P1, ~32 P2, 1 documented FP. Awaiting operator Windows acceptance (T067) before tagging `v2.5.0`.
+**Total tasks implemented**: 461 (392 through v2.4.0 + 069 across 017A + 017B + 018 + 019)
 
-> **QA status**: T114 (Windows manual QA) is the operator's responsibility on the workstation. Update prompt is gated by Constitution Principle VI — never silent — so operators see and approve the v2.3 → v2.4 transition before applying.
+**In flight (v2.5.0)**: four feature branches implementation-complete and merge-ready, awaiting the documented merge sequence + operator Windows acceptance before tagging.
+
+The v2.5.0 release scope grew through three pressures, each captured in its own feature:
+
+1. **017A + 017B** (operator's 2026-05-08 Windows test failure). Three executor blockers (PowerShell positional-args cascade, 0/27 progress freeze, hash-failure-treated-as-job-failure) PLUS three UX failures (open-all-the-time panels, filter-pill wrap, fragile cross-job history). 017A is the executor-correctness half; 017B is the UX restructuring half. Schema bumped to v8.
+2. **018** (pre-tag hardening). Focused concurrency / atomicity / freshness pass before tagging — per-file retry atomicity, typed-gate phrase enforcement, chain-dedup transactional gate, FK pragma in beforeOpen, JOIN-based self-healing of `unverifiedFiles`, orphaned staging-dir cold-start sweep with `host=`-only liveness check.
+3. **019** (workflow-integrity hardening, holistic threat-model audit). The operator's question after 018 — "what next to make sure we have done everything we could to make this bulletproof for going to production with real video data" — seeded a holistic audit (parallel Opus + Codex agents, same 5-tier framework) that caught **5 convergent workflow-level invariants 25 incremental review rounds had missed**. F-1 (drive-letter remap on reinsert), F-2 (erase-time card-content reconciliation), F-3 (source-side symlink guard), F-4 (forceDestDeleteApproved clear ordering), F-5 (HandBrake compression staging-dir convention). +3 bundled defenses. Schema bumped to v9 (`Job.sourceDriveSerial` with sentinel-backfill `'__legacy_v8__'` for v8 rows in a single transaction).
+
+**27 Codex adversarial-review rounds** total across all four branches (017A: 6, 017B: 9, 018: 4, 019: 8). Cumulative findings: ~7 P1, ~45 P2, 1 documented FP — all resolved or explicitly rejected with rationale. Round-27b (the final review) returned **0 P1**; only P2/P3 — diminishing-returns territory.
+
+**Test count**: 161/161 passing on `019-workflow-integrity-hardening`. `flutter analyze` clean.
+
+**Direction**: stop reviewing pre-ship; let the operator field-test. The cycle of "one more review will catch it" hits real diminishing returns past round-27b. The actual ship-gate is the 21-step Windows acceptance in `RELEASE_NOTES_v2.5.0.md` (13 baseline from 017 + 8 019-specific), not Codex round 28. Issues found in the field bundle into v2.5.1.
+
+**Merge sequence** (documented in RELEASE_NOTES_v2.5.0.md "Pre-release"):
+```
+main ← 017-executor-correctness ← 017-ux-restructuring ← 018-pre-tag-hardening ← 019-workflow-integrity-hardening
+                                                                                    ↓
+                                                                               tag v2.5.0-pre
+                                                                                    ↓
+                                                                          operator runs 21-step acceptance
+                                                                                    ↓
+                                                                               tag v2.5.0 (promote)
+```
+
+> **QA status**: Operator-run on the Windows workstation; no autonomous gate beyond the green CI build. Update prompt is gated by Constitution Principle VI — never silent.
 
 ### What Works
 
@@ -371,7 +395,7 @@ Deferred to v3.0:
 - **Adversarial review pattern**: after implementing a feature, run a review before merging. Has caught command injection, data loss bugs, and Constitution violations.
 - **Known false positives**: QA-5 (dropdown param correct in Flutter 3.41.9), QA-7 (Dart event loop makes race guard correct)
 
-#### Codex Adversarial-Review Cadence (validated in 015 + 016)
+#### Codex Adversarial-Review Cadence (validated in 015 + 016, refined through v2.5.0)
 
 The pattern that worked across this session for data-safety-critical features:
 
@@ -381,12 +405,23 @@ The pattern that worked across this session for data-safety-critical features:
 - The reviewer's CANNOT VERIFY findings still require investigation; they may be wrong, but they're rarely worthless. Resolve them by reading the code, not by handwaving.
 - If the reviewer flags 9 findings, applying 8 of them with explicit pushback on the 9th is normal and good. Track which were rejected and why so future sessions don't relitigate.
 
-### v3.0 Roadmap
+#### Stop conditions — when reviewing more is the wrong move (lesson from v2.5.0)
 
-- **v2.5 (next release)**: NAS upload automation. Bundle `ConfirmationDialog.showCritical` consolidation for the SD-erase path so the bespoke typed-confirmation in `erase_drive_action.dart` finally routes through the canonical primitive. NAS feature ships its own "Disconnect & wipe local cache" destructive action — same dialog primitive should serve both.
+The v2.5.0 cycle taught us a hard lesson: incremental adversarial reviews hit diminishing returns past a certain point, and chasing "one more review" is a trap that delays operator field-testing without producing better code.
+
+- **Stop when the P1 trajectory collapses.** When two consecutive rounds return zero P1 (round-27b on 019 was the explicit example), additional same-framing rounds will mostly produce P3-grade nits. Going from 27 to 28 to 29 rounds doesn't catch the next class of bug — a different lens does.
+- **Holistic > incremental for workflow-level invariants.** 25 incremental review rounds on 017A + 017B + 018 missed the 5 workflow-level F-1 through F-5 findings that 019's holistic threat-model audit caught in one pass. If incremental rounds are returning P3-only, the next high-value move is a different framing (e.g. a 5-tier threat-model audit covering the whole codebase, parallel-agent same-prompt convergence) — not another round of the same.
+- **Real-world is the load-bearing gate, not review #N+1.** Past the diminishing-returns point, the bug class that matters is "what real Windows operator workflow with real bytes on disk will surface that no review framework predicted." Ship to operator (via `-pre` tag), let them run the 21-step acceptance, fold what they find into v2.5.1.
+- **The cycle warning sign**: when you find yourself saying "we're 1 review away from solid" for the third time on the same release, that's not the truth — that's the cycle. Ship the `-pre` tag instead.
+
+### Roadmap
+
+- **v2.5.0 (in flight, awaiting operator acceptance)**: workflow-integrity hardening (017A + 017B + 018 + 019 bundle). NAS upload was originally planned for this slot but slipped — the operator's 2026-05-08 Windows test failure triggered a data-safety pass that consumed the release.
+- **v2.5.1 (post-operator-acceptance)**: anything the operator finds during the 21-step Windows acceptance. Plus the 5 explicitly-deferred 019 P3 findings (F-D1 size-mode TOCTOU, F-D3 sweep prefix collision, F-D4 cross-machine NAS write race, F-D5 DST/clock-jump mtime, F-D8 eraseDrive Remove-Item -LiteralPath re-verify) — each documented in "Open Bugs → Deferred to v2.5.1".
+- **v2.6.0 (next feature release)**: NAS upload automation. Ships its own "Disconnect & wipe local cache" destructive action; bundle `ConfirmationDialog.showCritical` consolidation for the SD-erase path at the same time so both routes go through the canonical primitive.
   - Convention going forward: any new destructive action defaults to `ConfirmationDialog.showCritical`. Bespoke gates require a written reason.
 - **v3.0 (from PM review)**:
-  - **Tier 1**: auto-detect SD cards (replace polling), dashboard stats, ~~SHA-256 verification~~ (done in 011), ~~NAS upload~~ (now v2.5).
+  - **Tier 1**: auto-detect SD cards (replace polling), dashboard stats, ~~SHA-256 verification~~ (done in 011), ~~NAS upload~~ (now v2.6.0).
   - **Tier 2**: Job templates, scheduled jobs, multi-machine sync, selective file copy (PM-10).
   - **Tier 3**: Cloud backup, metadata extraction, team activity feed.
 
@@ -408,12 +443,15 @@ git push origin vX.Y.Z
 ## Key Files for Context
 
 - `.specify/memory/constitution.md` — project principles (6 rules)
-- `specs/006-review-findings/review-report-v2.md` — latest review (30 issues + roadmap)
+- `RELEASE_NOTES_v2.5.0.md` — operator-facing changelog + 21-step Windows acceptance + merge sequence
+- `specs/019-workflow-integrity-hardening/` — most recent feature spec, plan, tasks, holistic-audit framework
+- `specs/018-pre-tag-hardening/plan.md` — pre-tag concurrency / atomicity invariants
+- `specs/006-review-findings/review-report-v2.md` — historical review (30 issues + roadmap, all closed)
 - `specs/001-video-pipeline-automation/spec.md` — original feature spec
 - `specs/001-video-pipeline-automation/plan.md` — original architecture plan
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at
-specs/018-pre-tag-hardening/plan.md
+specs/019-workflow-integrity-hardening/plan.md
 <!-- SPECKIT END -->
