@@ -444,7 +444,8 @@ git push origin vX.Y.Z
 ## Key Files for Context
 
 - `.specify/memory/constitution.md` — project principles (6 rules)
-- `RELEASE_NOTES_v2.5.0.md` — operator-facing changelog + 21-step Windows acceptance + merge sequence
+- `RELEASE_NOTES_v2.5.0.md` — full operator-facing changelog + 21-step Windows acceptance + merge sequence
+- `OPERATOR_QA_v2.5.0.md` — focused 4-tier acceptance checklist extracted for the operator's actual workstation use (Pre-flight → Smoke → 161 GB run → UI → optional negative tests). Uses checkbox markdown so progress can be tracked.
 - `specs/019-workflow-integrity-hardening/` — most recent feature spec, plan, tasks, holistic-audit framework
 - `specs/018-pre-tag-hardening/plan.md` — pre-tag concurrency / atomicity invariants
 - `specs/006-review-findings/review-report-v2.md` — historical review (30 issues + roadmap, all closed)

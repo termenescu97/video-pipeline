@@ -241,8 +241,9 @@ The `-pre` suffix keeps the build out of `/releases/latest` so end-users on v2.4
 
 **Acceptance + promote**:
 1. Operator downloads the v2.5.0-pre Windows .exe from GitHub Releases.
-2. Operator runs the 21-step acceptance above (13 baseline + 8 from 019). All steps must pass.
-3. After acceptance: re-tag without the `-pre` suffix.
+2. Operator runs the focused 4-tier checklist in **`OPERATOR_QA_v2.5.0.md`** (extracted from the 21 steps above into Pre-flight → Smoke (15 min) → 161 GB run (4 hours unattended) → UI (30 min) → optional negative tests). Tier 1 + 2 + 3 are mandatory for ship; Tier 4 is "try to break it on purpose" and not blocking.
+3. Findings logged to `specs/020-v2.5.1-field-findings/spec.md` → "Operator-reported findings". Don't keep findings in chat scrollback — they get lost.
+4. After clean acceptance: re-tag without the `-pre` suffix.
 
 ```bash
 git tag v2.5.0          # same commit as v2.5.0-pre
