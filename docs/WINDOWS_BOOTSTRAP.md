@@ -107,7 +107,31 @@ Authenticate with ChatGPT (the project uses `hello@badescu.design`). On model se
 
 If `gpt-5.5` is rejected at runtime, see `.claude/memory/feedback_adversarial_review.md` for the workaround and escalation. Don't block development on Codex auth — if it's flaky, defer adversarial reviews until it's sorted.
 
-## 7. Clone the repo and verify build
+## 7. Atlassian MCP (Jira + Confluence)
+
+Lets Claude Code read and edit Jira tickets directly. Atlassian hosts the MCP as a remote SSE endpoint with OAuth — no local process, no token to manage.
+
+```powershell
+claude mcp add --scope user --transport sse atlassian https://mcp.atlassian.com/v1/sse
+```
+
+Verify the entry landed:
+
+```powershell
+claude mcp list
+```
+
+Expected line: `atlassian: https://mcp.atlassian.com/v1/sse (SSE) - ! Needs authentication`. Inside a Claude Code session, run `/mcp`, pick `atlassian`, authenticate. A browser opens to `id.atlassian.com`, you OAuth, then it redirects back. After that:
+
+```
+claude mcp list
+```
+
+should show `✓ Connected`. Tool names appear as `mcp__atlassian__*` (e.g. `mcp__atlassian__jira_get_issue`, `mcp__atlassian__jira_create_issue`, `mcp__atlassian__jira_update_issue`).
+
+Cloud-only — does not work for self-hosted Jira Server / Data Center. The project's Atlassian instance is Cloud (`*.atlassian.net`), so this path is the right one.
+
+## 8. Clone the repo and verify build
 
 Pick a development root. Suggested:
 
@@ -131,7 +155,7 @@ flutter build windows --release
 
 Output: `build\windows\x64\runner\Release\copiatorul3000.exe`. If this succeeds, the Windows toolchain is fully wired up — the same path GH Actions uses on tag push.
 
-## 8. First Claude Code session in the repo
+## 9. First Claude Code session in the repo
 
 ```powershell
 cd C:\Users\<your-user>\copiatorul3000
