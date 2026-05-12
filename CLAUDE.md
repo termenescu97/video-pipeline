@@ -2,14 +2,15 @@
 
 ## Session Bootstrap — READ THIS FIRST
 
-**Before responding to anything non-trivial in this repo, read the in-repo project memory.** The portable memory lives at `.claude/memory/` (index: `.claude/memory/MEMORY.md`, 17 linked `.md` files). It encodes:
+**Before responding to anything non-trivial in this repo, read the in-repo project memory.** The portable memory lives at `.claude/memory/` (index: `.claude/memory/MEMORY.md`). It encodes:
 
-- user role & preferred working style (`user_role.md`)
-- feedback rules from prior sessions — corrections that must NOT be re-violated (`feedback_*.md`, 8 files)
+- feedback rules — project-specific case studies that informed cross-project rules (`feedback_*.md`, 4 files)
 - project state, decisions, deferred work, false positives (`project_*.md`, 6 files)
 - external references (Codex plugin, video team environment) (`reference_*.md`, 2 files)
 
-**This is not optional.** Skipping it means re-asking questions answered in past sessions, re-litigating decisions already made, and re-investigating false positives already dismissed. The cost of reading these on session start is small; the cost of NOT reading them is real.
+> **User-global context loads alongside this layer.** `~/.claude/CLAUDE.md` (auto-loaded into every session on this machine) carries Andrei's universal working rules, tooling stack, and the Jira workflow. Cross-project rules that used to live in this repo's memory (human-in-the-loop, no half-baked, explain as course, etc.) were promoted to that file. Don't expect to find them here — read the user-global layer.
+
+**This is not optional.** Skipping the project memory means re-asking questions answered in past sessions, re-litigating decisions already made, and re-investigating false positives already dismissed. The cost of reading these on session start is small; the cost of NOT reading them is real.
 
 Process: at the start of any session, read `.claude/memory/MEMORY.md`, then read every linked file. The auto-memory harness mechanism (when `~/.claude/projects/<encoded-cwd>/memory/` happens to exist for the current OS path) is a convenience, not the source of truth. The repo `.claude/memory/` is the source of truth and travels with the code across machines.
 
@@ -20,6 +21,12 @@ When you save new memories — corrections from the user, project-state updates,
 Reason: project memory must travel with the repo so future Claude Code sessions — including on different machines, after fresh installs, or after a developer hands off the project — get the full context from a single `git clone`. Memory that only lives in the user-global path is invisible to teammates, invisible across machines, and impossible to review.
 
 Commit memory updates with `docs(memory): <short summary>`. Treat them like any other code change: small, reviewable, scoped.
+
+For **cross-project** memories (rules that would apply to any project I work on, not just this one), write to `~/.claude/CLAUDE.md` instead — see the memory-write routing section there.
+
+## Jira tracking
+
+This project is tracked under **AUTO-1** (`https://termene.atlassian.net/browse/AUTO-1`). Worklog cadence and confirmation rules per `~/.claude/CLAUDE.md` Jira workflow section. Time format: `1h30m`. Always confirm time + summary with Andrei before submitting `mcp__atlassian__addWorklogToJiraIssue`.
 
 ## What This Is
 
